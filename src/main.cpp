@@ -440,6 +440,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // Footer
     ImGui::PushFont(g_ui.fontSmall);
+    {
+        const char* credit = "created by: jessetbh";
+        ImVec2 csz = ImGui::CalcTextSize(credit);
+        ImGui::SetCursorPos(ImVec2(vw - csz.x - ImGui::GetFontSize(), vh * 0.945f));
+        ImGui::TextColored(palette::faint, "%s", credit);
+    }
     ImGui::SetCursorPosY(vh * 0.945f);
     if (depotRoot.empty())
         text_centered_colored(palette::error, "Depot root not found - set AKI_DEPOT_ROOT");
