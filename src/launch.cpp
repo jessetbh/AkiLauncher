@@ -7,6 +7,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <ctime>
 #include <fstream>
 
 // ---------------------------------------------------------------------------
@@ -138,6 +139,7 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
 
     pi = newPi;
     title = g.title;
+    artKey = g.artKey;
     forceBorderless = g.forceBorderless;
     gameWnd = nullptr;
     exitCode = 0;
@@ -257,6 +259,14 @@ void GameSession::finish(HWND launcherWnd) {
     if (wasTerminated || exitCode != 0) {
         logTail = read_log_tail(portLogPath, 10);
         logf(L"captured %zu tail lines from %s", logTail.size(), portLogPath.c_str());
+    }
+    // Play stats: time from window-found to exit (0 if it never got that far).
+    if (!artKey.empty()) {
+        GameStats& st = settings().stats[artKey];
+        st.lastPlayedUnix = (long long)time(nullptr);
+        if (runningTick) st.playSeconds += (long long)((GetTickCount64() - runningTick) / 1000);
+        st.playCount++;
+        settings_save();
     }
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);

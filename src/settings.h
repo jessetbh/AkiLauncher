@@ -14,12 +14,20 @@ struct GameOverride {
     bool any() const { return !exePath.empty() || !romPath.empty() || forceBorderless != -1; }
 };
 
+// Per-game play stats, keyed by GameEntry::artKey. Recorded on session end.
+struct GameStats {
+    long long lastPlayedUnix = 0;  // time(nullptr) when the session ended
+    long long playSeconds = 0;     // total, across all sessions
+    int playCount = 0;
+};
+
 struct Settings {
     WORD chordMask = 0x0030;  // XINPUT_GAMEPAD_BACK | XINPUT_GAMEPAD_START
     int chordHoldMs = 600;
     UINT hotkeyMods = MOD_SHIFT;
     UINT hotkeyVk = VK_F12;
     std::map<std::wstring, GameOverride> overrides;
+    std::map<std::wstring, GameStats> stats;
 };
 
 Settings& settings();
@@ -29,3 +37,8 @@ std::filesystem::path settings_path();
 
 std::string chord_to_string(WORD mask);
 std::string hotkey_to_string(UINT mods, UINT vk);
+
+// "today" / "yesterday" / weekday within a week / date, in local time.
+std::string format_last_played(long long unixTime);
+// "under a minute" / "N minutes" / "X.Y hours".
+std::string format_play_time(long long seconds);

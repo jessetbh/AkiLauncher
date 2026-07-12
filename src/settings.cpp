@@ -2,6 +2,8 @@
 
 #include <xinput.h>
 
+#include <cstdio>
+#include <ctime>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -65,6 +67,11 @@ void settings_load() {
             if (key == "exe") o.exePath = u8_to_w(val);
             else if (key == "rom") o.romPath = u8_to_w(val);
             else if (key == "borderless") o.forceBorderless = atoi(val.c_str());
+        } else if (section.rfind("stats:", 0) == 0) {
+            GameStats& st = g_settings.stats[u8_to_w(section.substr(6))];
+            if (key == "last_played") st.lastPlayedUnix = _atoi64(val.c_str());
+            else if (key == "play_seconds") st.playSeconds = _atoi64(val.c_str());
+            else if (key == "play_count") st.playCount = atoi(val.c_str());
         }
     }
     if (g_settings.chordMask == 0) g_settings.chordMask = 0x0030;
@@ -87,6 +94,13 @@ void settings_save() {
         if (!o.exePath.empty()) f << "exe=" << w_to_u8(o.exePath) << "\n";
         if (!o.romPath.empty()) f << "rom=" << w_to_u8(o.romPath) << "\n";
         if (o.forceBorderless != -1) f << "borderless=" << o.forceBorderless << "\n";
+    }
+    for (auto& [key, st] : g_settings.stats) {
+        if (st.lastPlayedUnix == 0 && st.playSeconds == 0 && st.playCount == 0) continue;
+        f << "[stats:" << w_to_u8(key) << "]\n";
+        f << "last_played=" << st.lastPlayedUnix << "\n";
+        f << "play_seconds=" << st.playSeconds << "\n";
+        f << "play_count=" << st.playCount << "\n";
     }
 }
 
@@ -137,4 +151,37 @@ std::string hotkey_to_string(UINT mods, UINT vk) {
         s += "VK" + std::to_string(vk);
     }
     return s;
+}
+
+std::string format_last_played(long long unixTime) {
+    time_t then = (time_t)unixTime;
+    time_t now = time(nullptr);
+    tm tmThen{}, tmNow{};
+    localtime_s(&tmThen, &then);
+    localtime_s(&tmNow, &now);
+    // day difference via local midnights (DST-safe enough for display)
+    tm midThen = tmThen, midNow = tmNow;
+    midThen.tm_hour = midThen.tm_min = midThen.tm_sec = 0;
+    midNow.tm_hour = midNow.tm_min = midNow.tm_sec = 0;
+    long long days = (long long)((mktime(&midNow) - mktime(&midThen)) / 86400);
+    char buf[64]{};
+    if (days <= 0) return "today";
+    if (days == 1) return "yesterday";
+    if (days < 7) {
+        strftime(buf, sizeof(buf), "%A", &tmThen);  // weekday name
+        return buf;
+    }
+    strftime(buf, sizeof(buf), "%B %d, %Y", &tmThen);
+    return buf;
+}
+
+std::string format_play_time(long long seconds) {
+    if (seconds < 60) return "under a minute";
+    if (seconds < 3600) {
+        long long m = seconds / 60;
+        return std::to_string(m) + (m == 1 ? " minute" : " minutes");
+    }
+    char buf[32]{};
+    snprintf(buf, sizeof(buf), "%.1f hours", (double)seconds / 3600.0);
+    return buf;
 }

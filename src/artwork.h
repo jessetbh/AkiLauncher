@@ -14,3 +14,7 @@ struct Texture {
 // Loads PNG/JPG via WIC into an immutable D3D11 texture. Returns empty on any
 // failure (missing file, decode error) - callers draw a placeholder instead.
 Texture load_texture(ID3D11Device* device, const std::filesystem::path& path);
+
+// Tiny (72px wide) heavily box-blurred version for full-screen backdrops;
+// bilinear upscaling at draw time completes the blur.
+Texture load_texture_blurred(ID3D11Device* device, const std::filesystem::path& path);

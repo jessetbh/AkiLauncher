@@ -22,6 +22,7 @@ struct GameSession {
     ULONGLONG closeRequestTick = 0;
     ULONGLONG lastWindowPoll = 0;
     std::wstring title;
+    std::wstring artKey;             // stats key of the launched game
     DWORD exitCode = 0;
     bool wasTerminated = false;      // TerminateProcess fallback fired
     std::wstring statusNote;         // shown in the launcher UI after finish

@@ -3,7 +3,9 @@
 Drop PNG/JPG scans here (gitignored - not distributed). The launcher loads:
 
 - `<key>_front.png` - front cover (shown in the carousel)
-- `<key>_back.png` - back cover (shown when you flip the box with F / X / click)
+- `<key>_back.png` - back cover (F / X / click cycles front -> back -> cart)
+- `<key>_cart.png` - cartridge scan (third face in the flip cycle; drawn
+  aspect-fit on a dark card, alpha respected)
 
 Keys: `worldtour`, `vpw64`, `revenge`, `wm2k`, `vpw2`, `nomercy`.
 

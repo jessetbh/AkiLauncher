@@ -31,5 +31,7 @@ add_executable(AkiLauncher WIN32
     src/launch.cpp
     src/artwork.cpp
     src/settings.cpp
+    src/audio.cpp
 )
-target_link_libraries(AkiLauncher PRIVATE imgui_lib d3d11 dxgi xinput9_1_0 windowscodecs ole32)
+target_link_libraries(AkiLauncher PRIVATE imgui_lib d3d11 dxgi xinput9_1_0 windowscodecs ole32
+                      winmm)

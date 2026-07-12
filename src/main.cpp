@@ -13,6 +13,7 @@
 #include "imgui_stdlib.h"
 
 #include "artwork.h"
+#include "audio.h"
 #include "games.h"
 #include "launch.h"
 #include "settings.h"
@@ -100,12 +101,19 @@ static constexpr int HOTKEY_QUICKBACK = 1;
 struct BoxArt {
     Texture front;
     Texture back;
+    Texture cart;      // cartridge scan, third face in the flip cycle
+    Texture backdrop;  // blurred front cover for the full-screen background
 };
 
 struct UiState {
     int selected = 0;
-    bool showBack = false;
-    float flipAnim = 0.0f;  // 0 = front, 1 = back
+    int face = 0;           // 0 = front, 1 = back, 2 = cart
+    int facePrev = 0;       // face shown during the first half of a flip
+    float flipAnim = 1.0f;  // 0 -> 1 flip progress (1 = settled)
+    int bdIndex = 0;        // backdrop currently fading in
+    int bdPrev = -1;        // backdrop fading out (-1 = none)
+    float bdFade = 1.0f;    // 0 -> 1 crossfade progress
+    ULONGLONG attractTick = 0;  // last attract-mode carousel step
     ImFont* fontBase = nullptr;
     ImFont* fontTitle = nullptr;
     ImFont* fontSmall = nullptr;
@@ -119,6 +127,7 @@ struct UiState {
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
+static DWORD g_attractMs = 60000;  // idle before attract mode (--attract-ms)
 
 static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return true;
@@ -223,12 +232,28 @@ static const ImU32 cardBorderSel = IM_COL32(250, 199, 72, 255);
 }  // namespace palette
 
 // Draw a box-art face (texture or styled placeholder) into rect, rounded.
-static void draw_box_face(ImDrawList* dl, const Texture& tex, ImVec2 p0, ImVec2 p1, bool isBack,
+// face: 0 = front cover, 1 = back cover, 2 = cartridge.
+static void draw_box_face(ImDrawList* dl, const Texture& tex, ImVec2 p0, ImVec2 p1, int face,
                           const std::string& title, float rounding, bool dimmed) {
     ImU32 tint = dimmed ? IM_COL32(140, 140, 140, 255) : IM_COL32_WHITE;
     if (tex.ok()) {
-        dl->AddImageRounded((ImTextureID)tex.srv, p0, p1, ImVec2(0, 0), ImVec2(1, 1), tint,
-                            rounding);
+        if (face == 2) {
+            // Cart scans have their own shape/alpha: aspect-fit on a dark card
+            // instead of stretching to the box aspect.
+            dl->AddRectFilled(p0, p1, dimmed ? palette::cardBgSoon : palette::cardBg, rounding);
+            float w = p1.x - p0.x, h = p1.y - p0.y;
+            float aw = w * 0.88f, ah = h * 0.88f;
+            float ta = (float)tex.w / (float)tex.h;
+            float dw = aw, dh = dw / ta;
+            if (dh > ah) { dh = ah; dw = dh * ta; }
+            ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+            dl->AddImage((ImTextureID)tex.srv, ImVec2(c.x - dw * 0.5f, c.y - dh * 0.5f),
+                         ImVec2(c.x + dw * 0.5f, c.y + dh * 0.5f), ImVec2(0, 0), ImVec2(1, 1),
+                         tint);
+        } else {
+            dl->AddImageRounded((ImTextureID)tex.srv, p0, p1, ImVec2(0, 0), ImVec2(1, 1), tint,
+                                rounding);
+        }
         return;
     }
     // Placeholder: dark card with the title and face label.
@@ -241,10 +266,55 @@ static void draw_box_face(ImDrawList* dl, const Texture& tex, ImVec2 p0, ImVec2 
     ImVec2 tsz = f->CalcTextSizeA(fs, w - 16, w - 16, title.c_str());
     dl->AddText(f, fs, ImVec2(p0.x + (w - tsz.x) * 0.5f, p0.y + (h - tsz.y) * 0.5f - fs * 0.6f),
                 txt, title.c_str(), nullptr, w - 16);
-    const char* lbl = isBack ? "back cover" : "cover art";
+    const char* lbl = face == 2 ? "cartridge" : face == 1 ? "back cover" : "cover art";
     ImVec2 lsz = f->CalcTextSizeA(fs * 0.85f, FLT_MAX, 0, lbl);
     dl->AddText(f, fs * 0.85f, ImVec2(p0.x + (w - lsz.x) * 0.5f, p1.y - fs * 1.6f),
                 IM_COL32(150, 152, 160, dimmed ? 100 : 170), lbl);
+}
+
+// Blurred cover of the selected game behind the whole UI, crossfading on
+// selection change, under a dark scrim so the art tints rather than competes.
+static void draw_backdrop(ImDrawList* dl, ImGuiViewport* vp, const std::vector<BoxArt>& art) {
+    if (art.empty()) return;
+    if (g_ui.selected != g_ui.bdIndex) {
+        g_ui.bdPrev = g_ui.bdIndex;
+        g_ui.bdIndex = g_ui.selected;
+        g_ui.bdFade = 0.0f;
+    }
+    g_ui.bdFade = fminf(1.0f, g_ui.bdFade + ImGui::GetIO().DeltaTime / 0.40f);
+    if (g_ui.bdFade >= 1.0f) g_ui.bdPrev = -1;
+
+    ImVec2 p0 = vp->WorkPos;
+    ImVec2 p1(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y);
+    float va = vp->WorkSize.x / vp->WorkSize.y;
+
+    auto drawOne = [&](const Texture& t, float alpha) {
+        if (!t.ok() || alpha <= 0.0f) return;
+        // aspect-fill: crop the texture to the viewport's aspect via UVs
+        float ta = (float)t.w / (float)t.h;
+        ImVec2 uv0(0, 0), uv1(1, 1);
+        if (ta > va) {
+            float u = va / ta;
+            uv0.x = 0.5f - u * 0.5f;
+            uv1.x = 0.5f + u * 0.5f;
+        } else {
+            float v = ta / va;
+            uv0.y = 0.5f - v * 0.5f;
+            uv1.y = 0.5f + v * 0.5f;
+        }
+        dl->AddImage((ImTextureID)t.srv, p0, p1, uv0, uv1,
+                     IM_COL32(255, 255, 255, (int)(alpha * 255.0f)));
+    };
+    if (g_ui.bdPrev >= 0 && g_ui.bdPrev < (int)art.size())
+        drawOne(art[g_ui.bdPrev].backdrop, 1.0f);
+    if (g_ui.bdIndex >= 0 && g_ui.bdIndex < (int)art.size())
+        drawOne(art[g_ui.bdIndex].backdrop, g_ui.bdFade);
+
+    // scrim: keep the UI readable; heavier toward the bottom (text zone)
+    dl->AddRectFilled(p0, p1, IM_COL32(7, 8, 12, 168));
+    ImVec2 mid(p0.x, p0.y + vp->WorkSize.y * 0.45f);
+    dl->AddRectFilledMultiColor(mid, p1, IM_COL32(7, 8, 12, 0), IM_COL32(7, 8, 12, 0),
+                                IM_COL32(7, 8, 12, 150), IM_COL32(7, 8, 12, 150));
 }
 
 static void open_settings(std::vector<GameEntry>& games) {
@@ -435,6 +505,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                      ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoScrollbar);
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
+    draw_backdrop(dl, vp, art);
+
     // ------------------------------------------------------------------ game running overlay
     if (g_session.active()) {
         const char* verb = g_session.state == SessionState::WaitingForWindow ? "Starting"
@@ -480,6 +552,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     if (pad & XINPUT_GAMEPAD_A) actLaunch = true;
     if (pad & XINPUT_GAMEPAD_X) actFlip = true;
     if (ImGui::IsKeyPressed(ImGuiKey_S) || (pad & XINPUT_GAMEPAD_Y)) {
+        play_flip();
         open_settings(games);
         ImGui::End();
         return -1;
@@ -520,14 +593,15 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         float h = w * aspect;
         float drawW = w;
 
-        // Flip animation squeezes the selected card horizontally.
-        bool backFace = false;
+        // Flip animation squeezes the selected card horizontally; the new face
+        // appears past the halfway point.
+        int face = 0;
         if (isSel) {
             float t = g_ui.flipAnim;
             t = t * t * (3.0f - 2.0f * t);  // smoothstep
             drawW = w * fabsf(1.0f - 2.0f * t);
             if (drawW < w * 0.02f) drawW = w * 0.02f;
-            backFace = t > 0.5f;
+            face = t > 0.5f ? g_ui.face : g_ui.facePrev;
         }
 
         ImVec2 p0(x + (w - drawW) * 0.5f, rowMidY - h * 0.5f);
@@ -538,8 +612,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         // shadow + face + border
         dl->AddRectFilled(ImVec2(p0.x + 6, p0.y + 8), ImVec2(p1.x + 6, p1.y + 8),
                           IM_COL32(0, 0, 0, 110), rounding);
-        const Texture& tex = backFace ? art[i].back : art[i].front;
-        draw_box_face(dl, tex, p0, p1, backFace, narrow(g.title), rounding, soon);
+        const Texture& tex = face == 2 ? art[i].cart : face == 1 ? art[i].back : art[i].front;
+        draw_box_face(dl, tex, p0, p1, face, narrow(g.title), rounding, soon);
         dl->AddRect(p0, p1, isSel ? palette::cardBorderSel : palette::cardBorder, rounding, 0,
                     isSel ? 3.0f : 1.5f);
 
@@ -568,7 +642,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::InvisibleButton(("card" + std::to_string(i)).c_str(), ImVec2(w, h));
         if (ImGui::IsItemClicked()) {
             if (isSel) actFlip = true;
-            else { g_ui.selected = i; g_ui.showBack = false; g_ui.flipAnim = 0.0f; }
+            else {
+                g_ui.selected = i;
+                g_ui.face = g_ui.facePrev = 0;
+                g_ui.flipAnim = 1.0f;
+                play_nav();
+            }
         }
 
         x += w + gap;
@@ -578,14 +657,40 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     // ------------------------------------------------------------------ apply input
     if (move != 0) {
         g_ui.selected = (g_ui.selected + move + n) % n;
-        g_ui.showBack = false;
-        g_ui.flipAnim = 0.0f;
+        g_ui.face = g_ui.facePrev = 0;
+        g_ui.flipAnim = 1.0f;
+        play_nav();
     }
-    if (actFlip) g_ui.showBack = !g_ui.showBack;
-    float target = g_ui.showBack ? 1.0f : 0.0f;
-    float dt = ImGui::GetIO().DeltaTime;
-    if (g_ui.flipAnim < target) g_ui.flipAnim = fminf(target, g_ui.flipAnim + dt / 0.30f);
-    else if (g_ui.flipAnim > target) g_ui.flipAnim = fmaxf(target, g_ui.flipAnim - dt / 0.30f);
+    if (actFlip) {
+        g_ui.facePrev = g_ui.face;
+        g_ui.face = (g_ui.face + 1) % 3;
+        g_ui.flipAnim = 0.0f;
+        play_flip();
+    }
+    g_ui.flipAnim = fminf(1.0f, g_ui.flipAnim + ImGui::GetIO().DeltaTime / 0.30f);
+
+    // ------------------------------------------------------------------ attract idle
+    // After a minute with no input anywhere (keyboard/mouse via
+    // GetLastInputInfo, pads polled here), silently drift the carousel.
+    {
+        DWORD nowTick = GetTickCount();
+        static DWORD lastPadTick = nowTick;
+        if (pad_held_mask() != 0) lastPadTick = nowTick;
+        LASTINPUTINFO lii{sizeof(lii), 0};
+        DWORD idle = GetLastInputInfo(&lii) ? nowTick - lii.dwTime : 0;
+        if (nowTick - lastPadTick < idle) idle = nowTick - lastPadTick;
+        ULONGLONG now64 = GetTickCount64();
+        if (idle > g_attractMs && g_session.logTail.empty()) {
+            if (now64 - g_ui.attractTick > 5000) {
+                g_ui.attractTick = now64;
+                g_ui.selected = (g_ui.selected + 1) % n;
+                g_ui.face = g_ui.facePrev = 0;
+                g_ui.flipAnim = 1.0f;
+            }
+        } else {
+            g_ui.attractTick = now64;  // next step no sooner than 5s into attract
+        }
+    }
 
     // ------------------------------------------------------------------ info panel
     GameEntry& s = games[g_ui.selected];
@@ -614,6 +719,19 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     ImGui::Dummy(ImVec2(0, vh * 0.002f));
     text_centered_colored(statusCol, status);
     ImGui::PopFont();
+
+    // Play stats ("Last played Tuesday  -  4.2 hours total")
+    {
+        auto it = settings().stats.find(s.artKey);
+        if (it != settings().stats.end() && it->second.lastPlayedUnix > 0) {
+            std::string line = "Last played " + format_last_played(it->second.lastPlayedUnix);
+            if (it->second.playSeconds >= 60)
+                line += "   -   " + format_play_time(it->second.playSeconds) + " total";
+            ImGui::PushFont(g_ui.fontSmall);
+            text_centered_colored(palette::faint, line);
+            ImGui::PopFont();
+        }
+    }
 
     // Play button (mouse users; keyboard/pad use Enter/A)
     if (s.launchable()) {
@@ -710,7 +828,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         text_centered_colored(palette::error, "Depot root not found - set AKI_DEPOT_ROOT");
     else
         text_centered_colored(palette::faint,
-                              "Left/Right browse      Enter / A  play      F / X  flip box      "
+                              "Left/Right browse      Enter / A  play      F / X  box / back / cart      "
                               "S / Y  settings      Esc quit      In game:  " +
                                   hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
                                   " / " + chord_to_string(settings().chordMask) + "  to return");
@@ -734,7 +852,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (a == L"--smoke") smoke = true;
         else if (a == L"--test-launch" && i + 1 < __argc) testLaunch = _wtoi(__wargv[++i]);
         else if (a == L"--select" && i + 1 < __argc) g_ui.selected = _wtoi(__wargv[++i]);
-        else if (a == L"--flip") g_ui.showBack = true;
+        else if (a == L"--flip") g_ui.face = 1;
+        else if (a == L"--face" && i + 1 < __argc) g_ui.face = _wtoi(__wargv[++i]) % 3;
+        else if (a == L"--attract-ms" && i + 1 < __argc) g_attractMs = (DWORD)_wtoi(__wargv[++i]);
         else if (a == L"--settings") wantSettings = true;
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
     }
@@ -797,6 +917,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     g_hwnd = hwnd;
     settings_load();
+    audio_init();
     RegisterHotKey(hwnd, HOTKEY_QUICKBACK, settings().hotkeyMods | MOD_NOREPEAT,
                    settings().hotkeyVk);
 
@@ -816,6 +937,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     for (size_t i = 0; i < games.size(); ++i) {
         art[i].front = load_texture(g_device, artDir / (games[i].artKey + L"_front.png"));
         art[i].back = load_texture(g_device, artDir / (games[i].artKey + L"_back.png"));
+        art[i].cart = load_texture(g_device, artDir / (games[i].artKey + L"_cart.png"));
+        art[i].backdrop = load_texture_blurred(g_device, artDir / (games[i].artKey + L"_front.png"));
         logf(L"game: %s exe=%d rom=%d art(front=%d back=%d)", games[i].title.c_str(),
              games[i].exeFound, games[i].romFound, art[i].front.ok(), art[i].back.ok());
     }
@@ -922,8 +1045,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         int launchIdx = draw_ui(games, art, depotRoot);
         if (launchIdx >= 0) {
             std::wstring err;
-            if (!g_session.launch(games[launchIdx], &err))
-                g_session.statusNote = games[launchIdx].title + L": " + err;
+            if (g_session.launch(games[launchIdx], &err)) play_launch();
+            else g_session.statusNote = games[launchIdx].title + L": " + err;
         }
 
         ImGui::Render();
