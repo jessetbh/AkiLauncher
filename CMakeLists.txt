@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(AkiLauncher CXX)
+project(AkiLauncher C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +11,15 @@ FetchContent_Declare(imgui
     GIT_SHALLOW TRUE
 )
 FetchContent_MakeAvailable(imgui)
+
+# Amalgamated miniz release (zip extraction for in-app game installs)
+FetchContent_Declare(miniz
+    URL https://github.com/richgel999/miniz/releases/download/3.0.2/miniz-3.0.2.zip
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(miniz)
+add_library(miniz_lib STATIC ${miniz_SOURCE_DIR}/miniz.c)
+target_include_directories(miniz_lib PUBLIC ${miniz_SOURCE_DIR})
 
 add_library(imgui_lib STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
@@ -32,6 +41,7 @@ add_executable(AkiLauncher WIN32
     src/artwork.cpp
     src/settings.cpp
     src/audio.cpp
+    src/installer.cpp
 )
-target_link_libraries(AkiLauncher PRIVATE imgui_lib d3d11 dxgi xinput9_1_0 windowscodecs ole32
-                      winmm)
+target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9_1_0
+                      windowscodecs ole32 winmm winhttp bcrypt)

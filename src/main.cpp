@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <shobjidl.h>
 #include <xinput.h>
 
 #include <cmath>
@@ -15,6 +16,7 @@
 #include "artwork.h"
 #include "audio.h"
 #include "games.h"
+#include "installer.h"
 #include "launch.h"
 #include "settings.h"
 
@@ -270,6 +272,65 @@ static void draw_box_face(ImDrawList* dl, const Texture& tex, ImVec2 p0, ImVec2 
     ImVec2 lsz = f->CalcTextSizeA(fs * 0.85f, FLT_MAX, 0, lbl);
     dl->AddText(f, fs * 0.85f, ImVec2(p0.x + (w - lsz.x) * 0.5f, p1.y - fs * 1.6f),
                 IM_COL32(150, 152, 160, dimmed ? 100 : 170), lbl);
+}
+
+// Validate (SHA1 when known) and copy a user-picked ROM to the game's expected
+// romPath; falls back to a settings override pointing at the original if the
+// copy fails. errOut untouched on success.
+static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
+                             std::wstring* errOut) {
+    if (!g.romSha1.empty()) {
+        std::wstring h = sha1_file(src);
+        if (h.empty()) {
+            *errOut = L"Couldn't read " + src.wstring();
+            return false;
+        }
+        if (h != g.romSha1) {
+            *errOut = L"That file isn't the expected " + g.title +
+                      L" ROM - need the big-endian (.z64) dump of the US release.";
+            return false;
+        }
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(g.romPath.parent_path(), ec);
+    ec.clear();
+    std::filesystem::copy_file(src, g.romPath, std::filesystem::copy_options::overwrite_existing,
+                               ec);
+    if (ec) {
+        settings().overrides[g.artKey].romPath = src.wstring();
+        settings_save();
+    }
+    logf(L"ROM set for %s from %s%s", g.title.c_str(), src.c_str(),
+         ec ? L" (copy failed, using override)" : L" (copied)");
+    return true;
+}
+
+// Modal system file picker; returns false on cancel (errOut empty) or failure.
+static bool pick_rom(GameEntry& g, std::wstring* errOut) {
+    IFileOpenDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&dlg)))) {
+        *errOut = L"File dialog unavailable";
+        return false;
+    }
+    COMDLG_FILTERSPEC types[] = {{L"N64 ROM (*.z64)", L"*.z64"}, {L"All files", L"*.*"}};
+    dlg->SetFileTypes(2, types);
+    std::wstring title = L"Select your " + g.title + L" ROM (" + g.romFile + L")";
+    dlg->SetTitle(title.c_str());
+    bool ok = false;
+    if (SUCCEEDED(dlg->Show(g_hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item))) {
+            PWSTR psz = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &psz))) {
+                ok = install_rom_file(g, psz, errOut);
+                CoTaskMemFree(psz);
+            }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    return ok;
 }
 
 // Blurred cover of the selected game behind the whole UI, crossfading on
@@ -709,13 +770,54 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     text_centered_colored(palette::dim, "Released " + narrow(s.releaseDate) + "   -   " +
                                             narrow(s.region));
 
+    // Remote release + install-job state for the selected game
+    ReleaseInfo rel;
+    bool haveRel = release_for(s.artKey, &rel);
+    InstallStatus inst = install_status();
+    bool installingSel = (inst.phase == InstallPhase::Downloading ||
+                          inst.phase == InstallPhase::Extracting) &&
+                         inst.gameIndex == g_ui.selected;
+    std::error_code fec;
+    bool devCheckout =
+        s.repoPath != s.installDir && std::filesystem::is_directory(s.repoPath, fec);
+
+    enum class CardAction { None, Play, Download, PickRom };
+    CardAction action = CardAction::None;
+
     std::string status;
     ImVec4 statusCol;
-    if (soon) { status = "Recompilation not started yet"; statusCol = palette::faint; }
-    else if (!s.exeFound) { status = "Not built - run the port build in " + narrow(s.repoDir); statusCol = palette::warn; }
-    else if (!s.romFound) { status = "ROM missing - place " + narrow(s.romFile) + " in " + narrow(s.repoDir); statusCol = palette::warn; }
-    else if (s.experimental) { status = "Playable - experimental (bring-up in progress)"; statusCol = palette::warn; }
-    else { status = "Ready to play"; statusCol = palette::ready; }
+    if (installingSel) {
+        if (inst.phase == InstallPhase::Downloading) {
+            char buf[96];
+            if (inst.total > 0)
+                snprintf(buf, sizeof(buf), "Downloading %s - %d%%  (%.1f / %.1f MB)",
+                         narrow(inst.tag).c_str(), (int)(inst.got * 100 / inst.total),
+                         inst.got / 1048576.0, inst.total / 1048576.0);
+            else
+                snprintf(buf, sizeof(buf), "Downloading %s - %.1f MB", narrow(inst.tag).c_str(),
+                         inst.got / 1048576.0);
+            status = buf;
+        } else {
+            status = "Installing...";
+        }
+        statusCol = palette::accent;
+    } else if (s.launchable()) {
+        if (s.experimental) { status = "Playable - experimental (bring-up in progress)"; statusCol = palette::warn; }
+        else { status = "Ready to play"; statusCol = palette::ready; }
+        action = CardAction::Play;
+    } else if (!s.exeFound) {
+        if (haveRel) {
+            status = "Not installed - " + narrow(rel.tag) + " is a free download from GitHub";
+            statusCol = palette::dim;
+            action = CardAction::Download;
+        } else if (soon) { status = "Recompilation not started yet"; statusCol = palette::faint; }
+        else if (devCheckout) { status = "Not built - run the port build in " + narrow(s.repoDir); statusCol = palette::warn; }
+        else { status = "Not available for download yet"; statusCol = palette::faint; }
+    } else {
+        status = "Installed - now select your own " + narrow(s.romFile) + " ROM dump";
+        statusCol = palette::warn;
+        action = CardAction::PickRom;
+    }
     ImGui::Dummy(ImVec2(0, vh * 0.002f));
     text_centered_colored(statusCol, status);
     ImGui::PopFont();
@@ -733,23 +835,56 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
     }
 
-    // Play button (mouse users; keyboard/pad use Enter/A)
-    if (s.launchable()) {
+    // Update-available line (installed via the launcher, newer tag on GitHub)
+    bool updateAvail = s.exeFound && !s.installedTag.empty() && haveRel &&
+                       rel.tag != s.installedTag && !installingSel &&
+                       inst.phase == InstallPhase::Idle;
+    if (updateAvail) {
+        ImGui::PushFont(g_ui.fontSmall);
+        text_centered_colored(palette::accent,
+                              "Update " + narrow(rel.tag) + " available  -  U / RB installs it");
+        ImGui::PopFont();
+        if (ImGui::IsKeyPressed(ImGuiKey_U) || (pad & XINPUT_GAMEPAD_RIGHT_SHOULDER)) {
+            if (install_start(g_ui.selected, s, rel)) play_flip();
+        }
+    }
+
+    // Action button (mouse users; keyboard/pad use Enter/A)
+    if (action != CardAction::None) {
+        const char* label = action == CardAction::Play       ? "PLAY"
+                            : action == CardAction::Download ? "DOWNLOAD"
+                                                             : "SELECT ROM...";
         ImGui::PushFont(g_ui.fontBase);
-        ImVec2 bsz(vw * 0.10f, vh * 0.048f);
+        ImVec2 bsz(vw * (action == CardAction::Play ? 0.10f : 0.13f), vh * 0.048f);
         ImGui::SetCursorPos(ImVec2((vw - bsz.x) * 0.5f, infoY + vh * 0.115f));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.62f, 0.12f, 0.92f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.98f, 0.75f, 0.20f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.75f, 0.53f, 0.08f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.08f, 0.07f, 0.05f, 1.0f));
-        if (ImGui::Button("PLAY", bsz)) launchIndex = g_ui.selected;
+        bool trigger = ImGui::Button(label, bsz);
         ImGui::PopStyleColor(4);
         ImGui::PopFont();
-        if (actLaunch) launchIndex = g_ui.selected;
+        if (actLaunch) trigger = true;
+        if (trigger) {
+            if (action == CardAction::Play) {
+                launchIndex = g_ui.selected;
+            } else if (action == CardAction::Download) {
+                if (install_start(g_ui.selected, s, rel)) play_flip();
+            } else {
+                std::wstring err;
+                if (pick_rom(s, &err)) {
+                    apply_overrides(games);
+                    play_flip();
+                } else if (!err.empty()) {
+                    g_session.statusNote = err;
+                }
+            }
+        }
     }
 
-    // Mods section (tucks up when there's no PLAY button)
-    float modsY = infoY + (s.launchable() ? vh * 0.185f : vh * 0.115f);
+    // Mods section (tucks up when there's no action button)
+    float modsY = infoY + (action != CardAction::None || installingSel ? vh * 0.185f
+                                                                       : vh * 0.115f);
     ImGui::PushFont(g_ui.fontSmall);
     ImGui::SetCursorPosY(modsY);
     if (!s.mods.empty()) {
@@ -846,7 +981,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     bool smoke = false;
     bool wantSettings = false;
     int testLaunch = -1;
-    int playNow = -1;  // debug: launch game N at startup, keep normal UI
+    int playNow = -1;      // debug: launch game N at startup, keep normal UI
+    int testInstall = -1;  // debug: download+install game N, exit 0/4
+    int testRomIdx = -1;   // debug: validate+copy a ROM for game N, exit 0/4
+    std::wstring testRomPath;
     for (int i = 1; i < __argc; ++i) {
         std::wstring a = __wargv[i];
         if (a == L"--smoke") smoke = true;
@@ -855,6 +993,11 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         else if (a == L"--flip") g_ui.face = 1;
         else if (a == L"--face" && i + 1 < __argc) g_ui.face = _wtoi(__wargv[++i]) % 3;
         else if (a == L"--attract-ms" && i + 1 < __argc) g_attractMs = (DWORD)_wtoi(__wargv[++i]);
+        else if (a == L"--install" && i + 1 < __argc) testInstall = _wtoi(__wargv[++i]);
+        else if (a == L"--set-rom" && i + 2 < __argc) {
+            testRomIdx = _wtoi(__wargv[++i]);
+            testRomPath = __wargv[++i];
+        }
         else if (a == L"--settings") wantSettings = true;
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
     }
@@ -928,11 +1071,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     if (wantSettings) open_settings(games);
     logf(L"depot root: %s", depotRoot.empty() ? L"(NOT FOUND)" : depotRoot.c_str());
 
-    // Box art: assets\boxart\<key>_front.png / _back.png next to the repo root.
-    wchar_t exeBuf[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exeBuf, MAX_PATH);
-    std::filesystem::path artDir =
-        std::filesystem::path(exeBuf).parent_path().parent_path() / L"assets" / L"boxart";
+    releases_check_start(games);
+
+    // Box art: assets\boxart\<key>_front.png / _back.png under the app root.
+    std::filesystem::path artDir = app_root() / L"assets" / L"boxart";
     std::vector<BoxArt> art(games.size());
     for (size_t i = 0; i < games.size(); ++i) {
         art[i].front = load_texture(g_device, artDir / (games[i].artKey + L"_front.png"));
@@ -974,9 +1116,53 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             g_session.requestQuickBack();
         }
 
+        // --- install completion (poll; worker thread does the heavy lifting) ---
+        {
+            InstallStatus st = install_status();
+            if (st.phase == InstallPhase::Done || st.phase == InstallPhase::Error) {
+                if (testInstall >= 0) {  // test driver consumes the result
+                    logf(L"test-install: %s (%s)",
+                         st.phase == InstallPhase::Done ? L"done" : L"FAILED", st.error.c_str());
+                    exitCodeOut = st.phase == InstallPhase::Done ? 0 : 4;
+                    break;
+                }
+                if (st.phase == InstallPhase::Done) {
+                    games = build_game_list(depotRoot);
+                    apply_overrides(games);
+                    play_flip();
+                } else {
+                    g_session.statusNote = L"Install failed - " + st.error;
+                }
+                install_ack();
+            }
+        }
+
         // --- automated test drivers ---
         frame++;
         if (smoke && frame > 60) break;
+        if (testRomIdx >= 0 && frame == 5) {
+            std::wstring err;
+            bool ok = testRomIdx < (int)games.size() &&
+                      install_rom_file(games[testRomIdx], testRomPath, &err);
+            logf(L"test-set-rom: %s (%s)", ok ? L"ok" : L"FAILED", err.c_str());
+            exitCodeOut = ok ? 0 : 4;
+            break;
+        }
+        if (testInstall >= 0 && frame > 30) {
+            static bool started = false;
+            ReleaseInfo rel;
+            if (!started && testInstall < (int)games.size() &&
+                release_for(games[testInstall].artKey, &rel)) {
+                started = install_start(testInstall, games[testInstall], rel);
+                logf(L"test-install: started %s %s", games[testInstall].title.c_str(),
+                     rel.tag.c_str());
+            }
+            if (!started && frame > 1800) {  // ~30s without release info
+                logf(L"test-install: release check never produced a result");
+                exitCodeOut = 4;
+                break;
+            }
+        }
         if (playNow >= 0 && frame == 30 && playNow < (int)games.size()) {
             std::wstring err;
             g_session.launch(games[playNow], &err);

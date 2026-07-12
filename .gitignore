@@ -10,6 +10,9 @@ docs/history-tour-research.md
 *.n64
 *.v64
 
+# In-app installed games (recompiled game code + user ROMs)
+games/
+
 # Box art scans are copyrighted - keep local only
 assets/boxart/*.png
 assets/boxart/*.jpg

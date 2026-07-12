@@ -10,6 +10,8 @@
 #include <fstream>
 #include <vector>
 
+#include "games.h"  // app_root
+
 // ---------------------------------------------------------------------------
 // In-memory WAV synthesis (mono, 16-bit, 44.1kHz). PlaySound(SND_MEMORY |
 // SND_ASYNC) needs the buffer to outlive the call, so buffers are static.
@@ -80,11 +82,8 @@ void audio_init() {
     tone(s, 783.99f, 783.99f, 240, 0.24f, 4.5f);   // G5
     g_launchWav = wrap_wav(s);
 
-    // assets\sounds\*.wav next to the repo root replace the synthesized ones
-    wchar_t exeBuf[MAX_PATH]{};
-    GetModuleFileNameW(nullptr, exeBuf, MAX_PATH);
-    std::filesystem::path dir =
-        std::filesystem::path(exeBuf).parent_path().parent_path() / L"assets" / L"sounds";
+    // assets\sounds\*.wav under the app root replace the synthesized ones
+    std::filesystem::path dir = app_root() / L"assets" / L"sounds";
     load_override(dir / L"nav.wav", g_navWav);
     load_override(dir / L"flip.wav", g_flipWav);
     load_override(dir / L"launch.wav", g_launchWav);
