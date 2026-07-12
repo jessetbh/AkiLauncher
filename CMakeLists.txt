@@ -19,8 +19,10 @@ add_library(imgui_lib STATIC
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_win32.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_dx11.cpp
+    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
 )
-target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends
+                           ${imgui_SOURCE_DIR}/misc/cpp)
 target_compile_definitions(imgui_lib PUBLIC UNICODE _UNICODE NOMINMAX)
 
 add_executable(AkiLauncher WIN32
@@ -28,5 +30,6 @@ add_executable(AkiLauncher WIN32
     src/games.cpp
     src/launch.cpp
     src/artwork.cpp
+    src/settings.cpp
 )
 target_link_libraries(AkiLauncher PRIVATE imgui_lib d3d11 dxgi xinput9_1_0 windowscodecs ole32)

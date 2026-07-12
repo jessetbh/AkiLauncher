@@ -1,11 +1,13 @@
 #include "launch.h"
 
 #include "games.h"
+#include "settings.h"
 
 #include <xinput.h>
 
 #include <cstdarg>
 #include <cstdio>
+#include <fstream>
 
 // ---------------------------------------------------------------------------
 // Logging (WIN32 subsystem has no console; append to a file next to the exe)
@@ -141,6 +143,15 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     exitCode = 0;
     wasTerminated = false;
     statusNote.clear();
+    logTail.clear();
+    // The ports route stdout/stderr (incl. crash backtraces) to
+    // %LOCALAPPDATA%\<exe stem>\<exe stem>.log when launched without a console.
+    {
+        wchar_t lad[MAX_PATH]{};
+        GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+        std::wstring stem = g.exePath.stem().wstring();
+        portLogPath = std::filesystem::path(lad) / stem / (stem + L".log");
+    }
     launchTick = GetTickCount64();
     runningTick = 0;
     lastWindowPoll = 0;
@@ -215,6 +226,24 @@ void GameSession::requestQuickBack() {
     state = SessionState::Closing;
 }
 
+// Last non-empty lines of the port's log, trimmed for display.
+static std::vector<std::string> read_log_tail(const std::filesystem::path& path, int maxLines) {
+    std::vector<std::string> lines;
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return lines;
+    std::string line;
+    while (std::getline(f, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+        if (line.empty()) continue;
+        if (line.size() > 160) line = line.substr(0, 157) + "...";
+        lines.push_back(line);
+        if ((int)lines.size() > maxLines * 8) lines.erase(lines.begin());  // bound memory
+    }
+    if ((int)lines.size() > maxLines)
+        lines.erase(lines.begin(), lines.end() - maxLines);
+    return lines;
+}
+
 void GameSession::finish(HWND launcherWnd) {
     GetExitCodeProcess(pi.hProcess, &exitCode);
     logf(L"%s exited (code=%lu%s)", title.c_str(), exitCode,
@@ -222,8 +251,13 @@ void GameSession::finish(HWND launcherWnd) {
     if (wasTerminated)
         statusNote = title + L" stopped responding and was force-closed.";
     else if (exitCode != 0)
-        statusNote = title + L" exited with code " + std::to_wstring(exitCode) +
-                     L" - check its *.err.log in the game folder.";
+        statusNote = title + L" exited with code " + std::to_wstring(exitCode) + L" (0x" +
+                     [](DWORD c) { wchar_t b[16]; swprintf_s(b, L"%08X", c); return std::wstring(b); }(exitCode) +
+                     L")";
+    if (wasTerminated || exitCode != 0) {
+        logTail = read_log_tail(portLogPath, 10);
+        logf(L"captured %zu tail lines from %s", logTail.size(), portLogPath.c_str());
+    }
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     pi = {};
@@ -236,20 +270,21 @@ void GameSession::finish(HWND launcherWnd) {
 // Quick-back controller chord
 // ---------------------------------------------------------------------------
 
+WORD pad_held_mask() {
+    WORD held = 0;
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+        XINPUT_STATE st{};
+        if (XInputGetState(i, &st) == ERROR_SUCCESS) held |= st.Gamepad.wButtons;
+    }
+    return held;
+}
+
 bool poll_quickback_chord() {
     static ULONGLONG holdStart = 0;
     static bool latched = false;
 
-    bool chordDown = false;
-    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
-        XINPUT_STATE st{};
-        if (XInputGetState(i, &st) != ERROR_SUCCESS) continue;
-        WORD buttons = st.Gamepad.wButtons;
-        if ((buttons & XINPUT_GAMEPAD_BACK) && (buttons & XINPUT_GAMEPAD_START)) {
-            chordDown = true;
-            break;
-        }
-    }
+    WORD chord = settings().chordMask;
+    bool chordDown = chord != 0 && (pad_held_mask() & chord) == chord;
 
     if (!chordDown) {
         holdStart = 0;
@@ -259,7 +294,7 @@ bool poll_quickback_chord() {
     if (latched) return false;
     ULONGLONG now = GetTickCount64();
     if (holdStart == 0) holdStart = now;
-    if (now - holdStart >= 600) {
+    if (now - holdStart >= (ULONGLONG)settings().chordHoldMs) {
         latched = true;
         return true;
     }

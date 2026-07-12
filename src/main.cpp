@@ -10,10 +10,12 @@
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
+#include "imgui_stdlib.h"
 
 #include "artwork.h"
 #include "games.h"
 #include "launch.h"
+#include "settings.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -108,8 +110,15 @@ struct UiState {
     ImFont* fontTitle = nullptr;
     ImFont* fontSmall = nullptr;
     ImFont* fontHeader = nullptr;
+    // settings screen
+    bool showSettings = false;
+    bool captureChord = false;
+    WORD chordPending = 0;
+    bool captureHotkey = false;
+    std::vector<std::string> exeEdit, romEdit;  // per-game path field buffers
 };
 static UiState g_ui;
+static HWND g_hwnd = nullptr;
 
 static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return true;
@@ -156,6 +165,36 @@ static std::string narrow(const std::wstring& w) {
     std::string s(n > 0 ? n - 1 : 0, 0);
     if (n > 1) WideCharToMultiByte(CP_UTF8, 0, w.c_str(), -1, s.data(), n, nullptr, nullptr);
     return s;
+}
+
+static std::wstring widen(const std::string& s) {
+    if (s.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
+    std::wstring w(n > 0 ? n - 1 : 0, 0);
+    if (n > 1) MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
+    return w;
+}
+
+// Overlay settings.ini overrides onto the registry defaults and re-stat.
+static void apply_overrides(std::vector<GameEntry>& games) {
+    std::error_code ec;
+    for (auto& g : games) {
+        auto it = settings().overrides.find(g.artKey);
+        if (it != settings().overrides.end()) {
+            const GameOverride& o = it->second;
+            if (!o.exePath.empty()) g.exePath = o.exePath;
+            if (!o.romPath.empty()) g.romPath = o.romPath;
+            if (o.forceBorderless != -1) g.forceBorderless = o.forceBorderless != 0;
+        }
+        g.exeFound = std::filesystem::is_regular_file(g.exePath, ec);
+        g.romFound = std::filesystem::is_regular_file(g.romPath, ec);
+    }
+}
+
+static void reregister_hotkey() {
+    UnregisterHotKey(g_hwnd, HOTKEY_QUICKBACK);
+    RegisterHotKey(g_hwnd, HOTKEY_QUICKBACK, settings().hotkeyMods | MOD_NOREPEAT,
+                   settings().hotkeyVk);
 }
 
 static void text_centered(const std::string& s) {
@@ -208,6 +247,181 @@ static void draw_box_face(ImDrawList* dl, const Texture& tex, ImVec2 p0, ImVec2 
                 IM_COL32(150, 152, 160, dimmed ? 100 : 170), lbl);
 }
 
+static void open_settings(std::vector<GameEntry>& games) {
+    g_ui.exeEdit.resize(games.size());
+    g_ui.romEdit.resize(games.size());
+    for (size_t i = 0; i < games.size(); ++i) {
+        g_ui.exeEdit[i] = narrow(games[i].exePath.wstring());
+        g_ui.romEdit[i] = narrow(games[i].romPath.wstring());
+    }
+    g_ui.showSettings = true;
+}
+
+static void close_settings(std::vector<GameEntry>& games) {
+    // Path fields become overrides when they differ from the registry default.
+    for (size_t i = 0; i < games.size(); ++i) {
+        GameEntry& g = games[i];
+        std::wstring defExe = (g.repoPath / g.exeRel).wstring();
+        std::wstring defRom = (g.repoPath / g.romFile).wstring();
+        std::wstring edExe = widen(g_ui.exeEdit[i]);
+        std::wstring edRom = widen(g_ui.romEdit[i]);
+        GameOverride& o = settings().overrides[g.artKey];
+        o.exePath = (!edExe.empty() && edExe != defExe) ? edExe : L"";
+        o.romPath = (!edRom.empty() && edRom != defRom) ? edRom : L"";
+    }
+    settings_save();
+    apply_overrides(games);
+    g_ui.showSettings = false;
+    g_ui.captureChord = false;
+    g_ui.captureHotkey = false;
+    logf(L"settings saved to %s", settings_path().c_str());
+}
+
+static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
+    ImGuiIO& io = ImGui::GetIO();
+
+    // --- capture flows -----------------------------------------------------
+    if (g_ui.captureChord) {
+        WORD held = pad_held_mask();
+        g_ui.chordPending |= held;
+        if (g_ui.chordPending != 0 && held == 0) {
+            settings().chordMask = g_ui.chordPending;
+            settings_save();
+            g_ui.captureChord = false;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) g_ui.captureChord = false;
+    } else if (g_ui.captureHotkey) {
+        for (int vk = 0x08; vk <= 0xFE; ++vk) {
+            if (vk <= 0x06) continue;
+            if (vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU || vk == VK_LWIN ||
+                vk == VK_RWIN || (vk >= VK_LSHIFT && vk <= VK_RMENU))
+                continue;
+            if (!(GetAsyncKeyState(vk) & 0x8000)) continue;
+            if (vk == VK_ESCAPE) {
+                g_ui.captureHotkey = false;
+                break;
+            }
+            UINT mods = 0;
+            if (GetAsyncKeyState(VK_CONTROL) & 0x8000) mods |= MOD_CONTROL;
+            if (GetAsyncKeyState(VK_MENU) & 0x8000) mods |= MOD_ALT;
+            if (GetAsyncKeyState(VK_SHIFT) & 0x8000) mods |= MOD_SHIFT;
+            if ((GetAsyncKeyState(VK_LWIN) | GetAsyncKeyState(VK_RWIN)) & 0x8000) mods |= MOD_WIN;
+            settings().hotkeyMods = mods;
+            settings().hotkeyVk = (UINT)vk;
+            settings_save();
+            reregister_hotkey();
+            g_ui.captureHotkey = false;
+            break;
+        }
+    } else {
+        bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape) && !io.WantTextInput;
+        if (esc || (pad & XINPUT_GAMEPAD_B)) close_settings(games);
+    }
+
+    // --- layout ------------------------------------------------------------
+    ImGui::PushFont(g_ui.fontHeader);
+    ImGui::SetCursorPosY(vh * 0.055f);
+    text_centered("S E T T I N G S");
+    ImGui::PopFont();
+
+    float panelW = vw * 0.62f;
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.14f));
+    ImGui::BeginChild("##settings", ImVec2(panelW, vh * 0.72f), ImGuiChildFlags_None);
+
+    ImGui::PushFont(g_ui.fontBase);
+    ImGui::TextColored(palette::accent, "Quick-back");
+    ImGui::Spacing();
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Controller chord");
+    ImGui::SameLine(panelW * 0.28f);
+    if (g_ui.captureChord)
+        ImGui::TextColored(palette::warn, "Hold the buttons together, then release... (Esc cancels)");
+    else {
+        ImGui::TextColored(palette::dim, "%s", chord_to_string(settings().chordMask).c_str());
+        ImGui::SameLine(panelW * 0.72f);
+        if (ImGui::Button("Rebind##chord")) {
+            g_ui.captureChord = true;
+            g_ui.chordPending = 0;
+        }
+    }
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Hold time");
+    ImGui::SameLine(panelW * 0.28f);
+    ImGui::SetNextItemWidth(panelW * 0.40f);
+    if (ImGui::SliderInt("##hold", &settings().chordHoldMs, 200, 2000, "%d ms"))
+        settings_save();
+
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Keyboard hotkey");
+    ImGui::SameLine(panelW * 0.28f);
+    if (g_ui.captureHotkey)
+        ImGui::TextColored(palette::warn, "Press the desired key combo... (Esc cancels)");
+    else {
+        ImGui::TextColored(palette::dim, "%s",
+                           hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk).c_str());
+        ImGui::SameLine(panelW * 0.72f);
+        if (ImGui::Button("Rebind##hotkey")) g_ui.captureHotkey = true;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    ImGui::TextColored(palette::accent, "Games");
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::TextColored(palette::faint,
+                       "Path fields override the depot defaults; clear a field or restore the "
+                       "default text to remove the override.");
+    ImGui::PopFont();
+    ImGui::Spacing();
+
+    ImGui::BeginChild("##games", ImVec2(panelW, vh * 0.40f));
+    for (int i = 0; i < (int)games.size(); ++i) {
+        GameEntry& g = games[i];
+        ImGui::PushID(i);
+        ImGui::TextUnformatted(narrow(g.title).c_str());
+        ImGui::PushFont(g_ui.fontSmall);
+        bool borderless = g.forceBorderless;
+        if (ImGui::Checkbox("Force borderless fullscreen", &borderless)) {
+            g.forceBorderless = borderless;
+            settings().overrides[g.artKey].forceBorderless = borderless ? 1 : 0;
+            settings_save();
+        }
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(palette::dim, "EXE");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(panelW * 0.78f);
+        ImGui::InputText("##exe", &g_ui.exeEdit[i]);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(palette::dim, "ROM");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(panelW * 0.78f);
+        ImGui::InputText("##rom", &g_ui.romEdit[i]);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset")) {
+            g_ui.exeEdit[i] = narrow((g.repoPath / g.exeRel).wstring());
+            g_ui.romEdit[i] = narrow((g.repoPath / g.romFile).wstring());
+        }
+        ImGui::PopFont();
+        ImGui::Spacing();
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    ImGui::Spacing();
+    if (ImGui::Button("Save & Close", ImVec2(panelW * 0.22f, 0))) close_settings(games);
+    ImGui::SameLine();
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::TextColored(palette::faint, "Esc / B also saves and closes.  Stored at %s",
+                       narrow(settings_path().wstring()).c_str());
+    ImGui::PopFont();
+    ImGui::PopFont();
+    ImGui::EndChild();
+}
+
 // Returns the index of a game to launch this frame, or -1.
 static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                    const std::filesystem::path& depotRoot) {
@@ -233,16 +447,25 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::PushFont(g_ui.fontSmall);
         ImGui::SetCursorPosY(vh * 0.54f);
         text_centered_colored(palette::dim,
-                              "Shift+F12  or hold  View+Menu  for the quit prompt, "
-                              "confirm to return here");
+                              hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
+                                  "  or hold  " + chord_to_string(settings().chordMask) +
+                                  "  for the quit prompt, confirm to return here");
         ImGui::PopFont();
+        ImGui::End();
+        return -1;
+    }
+
+    WORD pad = pad_pressed();
+
+    // ------------------------------------------------------------------ settings screen
+    if (g_ui.showSettings) {
+        draw_settings(games, pad);
         ImGui::End();
         return -1;
     }
 
     int launchIndex = -1;
     int n = (int)games.size();
-    GameEntry& sel = games[g_ui.selected];
 
     // ------------------------------------------------------------------ input
     int move = 0;
@@ -252,11 +475,21 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))
         actLaunch = true;
     if (ImGui::IsKeyPressed(ImGuiKey_F)) actFlip = true;
-    WORD pad = pad_pressed();
     if (pad & XINPUT_GAMEPAD_DPAD_LEFT) move = -1;
     if (pad & XINPUT_GAMEPAD_DPAD_RIGHT) move = +1;
     if (pad & XINPUT_GAMEPAD_A) actLaunch = true;
     if (pad & XINPUT_GAMEPAD_X) actFlip = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_S) || (pad & XINPUT_GAMEPAD_Y)) {
+        open_settings(games);
+        ImGui::End();
+        return -1;
+    }
+    // dismiss the crash panel
+    if (!g_session.logTail.empty() &&
+        (ImGui::IsKeyPressed(ImGuiKey_Backspace) || (pad & XINPUT_GAMEPAD_B))) {
+        g_session.logTail.clear();
+        g_session.statusNote.clear();
+    }
 
     // ------------------------------------------------------------------ header
     ImGui::PushFont(g_ui.fontHeader);
@@ -359,6 +592,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     bool soon = s.comingSoon && !s.launchable();
     float infoY = vh * 0.60f;
 
+    // The crash panel replaces this whole zone until dismissed.
+    if (g_session.logTail.empty()) {
     ImGui::PushFont(g_ui.fontTitle);
     ImGui::SetCursorPosY(infoY);
     text_centered(narrow(s.title));
@@ -429,9 +664,33 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                               "once mod support lands.");
     }
     ImGui::PopFont();
+    }  // end if (no crash panel)
 
-    // Status note from last session (crash/force-close info)
-    if (!g_session.statusNote.empty()) {
+    // Crash panel: statusNote + tail of the port's own log, dismissible.
+    if (!g_session.logTail.empty()) {
+        float px0 = vw * 0.16f, px1 = vw * 0.84f;
+        float py0 = vh * 0.615f, py1 = vh * 0.935f;
+        ImVec2 p0(vp->WorkPos.x + px0, vp->WorkPos.y + py0);
+        ImVec2 p1(vp->WorkPos.x + px1, vp->WorkPos.y + py1);
+        dl->AddRectFilled(p0, p1, IM_COL32(16, 12, 14, 246), 10.0f);
+        dl->AddRect(p0, p1, IM_COL32(180, 80, 70, 200), 10.0f, 0, 2.0f);
+        ImGui::SetCursorPos(ImVec2(px0 + 24, py0 + 16));
+        ImGui::PushFont(g_ui.fontBase);
+        ImGui::TextColored(palette::error, "%s", narrow(g_session.statusNote).c_str());
+        ImGui::PopFont();
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::SetCursorPosX(px0 + 24);
+        ImGui::TextColored(palette::faint, "%s",
+                           narrow(g_session.portLogPath.wstring()).c_str());
+        ImGui::Dummy(ImVec2(0, 6));
+        for (const auto& line : g_session.logTail) {
+            ImGui::SetCursorPosX(px0 + 24);
+            ImGui::TextColored(palette::dim, "%s", line.c_str());
+        }
+        ImGui::SetCursorPos(ImVec2(px0 + 24, py1 - ImGui::GetFontSize() * 1.9f));
+        ImGui::TextColored(palette::faint, "Backspace / B to dismiss");
+        ImGui::PopFont();
+    } else if (!g_session.statusNote.empty()) {
         ImGui::PushFont(g_ui.fontSmall);
         ImGui::SetCursorPosY(vh * 0.905f);
         text_centered_colored(palette::error, narrow(g_session.statusNote));
@@ -452,7 +711,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     else
         text_centered_colored(palette::faint,
                               "Left/Right browse      Enter / A  play      F / X  flip box      "
-                              "Esc quit      In game:  Shift+F12 / View+Menu  to return");
+                              "S / Y  settings      Esc quit      In game:  " +
+                                  hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
+                                  " / " + chord_to_string(settings().chordMask) + "  to return");
     ImGui::PopFont();
 
     ImGui::End();
@@ -465,13 +726,17 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
 int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     bool smoke = false;
+    bool wantSettings = false;
     int testLaunch = -1;
+    int playNow = -1;  // debug: launch game N at startup, keep normal UI
     for (int i = 1; i < __argc; ++i) {
         std::wstring a = __wargv[i];
         if (a == L"--smoke") smoke = true;
         else if (a == L"--test-launch" && i + 1 < __argc) testLaunch = _wtoi(__wargv[++i]);
         else if (a == L"--select" && i + 1 < __argc) g_ui.selected = _wtoi(__wargv[++i]);
         else if (a == L"--flip") g_ui.showBack = true;
+        else if (a == L"--settings") wantSettings = true;
+        else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
     }
 
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -530,10 +795,16 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_device, g_context);
 
-    RegisterHotKey(hwnd, HOTKEY_QUICKBACK, MOD_SHIFT | MOD_NOREPEAT, VK_F12);
+    g_hwnd = hwnd;
+    settings_load();
+    RegisterHotKey(hwnd, HOTKEY_QUICKBACK, settings().hotkeyMods | MOD_NOREPEAT,
+                   settings().hotkeyVk);
 
     std::filesystem::path depotRoot = detect_depot_root();
     std::vector<GameEntry> games = build_game_list(depotRoot);
+    apply_overrides(games);
+    if (g_ui.selected < 0 || g_ui.selected >= (int)games.size()) g_ui.selected = 0;
+    if (wantSettings) open_settings(games);
     logf(L"depot root: %s", depotRoot.empty() ? L"(NOT FOUND)" : depotRoot.c_str());
 
     // Box art: assets\boxart\<key>_front.png / _back.png next to the repo root.
@@ -583,6 +854,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // --- automated test drivers ---
         frame++;
         if (smoke && frame > 60) break;
+        if (playNow >= 0 && frame == 30 && playNow < (int)games.size()) {
+            std::wstring err;
+            g_session.launch(games[playNow], &err);
+        }
         if (testLaunch >= 0) {
             if (frame == 30 && testLaunch < (int)games.size()) {
                 std::wstring err;
@@ -640,7 +915,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (!g_session.active() && ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0) done = true;
+        if (!g_session.active() && !g_ui.showSettings && ImGui::IsKeyPressed(ImGuiKey_Escape) &&
+            testLaunch < 0)
+            done = true;
 
         int launchIdx = draw_ui(games, art, depotRoot);
         if (launchIdx >= 0) {

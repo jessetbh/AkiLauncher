@@ -1,7 +1,9 @@
 #pragma once
 #include <windows.h>
 
+#include <filesystem>
 #include <string>
+#include <vector>
 
 struct GameEntry;
 
@@ -23,6 +25,8 @@ struct GameSession {
     DWORD exitCode = 0;
     bool wasTerminated = false;      // TerminateProcess fallback fired
     std::wstring statusNote;         // shown in the launcher UI after finish
+    std::filesystem::path portLogPath;  // %LOCALAPPDATA%\<exe stem>\<exe stem>.log
+    std::vector<std::string> logTail;   // tail of the port's log after a bad exit
 
     bool launch(const GameEntry& g, std::wstring* errorOut);
     void tick(HWND launcherWnd);
@@ -35,7 +39,11 @@ private:
 
 void bring_to_foreground(HWND wnd);
 
-// Hold Back+Start on any XInput pad for ~600ms. Returns true once per hold.
+// Hold the configured chord (settings().chordMask) on any XInput pad for the
+// configured duration. Returns true once per hold.
 bool poll_quickback_chord();
+
+// Union of currently-held buttons across all pads (for chord rebinding).
+WORD pad_held_mask();
 
 void logf(const wchar_t* fmt, ...);
