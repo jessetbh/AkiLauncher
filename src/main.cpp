@@ -959,14 +959,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::TextColored(palette::faint, "%s", credit);
     }
     ImGui::SetCursorPosY(vh * 0.945f);
-    if (depotRoot.empty())
-        text_centered_colored(palette::error, "Depot root not found - set AKI_DEPOT_ROOT");
-    else
-        text_centered_colored(palette::faint,
-                              "Left/Right browse      Enter / A  play      F / X  box / back / cart      "
-                              "S / Y  settings      Esc quit      In game:  " +
-                                  hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
-                                  " / " + chord_to_string(settings().chordMask) + "  to return");
+    // No depot is the normal end-user state (games install via download);
+    // the per-card status already says what each game needs.
+    text_centered_colored(palette::faint,
+                          "Left/Right browse      Enter / A  play      F / X  box / back / cart      "
+                          "S / Y  settings      Esc quit      In game:  " +
+                              hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
+                              " / " + chord_to_string(settings().chordMask) + "  to return");
     ImGui::PopFont();
 
     ImGui::End();

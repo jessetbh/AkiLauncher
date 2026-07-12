@@ -3,6 +3,9 @@ project(AkiLauncher C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+# Static CRT: the packaged launcher is a single self-contained exe (the game
+# release zips carry their own runtime DLLs; the launcher shouldn't need any).
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 include(FetchContent)
 FetchContent_Declare(imgui

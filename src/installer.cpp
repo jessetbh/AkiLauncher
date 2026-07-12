@@ -8,6 +8,8 @@
 #include "miniz.h"
 
 #include <atomic>
+#include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -133,20 +135,26 @@ static bool parse_first_release(const std::string& body, ReleaseInfo* out) {
     if (te == std::string::npos) return false;
     std::string tag = body.substr(tp, te - tp);
     size_t nextRel = body.find(tagKey, te);
+    std::string zip, sums;
     for (size_t at = te;;) {
         size_t up = body.find(urlKey, at);
-        if (up == std::string::npos || (nextRel != std::string::npos && up > nextRel)) return false;
+        if (up == std::string::npos || (nextRel != std::string::npos && up > nextRel)) break;
         up += urlKey.size();
         size_t ue = body.find('"', up);
-        if (ue == std::string::npos) return false;
+        if (ue == std::string::npos) break;
         std::string u = body.substr(up, ue - up);
-        if (u.size() > 4 && u.compare(u.size() - 4, 4, ".zip") == 0) {
-            out->tag = u8_to_w(tag);
-            out->zipUrl = u8_to_w(u);
-            return true;
-        }
+        if (zip.empty() && u.size() > 4 && u.compare(u.size() - 4, 4, ".zip") == 0) zip = u;
+        const std::string sk = "SHA256SUMS";
+        if (sums.empty() && u.size() > sk.size() &&
+            u.compare(u.size() - sk.size(), sk.size(), sk) == 0)
+            sums = u;
         at = ue;
     }
+    if (zip.empty()) return false;
+    out->tag = u8_to_w(tag);
+    out->zipUrl = u8_to_w(zip);
+    out->sumsUrl = u8_to_w(sums);
+    return true;
 }
 
 void releases_check_start(const std::vector<GameEntry>& games) {
@@ -193,6 +201,47 @@ static std::mutex g_instMx;
 static InstallStatus g_inst;                       // error/tag/index under mutex
 static std::atomic<int> g_phase{(int)InstallPhase::Idle};
 static std::atomic<long long> g_got{0}, g_total{0};
+
+static std::string sha256_mem(const std::vector<uint8_t>& data) {
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    std::string result;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0) {
+        if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) == 0) {
+            UCHAR digest[32]{};
+            if (BCryptHashData(hash, (PUCHAR)data.data(), (ULONG)data.size(), 0) == 0 &&
+                BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0) {
+                char hex[65]{};
+                for (int i = 0; i < 32; ++i) sprintf_s(hex + i * 2, 3, "%02x", digest[i]);
+                result = hex;
+            }
+            BCryptDestroyHash(hash);
+        }
+        BCryptCloseAlgorithmProvider(alg, 0);
+    }
+    return result;
+}
+
+// SHA256SUMS line format: "<hex>  <filename>". True if the zip's hash matches
+// its entry; missing entry or malformed file = mismatch (be strict once the
+// release ships a sums asset at all).
+static bool sums_match(const std::string& sums, const std::string& zipName,
+                       const std::string& zipHash) {
+    size_t at = 0;
+    while (at < sums.size()) {
+        size_t eol = sums.find('\n', at);
+        std::string line = sums.substr(at, eol == std::string::npos ? eol : eol - at);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() > 66 && line.find(zipName) != std::string::npos) {
+            std::string hex = line.substr(0, 64);
+            for (auto& c : hex) c = (char)tolower(c);
+            return hex == zipHash;
+        }
+        if (eol == std::string::npos) break;
+        at = eol + 1;
+    }
+    return false;
+}
 
 static void fail(const std::wstring& why) {
     {
@@ -250,12 +299,26 @@ bool install_start(int gameIndex, const GameEntry& g, const ReleaseInfo& rel) {
         g_inst.error.clear();
     }
     fs::path dir = g.installDir;
-    std::wstring url = rel.zipUrl, tag = rel.tag, title = g.title;
+    std::wstring url = rel.zipUrl, sumsUrl = rel.sumsUrl, tag = rel.tag, title = g.title;
     logf(L"install %s %s -> %s", title.c_str(), tag.c_str(), dir.c_str());
-    std::thread([dir, url, tag, title] {
+    std::thread([dir, url, sumsUrl, tag, title] {
         std::vector<uint8_t> zip;
         std::wstring err;
         if (!http_get(url, zip, &g_got, &g_total, &err)) return fail(L"download: " + err);
+        // Integrity: verify against the release's SHA256SUMS asset if it has one
+        if (!sumsUrl.empty()) {
+            std::vector<uint8_t> sums;
+            if (!http_get(sumsUrl, sums, nullptr, nullptr, &err)) {
+                logf(L"install: SHA256SUMS fetch failed (%s), continuing unverified",
+                     err.c_str());
+            } else {
+                std::string zipName = w_to_u8(url.substr(url.find_last_of(L'/') + 1));
+                if (!sums_match(std::string((const char*)sums.data(), sums.size()), zipName,
+                                sha256_mem(zip)))
+                    return fail(L"SHA256 mismatch - corrupted or tampered download");
+                logf(L"install: SHA256 verified against SHA256SUMS");
+            }
+        }
         g_phase = (int)InstallPhase::Extracting;
         std::error_code ec;
         fs::create_directories(dir, ec);

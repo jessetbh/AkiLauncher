@@ -21,6 +21,7 @@ assets/boxart/*.jpg
 build/
 build-msvc/
 out/
+dist/
 
 # Local machine config
 local-config.cmake

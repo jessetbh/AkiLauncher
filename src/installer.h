@@ -8,8 +8,9 @@ struct GameEntry;
 // Latest GitHub release of a game repo (prereleases count; drafts are
 // invisible to unauthenticated callers anyway).
 struct ReleaseInfo {
-    std::wstring tag;     // e.g. "v0.1.2"
-    std::wstring zipUrl;  // browser_download_url of the *-Windows.zip asset
+    std::wstring tag;      // e.g. "v0.1.2"
+    std::wstring zipUrl;   // browser_download_url of the *-Windows.zip asset
+    std::wstring sumsUrl;  // SHA256SUMS asset ("" = release has none)
 };
 
 // Fire-and-forget background check of every game with a githubRepo. Call once
