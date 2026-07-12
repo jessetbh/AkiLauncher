@@ -400,14 +400,29 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     ImGui::PushFont(g_ui.fontSmall);
     ImGui::SetCursorPosY(modsY);
     if (!s.mods.empty()) {
-        text_centered_colored(palette::accent, "Full-conversion mods");
-        for (const auto& m : s.mods) {
-            std::string line = narrow(m.name) + "  -  " + narrow(m.note);
-            if (!m.supported) line += "   [not yet supported]";
-            text_centered_colored(palette::faint, line);
+        text_centered_colored(palette::accent, "Full-conversion mods  -  not yet playable here");
+        std::vector<std::string> lines;
+        for (const auto& m : s.mods)
+            lines.push_back(narrow(m.name) + (m.note.empty() ? "" : "  -  " + narrow(m.note)));
+        if ((int)lines.size() <= 5) {
+            for (const auto& l : lines) text_centered_colored(palette::faint, l);
+        } else {
+            // two centered columns for the big No Mercy scene
+            int rows = ((int)lines.size() + 1) / 2;
+            float y0 = ImGui::GetCursorPosY();
+            float lh = ImGui::GetTextLineHeightWithSpacing();
+            for (int i = 0; i < (int)lines.size(); ++i) {
+                int col = i / rows, row = i % rows;
+                float cx = vw * (col == 0 ? 0.27f : 0.73f);
+                ImVec2 tsz = ImGui::CalcTextSize(lines[i].c_str());
+                ImGui::SetCursorPos(ImVec2(cx - tsz.x * 0.5f, y0 + row * lh));
+                ImGui::TextColored(palette::faint, "%s", lines[i].c_str());
+            }
+            ImGui::SetCursorPosY(y0 + rows * lh);
         }
         text_centered_colored(palette::faint,
-                              "Mods need HD texture + GameShark support in the ports - planned.");
+                              "Full conversions need HD texture + GameShark support in the "
+                              "ports - planned.");
     } else {
         text_centered_colored(palette::faint,
                               "Popular full-conversion mods for this game will appear here "
