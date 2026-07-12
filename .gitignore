@@ -2,6 +2,7 @@
 CLAUDE.md
 docs/*-plan.md
 docs/execution-plan.md
+docs/feature-ideas.md
 
 # Never commit ROMs or ROM-derived data
 *.z64
