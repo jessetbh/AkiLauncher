@@ -441,7 +441,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     // Footer
     ImGui::PushFont(g_ui.fontSmall);
     {
-        const char* credit = "created by: jessetbh";
+        const char* credit = "Made by jessetbh";
         ImVec2 csz = ImGui::CalcTextSize(credit);
         ImGui::SetCursorPos(ImVec2(vw - csz.x - ImGui::GetFontSize(), vh * 0.945f));
         ImGui::TextColored(palette::faint, "%s", credit);
