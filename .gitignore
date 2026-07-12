@@ -1,0 +1,24 @@
+# Agent instructions and planning docs are local-only (family convention)
+CLAUDE.md
+docs/*-plan.md
+docs/execution-plan.md
+
+# Never commit ROMs or ROM-derived data
+*.z64
+*.n64
+*.v64
+
+# Build output
+build/
+build-msvc/
+out/
+
+# Local machine config
+local-config.cmake
+*.local.json
+
+# Editor/OS noise
+.vs/
+.vscode/
+*.user
+Thumbs.db
