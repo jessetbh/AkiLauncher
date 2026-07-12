@@ -32,9 +32,14 @@ std::filesystem::path detect_depot_root() {
 
 std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     std::vector<GameEntry> games = {
-        { L"WCW vs. nWo World Tour", L"WcwNwoWorldTour",  L"build-msvc\\WCWRecompiled.exe",     L"wcw.z64",     false, true },
-        { L"WCW/nWo Revenge",        L"WcwRevengeRecomp", L"build-msvc\\RevengeRecompiled.exe", L"revenge.z64", false, true },
-        { L"WWF WrestleMania 2000",  L"Wm2kRecomp",       L"build-msvc\\Wm2kRecompiled.exe",    L"wm2k.z64",    true,  true },
+        { L"WCW vs. nWo World Tour",   L"WcwNwoWorldTour",  L"build-msvc\\WCWRecompiled.exe",     L"wcw.z64",     false, true },
+        { L"WCW/nWo Revenge",          L"WcwRevengeRecomp", L"build-msvc\\RevengeRecompiled.exe", L"revenge.z64", false, true },
+        { L"WWF WrestleMania 2000",    L"Wm2kRecomp",       L"build-msvc\\Wm2kRecompiled.exe",    L"wm2k.z64",    true,  true },
+        // Future recomp projects - paths follow the family convention so these
+        // activate on their own once the repos exist and build.
+        { L"Virtual Pro Wrestling 64", L"Vpw64Recomp",      L"build-msvc\\Vpw64Recompiled.exe",   L"vpw64.z64",   true,  true, true },
+        { L"Virtual Pro Wrestling 2",  L"Vpw2Recomp",       L"build-msvc\\Vpw2Recompiled.exe",    L"vpw2.z64",    true,  true, true },
+        { L"WWF No Mercy",             L"NoMercyRecomp",    L"build-msvc\\NoMercyRecompiled.exe", L"nomercy.z64", true,  true, true },
     };
     std::error_code ec;
     for (auto& g : games) {

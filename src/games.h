@@ -10,6 +10,8 @@ struct GameEntry {
     std::wstring romFile;   // ROM filename at the repo root
     bool experimental = false;
     bool forceBorderless = true;
+    bool comingSoon = false;  // recomp project not started yet; auto-activates
+                              // once the repo/exe/ROM show up at the usual paths
 
     // resolved by build_game_list
     std::filesystem::path repoPath;

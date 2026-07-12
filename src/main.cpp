@@ -170,7 +170,9 @@ static int draw_ui(std::vector<GameEntry>& games, const std::filesystem::path& d
     for (int i = 0; i < (int)games.size(); ++i) {
         GameEntry& g = games[i];
         std::string label = narrow(g.title);
-        std::string status = !g.exeFound      ? "Not built"
+        bool comingSoon = g.comingSoon && !g.launchable();
+        std::string status = comingSoon       ? "Coming soon"
+                             : !g.exeFound    ? "Not built"
                              : !g.romFound    ? "ROM missing"
                              : g.experimental ? "Ready (experimental)"
                                               : "Ready";
@@ -181,7 +183,7 @@ static int draw_ui(std::vector<GameEntry>& games, const std::filesystem::path& d
             launchIndex = i;
         ImGui::EndDisabled();
         ImGui::SetCursorPosX((vp->WorkSize.x - cardW) * 0.5f);
-        if (g.launchable() && !g.experimental)
+        if (comingSoon || (g.launchable() && !g.experimental))
             ImGui::TextDisabled("  %s", status.c_str());
         else
             ImGui::TextColored(ImVec4(0.9f, 0.7f, 0.3f, 1.0f), "  %s", status.c_str());
