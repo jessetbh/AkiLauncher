@@ -27,5 +27,6 @@ add_executable(AkiLauncher WIN32
     src/main.cpp
     src/games.cpp
     src/launch.cpp
+    src/artwork.cpp
 )
-target_link_libraries(AkiLauncher PRIVATE imgui_lib d3d11 dxgi xinput9_1_0)
+target_link_libraries(AkiLauncher PRIVATE imgui_lib d3d11 dxgi xinput9_1_0 windowscodecs ole32)

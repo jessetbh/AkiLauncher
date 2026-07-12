@@ -8,6 +8,10 @@ docs/execution-plan.md
 *.n64
 *.v64
 
+# Box art scans are copyrighted - keep local only
+assets/boxart/*.png
+assets/boxart/*.jpg
+
 # Build output
 build/
 build-msvc/

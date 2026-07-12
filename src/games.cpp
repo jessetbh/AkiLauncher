@@ -31,16 +31,39 @@ std::filesystem::path detect_depot_root() {
 }
 
 std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
-    std::vector<GameEntry> games = {
-        { L"WCW vs. nWo World Tour",   L"WcwNwoWorldTour",  L"build-msvc\\WCWRecompiled.exe",     L"wcw.z64",     false, true },
-        { L"WCW/nWo Revenge",          L"WcwRevengeRecomp", L"build-msvc\\RevengeRecompiled.exe", L"revenge.z64", false, true },
-        { L"WWF WrestleMania 2000",    L"Wm2kRecomp",       L"build-msvc\\Wm2kRecompiled.exe",    L"wm2k.z64",    true,  true },
-        // Future recomp projects - paths follow the family convention so these
-        // activate on their own once the repos exist and build.
-        { L"Virtual Pro Wrestling 64", L"Vpw64Recomp",      L"build-msvc\\Vpw64Recompiled.exe",   L"vpw64.z64",   true,  true, true },
-        { L"Virtual Pro Wrestling 2",  L"Vpw2Recomp",       L"build-msvc\\Vpw2Recompiled.exe",    L"vpw2.z64",    true,  true, true },
-        { L"WWF No Mercy",             L"NoMercyRecomp",    L"build-msvc\\NoMercyRecompiled.exe", L"nomercy.z64", true,  true, true },
+    // Ordered by original release date. JP-only titles carry their Japanese
+    // release date; the rest are North America dates.
+    std::vector<GameEntry> games;
+
+    games.push_back({ L"WCW vs. nWo World Tour", L"December 2, 1997", L"North America",
+                      L"WcwNwoWorldTour", L"build-msvc\\WCWRecompiled.exe", L"wcw.z64",
+                      L"worldtour", false, true, false, {} });
+
+    games.push_back({ L"Virtual Pro Wrestling 64", L"December 19, 1997", L"Japan",
+                      L"Vpw64Recomp", L"build-msvc\\Vpw64Recompiled.exe", L"vpw64.z64",
+                      L"vpw64", true, true, true, {} });
+
+    games.push_back({ L"WCW/nWo Revenge", L"October 26, 1998", L"North America",
+                      L"WcwRevengeRecomp", L"build-msvc\\RevengeRecompiled.exe", L"revenge.z64",
+                      L"revenge", false, true, false, {} });
+
+    games.push_back({ L"WWF WrestleMania 2000", L"October 31, 1999", L"North America",
+                      L"Wm2kRecomp", L"build-msvc\\Wm2kRecompiled.exe", L"wm2k.z64",
+                      L"wm2k", true, true, false, {} });
+
+    games.push_back({ L"Virtual Pro Wrestling 2", L"January 28, 2000", L"Japan",
+                      L"Vpw2Recomp", L"build-msvc\\Vpw2Recompiled.exe", L"vpw2.z64",
+                      L"vpw2", true, true, true, {} });
+
+    GameEntry noMercy{ L"WWF No Mercy", L"November 17, 2000", L"North America",
+                       L"NoMercyRecomp", L"build-msvc\\NoMercyRecompiled.exe", L"nomercy.z64",
+                       L"nomercy", true, true, true, {} };
+    noMercy.mods = {
+        { L"TNA vs ROH", L"total conversion by Alanchiz", false },
+        { L"ECW Born to be Wired", L"total conversion by Retro Randy", false },
     };
+    games.push_back(std::move(noMercy));
+
     std::error_code ec;
     for (auto& g : games) {
         g.repoPath = depotRoot / g.repoDir;
