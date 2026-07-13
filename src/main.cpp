@@ -1003,8 +1003,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     ImGui_ImplWin32_EnableDpiAwareness();
 
-    WNDCLASSEXW wc{sizeof(wc), CS_CLASSDC, wnd_proc, 0, 0, hinst, nullptr,
-                   LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"AkiLauncher", nullptr};
+    HICON appIcon = LoadIconW(hinst, MAKEINTRESOURCEW(1));  // icons/app.rc resource
+    WNDCLASSEXW wc{sizeof(wc), CS_CLASSDC, wnd_proc, 0, 0, hinst, appIcon,
+                   LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"AkiLauncher", appIcon};
     RegisterClassExW(&wc);
 
     int screenW = GetSystemMetrics(SM_CXSCREEN);

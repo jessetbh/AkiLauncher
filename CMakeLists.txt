@@ -46,5 +46,9 @@ add_executable(AkiLauncher WIN32
     src/audio.cpp
     src/installer.cpp
 )
+if(MSVC)
+    # App icon + version resource (title bar / taskbar / Explorer)
+    target_sources(AkiLauncher PRIVATE icons/app.rc)
+endif()
 target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9_1_0
                       windowscodecs ole32 winmm winhttp bcrypt)
