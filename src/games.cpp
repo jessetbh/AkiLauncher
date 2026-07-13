@@ -68,6 +68,7 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
                       L"Vpw64Recomp", L"build-msvc\\Vpw64Recompiled.exe", L"vpw64.z64",
                       L"vpw64", true, true, true,
                       { { L"English Translation", L"fan translation patch", false } } });
+    games.back().romSha1 = L"F9E9FA2ED819C3A39DB5CB6AFECA186F021DB5ED";
 
     games.push_back({ L"WCW/nWo Revenge", L"October 26, 1998", L"North America",
                       L"WcwRevengeRecomp", L"build-msvc\\RevengeRecompiled.exe", L"revenge.z64",
