@@ -66,9 +66,10 @@ Getting started
 Controls
   Left / Right      browse games
   Enter / A         play / download / select ROM
-  F / X             flip the box (front / back / cartridge)
+  F / X             flip the box art (front / back)
   U / RB            install an available update
   S / Y             settings (rebind quick-back, per-game paths)
+  F11 / Alt+Enter   windowed / fullscreen
   Esc               quit
   In game           Shift+F12 or hold View+Menu ~0.6s to return here
 
