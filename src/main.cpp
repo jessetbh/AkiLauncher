@@ -109,9 +109,11 @@ struct BoxArt {
 
 struct UiState {
     int selected = 0;
-    int face = 0;           // 0 = front, 1 = back, 2 = cart
+    int face = 0;           // 0 = front, 1 = back
     int facePrev = 0;       // face shown during the first half of a flip
     float flipAnim = 1.0f;  // 0 -> 1 flip progress (1 = settled)
+    int insertIndex = -1;   // game whose cart is sliding into the console (-1 = idle)
+    float insertAnim = 0.0f;  // 0 -> 1 insert progress; launch fires at 1
     int bdIndex = 0;        // backdrop currently fading in
     int bdPrev = -1;        // backdrop fading out (-1 = none)
     float bdFade = 1.0f;    // 0 -> 1 crossfade progress
@@ -120,6 +122,7 @@ struct UiState {
     ImFont* fontTitle = nullptr;
     ImFont* fontSmall = nullptr;
     ImFont* fontHeader = nullptr;
+    bool padInput = false;  // last-used input device drives the footer hints
     // settings screen
     bool showSettings = false;
     bool captureChord = false;
@@ -151,6 +154,20 @@ static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
         return 0;
     }
     return DefWindowProcW(hwnd, msg, wparam, lparam);
+}
+
+// Any keyboard key, mouse button, wheel or mouse movement this frame — the
+// signal that the user is NOT on the controller (for the footer hints).
+static bool keyboard_mouse_activity() {
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.MouseDelta.x != 0.0f || io.MouseDelta.y != 0.0f || io.MouseWheel != 0.0f) return true;
+    for (int i = 0; i < IM_ARRAYSIZE(io.MouseDown); ++i)
+        if (io.MouseDown[i]) return true;
+    for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+        if (k >= ImGuiKey_GamepadStart && k <= ImGuiKey_GamepadRStickDown) continue;
+        if (ImGui::IsKeyDown((ImGuiKey)k)) return true;
+    }
+    return false;
 }
 
 // Newly-pressed XInput buttons this frame (any pad), for carousel navigation.
@@ -206,6 +223,83 @@ static void reregister_hotkey() {
     UnregisterHotKey(g_hwnd, HOTKEY_QUICKBACK);
     RegisterHotKey(g_hwnd, HOTKEY_QUICKBACK, settings().hotkeyMods | MOD_NOREPEAT,
                    settings().hotkeyVk);
+}
+
+// ---------------------------------------------------------------------------
+// Window mode (fullscreen WS_POPUP <-> normal resizable window)
+// ---------------------------------------------------------------------------
+
+// -1 = no switch pending; 0/1 = switch to fullscreen/windowed before the next
+// frame (outside NewFrame/Render, because the font atlas is rebuilt).
+static int g_pendingWindowMode = -1;
+
+// Fonts are sized from the window height; rebuilt on every mode switch.
+static void build_fonts(float uiH) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
+    const char* segoe = "C:\\Windows\\Fonts\\segoeui.ttf";
+    const char* segoeBold = "C:\\Windows\\Fonts\\segoeuib.ttf";
+    auto addFont = [&](const char* path, float size) -> ImFont* {
+        ImFont* f = io.Fonts->AddFontFromFileTTF(path, size);
+        return f ? f : io.Fonts->AddFontDefault();
+    };
+    g_ui.fontBase = addFont(segoe, uiH * 0.0215f);
+    g_ui.fontSmall = addFont(segoe, uiH * 0.0165f);
+    g_ui.fontTitle = addFont(segoeBold, uiH * 0.036f);
+    g_ui.fontHeader = addFont(segoeBold, uiH * 0.030f);
+    io.FontDefault = g_ui.fontBase;
+}
+
+// Saved windowed placement, validated against the current monitor layout;
+// falls back to 1280x720 centered on the primary monitor.
+static RECT windowed_rect() {
+    Settings& s = settings();
+    RECT r{s.winX, s.winY, s.winX + s.winW, s.winY + s.winH};
+    if (s.winW < 320 || s.winH < 240 || !MonitorFromRect(&r, MONITOR_DEFAULTTONULL)) {
+        int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+        r = {(sw - 1280) / 2, (sh - 720) / 2, (sw - 1280) / 2 + 1280, (sh - 720) / 2 + 720};
+    }
+    return r;
+}
+
+static void remember_windowed_placement() {
+    WINDOWPLACEMENT wp{sizeof(wp)};
+    if (!GetWindowPlacement(g_hwnd, &wp)) return;
+    const RECT& r = wp.rcNormalPosition;
+    if (r.right - r.left < 320 || r.bottom - r.top < 240) return;
+    settings().winX = r.left;
+    settings().winY = r.top;
+    settings().winW = r.right - r.left;
+    settings().winH = r.bottom - r.top;
+}
+
+// Runtime switch. A running game follows automatically: GameSession::tick
+// re-forces the game window whenever the launcher rect changes.
+static void set_launcher_windowed(bool windowed) {
+    if (windowed) {
+        RECT r = windowed_rect();
+        SetWindowLongPtrW(g_hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
+        SetWindowPos(g_hwnd, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                     SWP_FRAMECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW);
+    } else {
+        remember_windowed_placement();
+        HMONITOR mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO mi{sizeof(mi)};
+        if (!GetMonitorInfoW(mon, &mi)) return;
+        const RECT& r = mi.rcMonitor;
+        SetWindowLongPtrW(g_hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+        SetWindowPos(g_hwnd, HWND_TOP, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                     SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+    }
+    settings().windowed = windowed;
+    settings_save();
+    RECT cr{};
+    GetClientRect(g_hwnd, &cr);
+    float uiH = (float)(cr.bottom - cr.top);
+    if (uiH < 400) uiH = (float)GetSystemMetrics(SM_CYSCREEN);
+    build_fonts(uiH);
+    ImGui_ImplDX11_InvalidateDeviceObjects();  // recreated (with the atlas) on next NewFrame
+    logf(L"window mode -> %s", windowed ? L"windowed" : L"fullscreen");
 }
 
 static void text_centered(const std::string& s) {
@@ -501,6 +595,18 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
+    ImGui::TextColored(palette::accent, "Display");
+    ImGui::Spacing();
+    bool winMode = settings().windowed;
+    if (ImGui::Checkbox("Windowed launcher", &winMode)) g_pendingWindowMode = winMode ? 1 : 0;
+    ImGui::SameLine();
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::TextColored(palette::faint, "(F11 or Alt+Enter anywhere; games follow the window)");
+    ImGui::PopFont();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
     ImGui::TextColored(palette::accent, "Games");
     ImGui::PushFont(g_ui.fontSmall);
     ImGui::TextColored(palette::faint,
@@ -546,8 +652,8 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     if (ImGui::Button("Save & Close", ImVec2(panelW * 0.22f, 0))) close_settings(games);
     ImGui::SameLine();
     ImGui::PushFont(g_ui.fontSmall);
-    ImGui::TextColored(palette::faint, "Esc / B also saves and closes.  Stored at %s",
-                       narrow(settings_path().wstring()).c_str());
+    ImGui::TextColored(palette::faint, "%s also saves and closes.  Stored at %s",
+                       g_ui.padInput ? "B" : "Esc", narrow(settings_path().wstring()).c_str());
     ImGui::PopFont();
     ImGui::PopFont();
     ImGui::EndChild();
@@ -590,6 +696,11 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     WORD pad = pad_pressed();
 
+    // Which device is the user on? Pad wins ties; the state sticks until the
+    // other device produces input.
+    if (pad || pad_held_mask()) g_ui.padInput = true;
+    else if (keyboard_mouse_activity()) g_ui.padInput = false;
+
     // ------------------------------------------------------------------ settings screen
     if (g_ui.showSettings) {
         draw_settings(games, pad);
@@ -603,26 +714,30 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     // ------------------------------------------------------------------ input
     int move = 0;
     bool actLaunch = false, actFlip = false;
-    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) move = -1;
-    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) move = +1;
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter))
-        actLaunch = true;
-    if (ImGui::IsKeyPressed(ImGuiKey_F)) actFlip = true;
-    if (pad & XINPUT_GAMEPAD_DPAD_LEFT) move = -1;
-    if (pad & XINPUT_GAMEPAD_DPAD_RIGHT) move = +1;
-    if (pad & XINPUT_GAMEPAD_A) actLaunch = true;
-    if (pad & XINPUT_GAMEPAD_X) actFlip = true;
-    if (ImGui::IsKeyPressed(ImGuiKey_S) || (pad & XINPUT_GAMEPAD_Y)) {
-        play_flip();
-        open_settings(games);
-        ImGui::End();
-        return -1;
-    }
-    // dismiss the crash panel
-    if (!g_session.logTail.empty() &&
-        (ImGui::IsKeyPressed(ImGuiKey_Backspace) || (pad & XINPUT_GAMEPAD_B))) {
-        g_session.logTail.clear();
-        g_session.statusNote.clear();
+    const bool inserting = g_ui.insertIndex >= 0;  // cart-insert animation owns the screen
+    if (!inserting) {
+        if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow)) move = -1;
+        if (ImGui::IsKeyPressed(ImGuiKey_RightArrow)) move = +1;
+        if (!ImGui::GetIO().KeyAlt &&
+            (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)))
+            actLaunch = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_F)) actFlip = true;
+        if (pad & XINPUT_GAMEPAD_DPAD_LEFT) move = -1;
+        if (pad & XINPUT_GAMEPAD_DPAD_RIGHT) move = +1;
+        if (pad & XINPUT_GAMEPAD_A) actLaunch = true;
+        if (pad & XINPUT_GAMEPAD_X) actFlip = true;
+        if (ImGui::IsKeyPressed(ImGuiKey_S) || (pad & XINPUT_GAMEPAD_Y)) {
+            play_flip();
+            open_settings(games);
+            ImGui::End();
+            return -1;
+        }
+        // dismiss the crash panel
+        if (!g_session.logTail.empty() &&
+            (ImGui::IsKeyPressed(ImGuiKey_Backspace) || (pad & XINPUT_GAMEPAD_B))) {
+            g_session.logTail.clear();
+            g_session.statusNote.clear();
+        }
     }
 
     // ------------------------------------------------------------------ header
@@ -668,12 +783,14 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImVec2 p0(x + (w - drawW) * 0.5f, rowMidY - h * 0.5f);
         ImVec2 p1(p0.x + drawW, rowMidY + h * 0.5f);
         float rounding = w * 0.03f;
-        bool soon = g.comingSoon && !g.launchable();
+        // A game with a live GitHub release is downloadable, never "coming soon".
+        ReleaseInfo relProbe;
+        bool soon = g.comingSoon && !g.launchable() && !release_for(g.artKey, &relProbe);
 
         // shadow + face + border
         dl->AddRectFilled(ImVec2(p0.x + 6, p0.y + 8), ImVec2(p1.x + 6, p1.y + 8),
                           IM_COL32(0, 0, 0, 110), rounding);
-        const Texture& tex = face == 2 ? art[i].cart : face == 1 ? art[i].back : art[i].front;
+        const Texture& tex = face == 1 ? art[i].back : art[i].front;
         draw_box_face(dl, tex, p0, p1, face, narrow(g.title), rounding, soon);
         dl->AddRect(p0, p1, isSel ? palette::cardBorderSel : palette::cardBorder, rounding, 0,
                     isSel ? 3.0f : 1.5f);
@@ -701,7 +818,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         // hit test (full logical card area, not the squeezed width)
         ImGui::SetCursorScreenPos(ImVec2(x, rowMidY - h * 0.5f));
         ImGui::InvisibleButton(("card" + std::to_string(i)).c_str(), ImVec2(w, h));
-        if (ImGui::IsItemClicked()) {
+        if (ImGui::IsItemClicked() && !inserting) {
             if (isSel) actFlip = true;
             else {
                 g_ui.selected = i;
@@ -724,7 +841,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     }
     if (actFlip) {
         g_ui.facePrev = g_ui.face;
-        g_ui.face = (g_ui.face + 1) % 3;
+        g_ui.face = (g_ui.face + 1) % 2;
         g_ui.flipAnim = 0.0f;
         play_flip();
     }
@@ -755,7 +872,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // ------------------------------------------------------------------ info panel
     GameEntry& s = games[g_ui.selected];
-    bool soon = s.comingSoon && !s.launchable();
+    ReleaseInfo selRelProbe;
+    bool soon = s.comingSoon && !s.launchable() && !release_for(s.artKey, &selRelProbe);
     float infoY = vh * 0.60f;
 
     // The crash panel replaces this whole zone until dismissed.
@@ -844,7 +962,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         text_centered_colored(palette::accent,
                               "Update " + narrow(rel.tag) + " available  -  U / RB installs it");
         ImGui::PopFont();
-        if (ImGui::IsKeyPressed(ImGuiKey_U) || (pad & XINPUT_GAMEPAD_RIGHT_SHOULDER)) {
+        if (!inserting &&
+            (ImGui::IsKeyPressed(ImGuiKey_U) || (pad & XINPUT_GAMEPAD_RIGHT_SHOULDER))) {
             if (install_start(g_ui.selected, s, rel)) play_flip();
         }
     }
@@ -865,9 +984,17 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::PopStyleColor(4);
         ImGui::PopFont();
         if (actLaunch) trigger = true;
-        if (trigger) {
+        if (trigger && !inserting) {
             if (action == CardAction::Play) {
-                launchIndex = g_ui.selected;
+                // Launch happens when the cart-insert animation finishes;
+                // without cart art just launch immediately.
+                play_launch();
+                if (art[g_ui.selected].cart.ok()) {
+                    g_ui.insertIndex = g_ui.selected;
+                    g_ui.insertAnim = 0.0f;
+                } else {
+                    launchIndex = g_ui.selected;
+                }
             } else if (action == CardAction::Download) {
                 if (install_start(g_ui.selected, s, rel)) play_flip();
             } else {
@@ -882,41 +1009,6 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
     }
 
-    // Mods section (tucks up when there's no action button)
-    float modsY = infoY + (action != CardAction::None || installingSel ? vh * 0.185f
-                                                                       : vh * 0.115f);
-    ImGui::PushFont(g_ui.fontSmall);
-    ImGui::SetCursorPosY(modsY);
-    if (!s.mods.empty()) {
-        text_centered_colored(palette::accent, "Full-conversion mods  -  not yet playable here");
-        std::vector<std::string> lines;
-        for (const auto& m : s.mods)
-            lines.push_back(narrow(m.name) + (m.note.empty() ? "" : "  -  " + narrow(m.note)));
-        if ((int)lines.size() <= 5) {
-            for (const auto& l : lines) text_centered_colored(palette::faint, l);
-        } else {
-            // two centered columns for the big No Mercy scene
-            int rows = ((int)lines.size() + 1) / 2;
-            float y0 = ImGui::GetCursorPosY();
-            float lh = ImGui::GetTextLineHeightWithSpacing();
-            for (int i = 0; i < (int)lines.size(); ++i) {
-                int col = i / rows, row = i % rows;
-                float cx = vw * (col == 0 ? 0.27f : 0.73f);
-                ImVec2 tsz = ImGui::CalcTextSize(lines[i].c_str());
-                ImGui::SetCursorPos(ImVec2(cx - tsz.x * 0.5f, y0 + row * lh));
-                ImGui::TextColored(palette::faint, "%s", lines[i].c_str());
-            }
-            ImGui::SetCursorPosY(y0 + rows * lh);
-        }
-        text_centered_colored(palette::faint,
-                              "Full conversions need HD texture + GameShark support in the "
-                              "ports - planned.");
-    } else {
-        text_centered_colored(palette::faint,
-                              "Popular full-conversion mods for this game will appear here "
-                              "once mod support lands.");
-    }
-    ImGui::PopFont();
     }  // end if (no crash panel)
 
     // Crash panel: statusNote + tail of the port's own log, dismissible.
@@ -961,12 +1053,63 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     ImGui::SetCursorPosY(vh * 0.945f);
     // No depot is the normal end-user state (games install via download);
     // the per-card status already says what each game needs.
-    text_centered_colored(palette::faint,
-                          "Left/Right browse      Enter / A  play      F / X  box / back / cart      "
-                          "S / Y  settings      Esc quit      In game:  " +
-                              hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
-                              " / " + chord_to_string(settings().chordMask) + "  to return");
+    if (g_ui.padInput)
+        text_centered_colored(palette::faint,
+                              "D-Pad browse      A play      X flip box      "
+                              "Y settings      In game:  hold " +
+                                  chord_to_string(settings().chordMask) + "  to return");
+    else
+        text_centered_colored(palette::faint,
+                              "Left/Right browse      Enter play      F flip box      "
+                              "S settings      Esc quit      In game:  " +
+                                  hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
+                                  "  to return");
     ImGui::PopFont();
+
+    // ------------------------------------------------------------------ cart insert
+    // PLAY slides the cart art down off the bottom edge - into an N64 sitting
+    // just out of view - then the actual launch fires.
+    if (g_ui.insertIndex >= 0) {
+        float tPrev = g_ui.insertAnim;
+        g_ui.insertAnim += ImGui::GetIO().DeltaTime / 1.15f;        // ~1.15s total
+        if (tPrev < 0.80f && g_ui.insertAnim >= 0.80f) play_nav();  // seat "click"
+        if (g_ui.insertAnim >= 1.0f) {
+            launchIndex = g_ui.insertIndex;
+            g_ui.insertIndex = -1;
+        } else {
+            float t = g_ui.insertAnim;
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            ImVec2 wp = vp->WorkPos;
+            float dim = fminf(t / 0.30f, 1.0f);
+            fg->AddRectFilled(wp, ImVec2(wp.x + vw, wp.y + vh),
+                              IM_COL32(8, 8, 12, (int)(dim * 190.0f)));
+            const Texture& cart = art[g_ui.insertIndex].cart;
+            float appear = fminf(t / 0.10f, 1.0f);  // quick fade/scale in
+            float cw = vw * 0.16f * (0.92f + 0.08f * appear);
+            float ch = cw * (float)cart.h / (float)cart.w;
+            float cx = wp.x + vw * 0.5f;
+            // Timeline: drop onto the slot, rest a beat, click-in push, hold
+            // seated with the top half of the cart peeking over the edge.
+            float y0 = wp.y + vh * 0.30f;            // hovering at the card row
+            float yRest = wp.y + vh - ch * 0.24f;    // dropped in, not yet seated
+            float ySeat = wp.y + vh;                 // seated: 50% below the edge
+            float cy;
+            if (t < 0.55f) {
+                float u = t / 0.55f;
+                cy = y0 + (yRest - y0) * u * u;      // gravity: accelerate down
+            } else if (t < 0.70f) {
+                cy = yRest;                          // resting on the slot
+            } else if (t < 0.80f) {
+                float u = (t - 0.70f) / 0.10f;
+                cy = yRest + (ySeat - yRest) * u * u * (3.0f - 2.0f * u);  // push in
+            } else {
+                cy = ySeat;                          // seated until launch
+            }
+            fg->AddImage((ImTextureID)cart.srv, ImVec2(cx - cw * 0.5f, cy - ch * 0.5f),
+                         ImVec2(cx + cw * 0.5f, cy + ch * 0.5f), ImVec2(0, 0), ImVec2(1, 1),
+                         IM_COL32(255, 255, 255, (int)(appear * 255.0f)));
+        }
+    }
 
     ImGui::End();
     return launchIndex;
@@ -990,7 +1133,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         else if (a == L"--test-launch" && i + 1 < __argc) testLaunch = _wtoi(__wargv[++i]);
         else if (a == L"--select" && i + 1 < __argc) g_ui.selected = _wtoi(__wargv[++i]);
         else if (a == L"--flip") g_ui.face = 1;
-        else if (a == L"--face" && i + 1 < __argc) g_ui.face = _wtoi(__wargv[++i]) % 3;
+        else if (a == L"--face" && i + 1 < __argc) g_ui.face = _wtoi(__wargv[++i]) % 2;
         else if (a == L"--attract-ms" && i + 1 < __argc) g_attractMs = (DWORD)_wtoi(__wargv[++i]);
         else if (a == L"--install" && i + 1 < __argc) testInstall = _wtoi(__wargv[++i]);
         else if (a == L"--set-rom" && i + 2 < __argc) {
@@ -1008,13 +1151,19 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                    LoadCursorW(nullptr, IDC_ARROW), nullptr, nullptr, L"AkiLauncher", appIcon};
     RegisterClassExW(&wc);
 
+    settings_load();  // needed before window creation for the windowed pref
+
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
-    bool windowed = smoke;  // smoke test shouldn't take over the screen
+    bool windowed = smoke || settings().windowed;  // smoke shouldn't take over the screen
     HWND hwnd;
-    if (windowed) {
+    if (smoke) {
         hwnd = CreateWindowW(wc.lpszClassName, L"AKI Launcher", WS_OVERLAPPEDWINDOW, 100, 100,
                              1280, 720, nullptr, nullptr, hinst, nullptr);
+    } else if (windowed) {
+        RECT r = windowed_rect();
+        hwnd = CreateWindowW(wc.lpszClassName, L"AKI Launcher", WS_OVERLAPPEDWINDOW, r.left, r.top,
+                             r.right - r.left, r.bottom - r.top, nullptr, nullptr, hinst, nullptr);
     } else {
         hwnd = CreateWindowW(wc.lpszClassName, L"AKI Launcher", WS_POPUP, 0, 0, screenW, screenH,
                              nullptr, nullptr, hinst, nullptr);
@@ -1043,23 +1192,20 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     GetClientRect(hwnd, &cr);
     float uiH = (float)(cr.bottom - cr.top);
     if (uiH < 400) uiH = (float)screenH;
-    const char* segoe = "C:\\Windows\\Fonts\\segoeui.ttf";
-    const char* segoeBold = "C:\\Windows\\Fonts\\segoeuib.ttf";
-    auto addFont = [&](const char* path, float size) -> ImFont* {
-        ImFont* f = io.Fonts->AddFontFromFileTTF(path, size);
-        return f ? f : io.Fonts->AddFontDefault();
-    };
-    g_ui.fontBase = addFont(segoe, uiH * 0.0215f);
-    g_ui.fontSmall = addFont(segoe, uiH * 0.0165f);
-    g_ui.fontTitle = addFont(segoeBold, uiH * 0.036f);
-    g_ui.fontHeader = addFont(segoeBold, uiH * 0.030f);
-    io.FontDefault = g_ui.fontBase;
+    build_fonts(uiH);
 
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_device, g_context);
 
     g_hwnd = hwnd;
-    settings_load();
+    // Footer hints start in pad mode when a controller is already connected.
+    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+        XINPUT_STATE xs{};
+        if (XInputGetState(i, &xs) == ERROR_SUCCESS) {
+            g_ui.padInput = true;
+            break;
+        }
+    }
     audio_init();
     RegisterHotKey(hwnd, HOTKEY_QUICKBACK, settings().hotkeyMods | MOD_NOREPEAT,
                    settings().hotkeyVk);
@@ -1099,6 +1245,13 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             if (msg.message == WM_QUIT) done = true;
         }
         if (done) break;
+
+        // Window-mode switches happen between frames: the font atlas rebuild
+        // must not race an in-flight ImGui frame.
+        if (g_pendingWindowMode >= 0 && !smoke) {
+            set_launcher_windowed(g_pendingWindowMode == 1);
+            g_pendingWindowMode = -1;
+        }
 
         if (g_resizeW && g_resizeH) {
             destroy_render_target();
@@ -1169,11 +1322,19 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         }
         if (testLaunch >= 0) {
             if (frame == 30 && testLaunch < (int)games.size()) {
-                std::wstring err;
-                if (!g_session.launch(games[testLaunch], &err)) {
-                    logf(L"test-launch: launch failed: %s", err.c_str());
-                    exitCodeOut = 2;
-                    break;
+                // Go through the real UI path, including the cart-insert
+                // animation, when cart art exists.
+                if (art[testLaunch].cart.ok()) {
+                    logf(L"test-launch: starting cart-insert animation");
+                    g_ui.insertIndex = testLaunch;
+                    g_ui.insertAnim = 0.0f;
+                } else {
+                    std::wstring err;
+                    if (!g_session.launch(games[testLaunch], &err)) {
+                        logf(L"test-launch: launch failed: %s", err.c_str());
+                        exitCodeOut = 2;
+                        break;
+                    }
                 }
             }
             if (g_session.state == SessionState::Running && !testCloseSent &&
@@ -1224,15 +1385,27 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (!g_session.active() && !g_ui.showSettings && ImGui::IsKeyPressed(ImGuiKey_Escape) &&
-            testLaunch < 0)
+        if (!g_session.active() && !g_ui.showSettings && g_ui.insertIndex < 0 &&
+            ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0)
             done = true;
+
+        // F11 / Alt+Enter toggle windowed <-> fullscreen from any screen.
+        if (!smoke && (ImGui::IsKeyPressed(ImGuiKey_F11, false) ||
+                       (ImGui::GetIO().KeyAlt && ImGui::IsKeyPressed(ImGuiKey_Enter, false))))
+            g_pendingWindowMode = settings().windowed ? 0 : 1;
 
         int launchIdx = draw_ui(games, art, depotRoot);
         if (launchIdx >= 0) {
+            // play_launch() already fired when the cart-insert animation began.
             std::wstring err;
-            if (g_session.launch(games[launchIdx], &err)) play_launch();
-            else g_session.statusNote = games[launchIdx].title + L": " + err;
+            if (!g_session.launch(games[launchIdx], &err)) {
+                g_session.statusNote = games[launchIdx].title + L": " + err;
+                if (testLaunch >= 0) {
+                    logf(L"test-launch: launch failed: %s", err.c_str());
+                    exitCodeOut = 2;
+                    break;
+                }
+            }
         }
 
         ImGui::Render();
@@ -1248,6 +1421,11 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     if (g_session.active()) {
         logf(L"launcher exiting with game still running; leaving it alone");
+    }
+
+    if (!smoke && settings().windowed) {
+        remember_windowed_placement();
+        settings_save();
     }
 
     UnregisterHotKey(hwnd, HOTKEY_QUICKBACK);
