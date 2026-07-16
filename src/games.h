@@ -3,12 +3,6 @@
 #include <string>
 #include <vector>
 
-struct ModInfo {
-    std::wstring name;
-    std::wstring note;      // author / what it is
-    bool supported = false; // full-conversion mods need HD textures + GameShark
-};
-
 struct GameEntry {
     std::wstring title;
     std::wstring releaseDate;  // display string, e.g. "December 2, 1997"
@@ -21,7 +15,6 @@ struct GameEntry {
     bool forceBorderless = true;
     bool comingSoon = false;  // recomp project not started yet; auto-activates
                               // once the repo/exe/ROM show up at the usual paths
-    std::vector<ModInfo> mods;
     std::wstring githubRepo;  // "owner/repo" for in-app download ("" = none)
     std::wstring romSha1;     // expected ROM SHA1, uppercase hex ("" = accept any)
 
