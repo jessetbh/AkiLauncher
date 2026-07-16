@@ -62,6 +62,11 @@ void settings_load() {
             else if (key == "chord_hold_ms") g_settings.chordHoldMs = atoi(val.c_str());
             else if (key == "hotkey_mods") g_settings.hotkeyMods = (UINT)atoi(val.c_str());
             else if (key == "hotkey_vk") g_settings.hotkeyVk = (UINT)atoi(val.c_str());
+            else if (key == "windowed") g_settings.windowed = atoi(val.c_str()) != 0;
+            else if (key == "win_x") g_settings.winX = atoi(val.c_str());
+            else if (key == "win_y") g_settings.winY = atoi(val.c_str());
+            else if (key == "win_w") g_settings.winW = atoi(val.c_str());
+            else if (key == "win_h") g_settings.winH = atoi(val.c_str());
         } else if (section.rfind("game:", 0) == 0) {
             GameOverride& o = g_settings.overrides[u8_to_w(section.substr(5))];
             if (key == "exe") o.exePath = u8_to_w(val);
@@ -88,6 +93,13 @@ void settings_save() {
     f << "chord_hold_ms=" << g_settings.chordHoldMs << "\n";
     f << "hotkey_mods=" << g_settings.hotkeyMods << "\n";
     f << "hotkey_vk=" << g_settings.hotkeyVk << "\n";
+    f << "windowed=" << (g_settings.windowed ? 1 : 0) << "\n";
+    if (g_settings.winW > 0 && g_settings.winH > 0) {
+        f << "win_x=" << g_settings.winX << "\n";
+        f << "win_y=" << g_settings.winY << "\n";
+        f << "win_w=" << g_settings.winW << "\n";
+        f << "win_h=" << g_settings.winH << "\n";
+    }
     for (auto& [key, o] : g_settings.overrides) {
         if (!o.any()) continue;
         f << "[game:" << w_to_u8(key) << "]\n";

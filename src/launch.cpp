@@ -68,14 +68,26 @@ static HWND find_main_window(DWORD pid) {
     return ctx.found;
 }
 
-// The "same window" illusion: game window fills the launcher's monitor with no
-// frame, drawn over the always-fullscreen launcher behind it.
-static void force_borderless_fullscreen(HWND gameWnd, HWND launcherWnd) {
-    HMONITOR mon = MonitorFromWindow(launcherWnd ? launcherWnd : gameWnd, MONITOR_DEFAULTTOPRIMARY);
+// Where the game window should sit: exactly over the launcher's window rect.
+// With the launcher fullscreen (WS_POPUP) that equals the monitor, preserving
+// the original behavior; with the launcher windowed the game takes its place.
+// Returns false while the launcher is minimized (don't chase a bogus rect);
+// falls back to the monitor if the launcher window is gone.
+static bool game_target_rect(HWND launcherWnd, HWND gameWnd, RECT* out) {
+    if (launcherWnd && IsWindow(launcherWnd)) {
+        if (IsIconic(launcherWnd)) return false;
+        return GetWindowRect(launcherWnd, out) != 0;
+    }
+    HMONITOR mon = MonitorFromWindow(gameWnd, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi{sizeof(mi)};
-    if (!GetMonitorInfoW(mon, &mi)) return;
-    const RECT& r = mi.rcMonitor;
+    if (!GetMonitorInfoW(mon, &mi)) return false;
+    *out = mi.rcMonitor;
+    return true;
+}
 
+// The "same window" illusion: game window covers the target rect with no
+// frame, drawn over the launcher behind it.
+static void force_borderless_over(HWND gameWnd, const RECT& r) {
     LONG_PTR style = GetWindowLongPtrW(gameWnd, GWL_STYLE);
     style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
     style |= WS_POPUP;
@@ -84,14 +96,10 @@ static void force_borderless_fullscreen(HWND gameWnd, HWND launcherWnd) {
                  SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOACTIVATE);
 }
 
-static bool covers_monitor(HWND gameWnd, HWND launcherWnd) {
-    HMONITOR mon = MonitorFromWindow(launcherWnd ? launcherWnd : gameWnd, MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFO mi{sizeof(mi)};
-    if (!GetMonitorInfoW(mon, &mi)) return true;
+static bool covers_rect(HWND gameWnd, const RECT& t) {
     RECT wr{};
     if (!GetWindowRect(gameWnd, &wr)) return true;
-    return wr.left <= mi.rcMonitor.left && wr.top <= mi.rcMonitor.top &&
-           wr.right >= mi.rcMonitor.right && wr.bottom >= mi.rcMonitor.bottom;
+    return wr.left <= t.left && wr.top <= t.top && wr.right >= t.right && wr.bottom >= t.bottom;
 }
 
 void bring_to_foreground(HWND wnd) {
@@ -178,19 +186,33 @@ void GameSession::tick(HWND launcherWnd) {
             gameWnd = find_main_window(pi.dwProcessId);
             if (gameWnd) {
                 logf(L"game window found (hwnd=%p) after %llums", gameWnd, now - launchTick);
-                if (forceBorderless) force_borderless_fullscreen(gameWnd, launcherWnd);
+                RECT t{};
+                if (forceBorderless && game_target_rect(launcherWnd, gameWnd, &t)) {
+                    logf(L"forcing game window over launcher rect (%ld,%ld %ldx%ld)", t.left,
+                         t.top, t.right - t.left, t.bottom - t.top);
+                    force_borderless_over(gameWnd, t);
+                    lastForcedRect = t;
+                }
                 runningTick = now;
                 state = SessionState::Running;
             }
         }
     } else if (state == SessionState::Running) {
-        // Ports may reapply their own window mode shortly after startup;
-        // re-force for the first 5 seconds.
-        if (forceBorderless && gameWnd && now - runningTick < 5000 && now - lastWindowPoll >= 500) {
+        // Keep the game window glued to the launcher rect: re-force when the
+        // launcher moves/resizes (windowed mode, F11 toggle), and for the
+        // first 5 seconds also when the port reapplies its own window mode.
+        if (forceBorderless && gameWnd && now - lastWindowPoll >= 500) {
             lastWindowPoll = now;
-            if (IsWindow(gameWnd) && !covers_monitor(gameWnd, launcherWnd)) {
-                logf(L"re-forcing borderless (window shrank/moved)");
-                force_borderless_fullscreen(gameWnd, launcherWnd);
+            RECT t{};
+            if (IsWindow(gameWnd) && game_target_rect(launcherWnd, gameWnd, &t)) {
+                if (!EqualRect(&t, &lastForcedRect)) {
+                    logf(L"launcher rect changed; re-forcing game window over it");
+                    force_borderless_over(gameWnd, t);
+                    lastForcedRect = t;
+                } else if (now - runningTick < 5000 && !covers_rect(gameWnd, t)) {
+                    logf(L"re-forcing borderless (window shrank/moved)");
+                    force_borderless_over(gameWnd, t);
+                }
             }
         }
     } else if (state == SessionState::Closing) {

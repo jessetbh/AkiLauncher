@@ -21,6 +21,7 @@ struct GameSession {
     ULONGLONG runningTick = 0;       // when the game window was found
     ULONGLONG closeRequestTick = 0;
     ULONGLONG lastWindowPoll = 0;
+    RECT lastForcedRect{};           // where the game window was last forced to
     std::wstring title;
     std::wstring artKey;             // stats key of the launched game
     DWORD exitCode = 0;
