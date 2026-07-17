@@ -5,17 +5,13 @@ docs/execution-plan.md
 docs/feature-ideas.md
 docs/history-tour-research.md
 
-# Never commit ROMs or ROM-derived data
+# NEVER commit ROMs or ROM-derived data - no exceptions (owner directive)
 *.z64
 *.n64
 *.v64
 
 # In-app installed games (recompiled game code + user ROMs)
 games/
-
-# Box art scans are copyrighted - keep local only
-assets/boxart/*.png
-assets/boxart/*.jpg
 
 # Build output
 build/

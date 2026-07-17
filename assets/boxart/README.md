@@ -1,11 +1,11 @@
 # Box art
 
-Drop PNG/JPG scans here (gitignored - not distributed). The launcher loads:
+Cover/cart scans shipped with the launcher (replace with better ones anytime).
+The launcher loads:
 
 - `<key>_front.png` - front cover (shown in the carousel)
-- `<key>_back.png` - back cover (F / X / click cycles front -> back -> cart)
-- `<key>_cart.png` - cartridge scan (third face in the flip cycle; drawn
-  aspect-fit on a dark card, alpha respected)
+- `<key>_back.png` - back cover (F / X / click flips front <-> back)
+- `<key>_cart.png` - cartridge scan (used by the launch insert animation)
 
 Keys: `worldtour`, `vpw64`, `revenge`, `wm2k`, `vpw2`, `nomercy`.
 

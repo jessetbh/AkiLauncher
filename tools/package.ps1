@@ -6,14 +6,14 @@
 #
 # Layout inside the zip (flat, like the game zips):
 #   AkiLauncher.exe          self-contained (static CRT)
-#   assets\boxart\README.md  art goes here; scans NOT included by default
-#   README.txt
-# -IncludeArt adds the local boxart scans - they are copyrighted, so only use
-# it for private/testing builds.
+#   assets\boxart\           box/cart art (shipped - owner decision 2026-07-16)
+#   assets\sounds\           optional replacement menu sounds
+#   COPYING README.txt
+# ROMs are NEVER packaged - a hard assertion below fails the build if any
+# ROM-like file ends up in the stage.
 
 param(
     [string]$Version = "dev",
-    [switch]$IncludeArt,
     [switch]$SkipBuild
 )
 
@@ -39,10 +39,9 @@ New-Item -ItemType Directory -Force "$stage\assets\boxart" | Out-Null
 
 Copy-Item $exe $stage
 Copy-Item (Join-Path $repo "assets\boxart\README.md") "$stage\assets\boxart"
-if ($IncludeArt) {
-    Copy-Item (Join-Path $repo "assets\boxart\*.png") "$stage\assets\boxart" -ErrorAction SilentlyContinue
-    Copy-Item (Join-Path $repo "assets\boxart\*.jpg") "$stage\assets\boxart" -ErrorAction SilentlyContinue
-}
+Copy-Item (Join-Path $repo "assets\boxart\*.png") "$stage\assets\boxart" -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $repo "assets\boxart\*.jpg") "$stage\assets\boxart" -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $repo "COPYING") $stage -ErrorAction SilentlyContinue
 if (Test-Path (Join-Path $repo "assets\sounds")) {
     New-Item -ItemType Directory -Force "$stage\assets\sounds" | Out-Null
     Copy-Item (Join-Path $repo "assets\sounds\*.wav") "$stage\assets\sounds" -ErrorAction SilentlyContinue
@@ -74,10 +73,14 @@ Controls
   In game           Shift+F12 or hold View+Menu ~0.6s to return here
 
 Notes
-  - Box art: drop scans into assets\boxart\ (see the README there).
+  - Box art ships in assets\boxart\ - replace with your own scans anytime.
   - Custom menu sounds: assets\sounds\{nav,flip,launch}.wav.
   - Settings and play stats live in %LOCALAPPDATA%\AkiLauncher\settings.ini.
 "@ | Set-Content (Join-Path $stage "README.txt") -Encoding utf8
+
+# Hard gate: no ROMs or ROM-derived data in a release, ever.
+$strays = Get-ChildItem $stage -Recurse -Include *.z64, *.n64, *.v64, *.rom, *.bin
+if ($strays) { throw "ROM-like files in the release stage: $($strays.FullName -join ', ')" }
 
 $zipName = "AkiLauncher-$Version-Windows.zip"
 $zipPath = Join-Path $dist $zipName

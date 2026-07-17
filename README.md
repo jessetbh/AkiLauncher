@@ -64,9 +64,8 @@ launcher hash-checks your pick against the known-good dump for each game and
 keeps a copy with the installed port. Nothing is downloaded from anywhere
 except the ports' own GitHub releases, which contain no game data.
 
-**Where's the box art?** Cover scans are copyrighted, so they are not
-distributed. Drop your own scans into `assets\boxart\` — see the README
-there for file naming.
+**Can I change the box art?** Yes — swap the images in `assets\boxart\`
+(see the README there for file naming).
 
 **Can I point it at my own builds?** Yes — per-game EXE/ROM path overrides
 are in Settings.
