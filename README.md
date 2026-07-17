@@ -22,7 +22,7 @@ game requires the user's own legally dumped ROM.**
 | WCW/nWo Revenge | [WCWnWoRevengeRecomp](https://github.com/jessetbh/WCWnWoRevengeRecomp) |
 | WWF WrestleMania 2000 | [WWFWrestleMania2000Recomp](https://github.com/jessetbh/WWFWrestleMania2000Recomp) |
 | Virtual Pro Wrestling 2 | coming soon |
-| WWF No Mercy | coming soon |
+| WWF No Mercy | [WWFNoMercyRecomp](https://github.com/jessetbh/WWFNoMercyRecomp) |
 
 Each port is a static recompilation — the original N64 game running as a
 native PC app (no emulator), with RT64 rendering, high frame-rate-friendly
