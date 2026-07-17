@@ -83,7 +83,9 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
 
     games.push_back({ L"WWF No Mercy", L"November 17, 2000", L"North America",
                       L"NoMercyRecomp", L"build-msvc\\NoMercyRecompiled.exe", L"nomercy.z64",
-                      L"nomercy", true, true, true });
+                      L"nomercy", true, true, false });
+    games.back().githubRepo = L"jessetbh/WWFNoMercyRecomp";
+    games.back().romSha1 = L"91CEE3D096F4A76644D8B35B9AEAD6448909ABD1";
 
     std::error_code ec;
     fs::path gamesDir = games_root();
