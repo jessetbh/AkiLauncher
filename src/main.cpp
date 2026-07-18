@@ -705,8 +705,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::SetCursorPosY(vh * 0.54f);
         text_centered_colored(palette::dim,
                               hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
-                                  "  or hold  " + chord_to_string(settings().chordMask) +
-                                  "  for the quit prompt, confirm to return here");
+                                  "  Or Hold  " + chord_to_string(settings().chordMask) +
+                                  "  For The Quit Prompt, Confirm To Return Here");
         ImGui::PopFont();
         ImGui::End();
         return -1;
@@ -764,7 +764,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     text_centered("A K I   L A U N C H E R");
     ImGui::PopFont();
     ImGui::PushFont(g_ui.fontSmall);
-    text_centered_colored(palette::faint, "N64 wrestling recompiled");
+    text_centered_colored(palette::faint, "N64 Wrestling Recompiled");
     ImGui::PopFont();
 
     // ------------------------------------------------------------------ carousel
@@ -938,8 +938,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
         statusCol = palette::accent;
     } else if (s.launchable()) {
-        if (s.experimental) { status = "Playable - experimental (bring-up in progress)"; statusCol = palette::warn; }
-        else { status = "Ready to play"; statusCol = palette::ready; }
+        status = "Ready To Play";
+        statusCol = palette::ready;
         action = CardAction::Play;
     } else if (!s.exeFound) {
         if (haveRel) {
@@ -950,7 +950,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         else if (devCheckout) { status = "Not built - run the port build in " + narrow(s.repoDir); statusCol = palette::warn; }
         else { status = "Not available for download yet"; statusCol = palette::faint; }
     } else {
-        status = "Installed - select your own ROM dump: " + narrow(s.romNote) + " (.z64)";
+        status = "Installed - Select your own ROM dump: " + narrow(s.romNote) + " (.z64)";
         statusCol = palette::warn;
         action = CardAction::PickRom;
     }
@@ -1080,15 +1080,15 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     // the per-card status already says what each game needs.
     if (g_ui.padInput)
         text_centered_colored(palette::faint,
-                              "D-Pad browse      A play      X flip box      "
-                              "Y settings      In game:  hold " +
-                                  chord_to_string(settings().chordMask) + "  to return");
+                              "D-Pad Browse      A Play      X Flip Box      "
+                              "Y Settings      In Game:  Hold " +
+                                  chord_to_string(settings().chordMask) + "  To Return");
     else
         text_centered_colored(palette::faint,
-                              "Left/Right browse      Enter play      F flip box      "
-                              "S settings      Esc quit      In game:  " +
+                              "Left/Right Browse      Enter Play      F Flip Box      "
+                              "S Settings      Esc Quit      In Game:  " +
                                   hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
-                                  "  to return");
+                                  "  To Return");
     ImGui::PopFont();
 
     // ------------------------------------------------------------------ cart insert

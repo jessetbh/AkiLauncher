@@ -11,7 +11,6 @@ struct GameEntry {
     std::wstring exeRel;       // exe path relative to the repo dir
     std::wstring romFile;      // ROM filename at the repo root
     std::wstring artKey;       // boxart file stem: assets\boxart\<artKey>_front.png
-    bool experimental = false;
     bool forceBorderless = true;
     bool comingSoon = false;  // recomp project not started yet; auto-activates
                               // once the repo/exe/ROM show up at the usual paths
