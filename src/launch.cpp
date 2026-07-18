@@ -266,8 +266,12 @@ void GameSession::tick(HWND launcherWnd) {
                     } else if (coverStableSince == 0) {
                         coverStableSince = now;
                     }
-                    bool stable = coverStableSince != 0 && now - coverStableSince >= 1500;
-                    if (stable || now - runningTick >= 6000) {
+                    // 600ms of quiet is enough in practice — the port's whole
+                    // init-time churn happens in quick succession. A late
+                    // straggler is caught by the tight post-cover re-force
+                    // below (<=100ms of visible edges, barely perceptible).
+                    bool stable = coverStableSince != 0 && now - coverStableSince >= 600;
+                    if (stable || now - runningTick >= 4000) {
                         logf(L"launch cover down (%s, %llums after window found)",
                              stable ? L"stable" : L"hard cap", now - runningTick);
                         DestroyWindow(coverWnd);
@@ -281,16 +285,21 @@ void GameSession::tick(HWND launcherWnd) {
         // Keep the game window glued to the launcher rect: re-force when the
         // launcher moves/resizes (windowed mode, F11 toggle), and for the
         // first 5 seconds also when the port reapplies its own window mode.
-        if (forceBorderless && gameWnd && now - lastWindowPoll >= 500) {
+        // Poll tight (100ms) in that early window so a churn that slips past
+        // the dropped cover flashes for at most one poll interval.
+        ULONGLONG interval = (now - runningTick < 5000) ? 100 : 500;
+        if (forceBorderless && gameWnd && now - lastWindowPoll >= interval) {
             lastWindowPoll = now;
             RECT t{};
             if (IsWindow(gameWnd) && game_target_rect(launcherWnd, gameWnd, &t)) {
+                LONG_PTR style = GetWindowLongPtrW(gameWnd, GWL_STYLE);
+                bool decorated = (style & (WS_CAPTION | WS_THICKFRAME)) != 0;
                 if (!EqualRect(&t, &lastForcedRect)) {
                     logf(L"launcher rect changed; re-forcing game window over it");
                     force_borderless_over(gameWnd, t);
                     lastForcedRect = t;
-                } else if (now - runningTick < 5000 && !covers_rect(gameWnd, t)) {
-                    logf(L"re-forcing borderless (window shrank/moved)");
+                } else if (now - runningTick < 5000 && (decorated || !covers_rect(gameWnd, t))) {
+                    logf(L"re-forcing borderless (window churned post-cover)");
                     force_borderless_over(gameWnd, t);
                 }
             }
