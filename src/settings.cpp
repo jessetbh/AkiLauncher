@@ -79,8 +79,8 @@ void settings_load() {
             else if (key == "play_count") st.playCount = atoi(val.c_str());
         }
     }
-    if (g_settings.chordMask == 0) g_settings.chordMask = 0x0030;
-    if (g_settings.chordHoldMs < 200 || g_settings.chordHoldMs > 3000) g_settings.chordHoldMs = 600;
+    if (g_settings.chordMask == 0) g_settings.chordMask = 0x0020;
+    if (g_settings.chordHoldMs < 200 || g_settings.chordHoldMs > 5000) g_settings.chordHoldMs = 2500;
     if (g_settings.hotkeyVk == 0) { g_settings.hotkeyMods = MOD_SHIFT; g_settings.hotkeyVk = VK_F12; }
 }
 

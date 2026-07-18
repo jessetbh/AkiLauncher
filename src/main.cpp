@@ -577,7 +577,7 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     ImGui::TextUnformatted("Hold time");
     ImGui::SameLine(panelW * 0.28f);
     ImGui::SetNextItemWidth(panelW * 0.40f);
-    if (ImGui::SliderInt("##hold", &settings().chordHoldMs, 200, 2000, "%d ms"))
+    if (ImGui::SliderInt("##hold", &settings().chordHoldMs, 200, 5000, "%d ms"))
         settings_save();
 
     ImGui::AlignTextToFramePadding();
