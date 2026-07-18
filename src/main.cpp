@@ -383,7 +383,9 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
             *errOut = L"That file isn't the accepted " + g.title +
                       L" ROM. This port needs exactly one dump: the " + g.romNote +
                       L", as an unmodified big-endian .z64 file. Patched/translated"
-                      L" or byte-swapped (.n64/.v64) dumps won't match.";
+                      L" or byte-swapped (.n64/.v64) dumps won't match.\n"
+                      L"Required SHA1: " + g.romSha1 + L"\n"
+                      L"Your file's SHA1: " + h;
             return false;
         }
     }
@@ -941,6 +943,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     ImGui::Dummy(ImVec2(0, vh * 0.002f));
     text_centered_colored(statusCol, status);
     ImGui::PopFont();
+
+    // Exact dump fingerprint, so users can verify their ROM before picking it
+    if (action == CardAction::PickRom && !s.romSha1.empty()) {
+        ImGui::PushFont(g_ui.fontSmall);
+        text_centered_colored(palette::faint, "SHA1: " + narrow(s.romSha1));
+        ImGui::PopFont();
+    }
 
     // Play stats ("Last played Tuesday  -  4.2 hours total")
     {
