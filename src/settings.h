@@ -22,11 +22,12 @@ struct GameStats {
 };
 
 struct Settings {
-    // XINPUT_GAMEPAD_BACK alone, held long: Back+Start is a common in-game
-    // combo on these ports and had side effects; a long single-button hold
-    // can't collide with gameplay inputs.
+    // XINPUT_GAMEPAD_BACK alone, held ~1s: Back+Start is a common in-game
+    // combo on these ports and had side effects; a single-button hold can't
+    // collide with gameplay inputs. Hold time is intentionally NOT exposed
+    // in the settings UI (still honored if hand-edited in settings.ini).
     WORD chordMask = 0x0020;  // XINPUT_GAMEPAD_BACK
-    int chordHoldMs = 2500;
+    int chordHoldMs = 1000;
     UINT hotkeyMods = MOD_SHIFT;
     UINT hotkeyVk = VK_F12;
     bool windowed = false;                       // launcher in a normal window (F11)

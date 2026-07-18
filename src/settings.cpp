@@ -80,7 +80,7 @@ void settings_load() {
         }
     }
     if (g_settings.chordMask == 0) g_settings.chordMask = 0x0020;
-    if (g_settings.chordHoldMs < 200 || g_settings.chordHoldMs > 5000) g_settings.chordHoldMs = 2500;
+    if (g_settings.chordHoldMs < 200 || g_settings.chordHoldMs > 5000) g_settings.chordHoldMs = 1000;
     if (g_settings.hotkeyVk == 0) { g_settings.hotkeyMods = MOD_SHIFT; g_settings.hotkeyVk = VK_F12; }
 }
 

@@ -3,14 +3,14 @@
 A native Windows hub for the AKI-engine N64 wrestling game recompilations.
 Browse the library as a box-art carousel, download each game's PC port
 directly from its GitHub releases, and launch into any of them seamlessly —
-with a quick-back hotkey that returns you to the launcher.
+with a Return to Launcher shortcut to hop back out of a game.
 
 **This repository and its releases do not contain game assets or ROMs. Each
 game requires the user's own legally dumped ROM.**
 
 ![Browsing the carousel, flipping a box, and launching a game](docs/demo.gif)
 
-*Full demo — including the in-game quick-back and a second launch:
+*Full demo — including the in-game Return to Launcher and a second launch:
 [docs/demo.mp4](docs/demo.mp4)*
 
 ## The games it launches
@@ -37,7 +37,7 @@ timing, and file-backed saves.
 - **Seamless launching**: games open borderless over the launcher window with
   a cartridge-insert animation on the way in; a black transition masks the
   port's boot-time window churn. `Shift+F12` or holding the `View` button
-  (~2.5 s) in game brings up the port's quit prompt and returns you to the
+  (about a second) in game brings up the port's quit prompt and returns you to the
   launcher; saves complete before exit.
 - **Update flow**: when a newer port release is published, an update line
   appears — `U` / `RB` installs it in place (ROM and saves untouched).
@@ -54,10 +54,10 @@ timing, and file-backed saves.
 | Enter, A | play / download / select ROM |
 | F, X | flip the box art |
 | U, RB | install an available update |
-| S, Y | settings (rebind quick-back, per-game paths) |
+| S, Y | settings (Return to Launcher binding, per-game paths) |
 | F11, Alt+Enter | windowed / fullscreen |
 | Esc | quit |
-| Shift+F12, hold View+Menu (in game) | quit prompt → back to launcher |
+| Shift+F12, hold View (in game) | quit prompt → back to launcher |
 
 ## FAQ
 

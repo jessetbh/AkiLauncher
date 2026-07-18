@@ -126,6 +126,8 @@ struct UiState {
     // settings screen
     bool showSettings = false;
     bool captureChord = false;
+    bool chordArmed = false;  // wait for all buttons up before capturing (the
+                              // A press that activated Rebind must not count)
     WORD chordPending = 0;
     bool captureHotkey = false;
     std::vector<std::string> exeEdit, romEdit;  // per-game path field buffers
@@ -526,11 +528,15 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     // --- capture flows -----------------------------------------------------
     if (g_ui.captureChord) {
         WORD held = pad_held_mask();
-        g_ui.chordPending |= held;
-        if (g_ui.chordPending != 0 && held == 0) {
-            settings().chordMask = g_ui.chordPending;
-            settings_save();
-            g_ui.captureChord = false;
+        if (!g_ui.chordArmed) {
+            if (held == 0) g_ui.chordArmed = true;  // buttons from the Rebind press released
+        } else {
+            g_ui.chordPending |= held;
+            if (g_ui.chordPending != 0 && held == 0) {
+                settings().chordMask = g_ui.chordPending;
+                settings_save();
+                g_ui.captureChord = false;
+            }
         }
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) g_ui.captureChord = false;
     } else if (g_ui.captureHotkey) {
@@ -558,7 +564,9 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
         }
     } else {
         bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape) && !io.WantTextInput;
-        if (esc || (pad & XINPUT_GAMEPAD_B)) close_settings(games);
+        // With gamepad nav on, B is also ImGui's cancel — while a text field
+        // is active let it just leave the field instead of closing the page.
+        if (esc || ((pad & XINPUT_GAMEPAD_B) && !io.WantTextInput)) close_settings(games);
     }
 
     // --- layout ------------------------------------------------------------
@@ -572,7 +580,7 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     ImGui::BeginChild("##settings", ImVec2(panelW, vh * 0.72f), ImGuiChildFlags_None);
 
     ImGui::PushFont(g_ui.fontBase);
-    ImGui::TextColored(palette::accent, "Quick-back");
+    ImGui::TextColored(palette::accent, "Return To Launcher");
     ImGui::Spacing();
 
     ImGui::AlignTextToFramePadding();
@@ -585,16 +593,10 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
         ImGui::SameLine(panelW * 0.72f);
         if (ImGui::Button("Rebind##chord")) {
             g_ui.captureChord = true;
+            g_ui.chordArmed = false;
             g_ui.chordPending = 0;
         }
     }
-
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted("Hold time");
-    ImGui::SameLine(panelW * 0.28f);
-    ImGui::SetNextItemWidth(panelW * 0.40f);
-    if (ImGui::SliderInt("##hold", &settings().chordHoldMs, 200, 5000, "%d ms"))
-        settings_save();
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted("Keyboard hotkey");
@@ -1404,6 +1406,18 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         }
 
         // --- render ---
+        // Settings page is controller-navigable: enable ImGui gamepad (+
+        // keyboard) nav while it's open — the Win32 backend polls XInput for
+        // nav when the flag is set at NewFrame. Off everywhere else (the
+        // carousel reads the pad directly), and off during the bind-capture
+        // flows so held buttons don't drive focus mid-capture.
+        {
+            ImGuiIO& nio = ImGui::GetIO();
+            if (g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey)
+                nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+            else
+                nio.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
+        }
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
