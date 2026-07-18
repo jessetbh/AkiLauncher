@@ -16,6 +16,7 @@ struct GameSession {
     SessionState state = SessionState::Idle;
     PROCESS_INFORMATION pi{};
     HWND gameWnd = nullptr;
+    HWND coverWnd = nullptr;         // black topmost mask during the launch transition
     bool forceBorderless = true;
     ULONGLONG launchTick = 0;
     ULONGLONG runningTick = 0;       // when the game window was found

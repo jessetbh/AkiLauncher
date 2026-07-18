@@ -54,10 +54,10 @@ static BOOL CALLBACK enum_windows_cb(HWND hwnd, LPARAM lparam) {
     DWORD pid = 0;
     GetWindowThreadProcessId(hwnd, &pid);
     if (pid != ctx->pid) return TRUE;
-    if (!IsWindowVisible(hwnd)) return TRUE;
     if (GetWindow(hwnd, GW_OWNER) != nullptr) return TRUE;
     LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
     if (exStyle & WS_EX_TOOLWINDOW) return TRUE;
+    if (!IsWindowVisible(hwnd)) return TRUE;
     ctx->found = hwnd;
     return FALSE;
 }
@@ -83,6 +83,33 @@ static bool game_target_rect(HWND launcherWnd, HWND gameWnd, RECT* out) {
     if (!GetMonitorInfoW(mon, &mi)) return false;
     *out = mi.rcMonitor;
     return true;
+}
+
+// Seamless launch: a plain black TOPMOST window over the launcher rect that
+// masks the game's boot-time window churn (decorated first show, RT64
+// swapchain resize, the port's own window-mode apply). SDL ignores a hidden
+// STARTUPINFO show value (its first show is SW_SHOW, which is not
+// substituted), so masking is the reliable way to hide the transition. The
+// cover is dropped the moment the game window has been styled borderless
+// over the same rect — both are black at that point, so the handoff is
+// invisible.
+static HWND create_cover_over(HWND launcherWnd) {
+    static bool registered = [] {
+        WNDCLASSW wc{};
+        wc.lpfnWndProc = DefWindowProcW;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        wc.lpszClassName = L"AkiLaunchCover";
+        return RegisterClassW(&wc) != 0;
+    }();
+    if (!registered) return nullptr;
+    RECT r{};
+    if (!game_target_rect(launcherWnd, nullptr, &r)) return nullptr;
+    HWND w = CreateWindowExW(WS_EX_TOPMOST | WS_EX_NOACTIVATE, L"AkiLaunchCover", L"",
+                             WS_POPUP, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                             nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    if (w) ShowWindow(w, SW_SHOWNOACTIVATE);
+    return w;
 }
 
 // The "same window" illusion: game window covers the target rect with no
@@ -181,7 +208,20 @@ void GameSession::tick(HWND launcherWnd) {
     }
 
     if (state == SessionState::WaitingForWindow) {
-        if (now - lastWindowPoll >= 250) {
+        // Mask the boot-time window churn behind a black topmost cover; give
+        // up on the mask (but keep waiting) if no window appears in 15s so a
+        // silently-failing game doesn't leave the user staring at black.
+        if (!coverWnd && forceBorderless && now - launchTick < 15000) {
+            coverWnd = create_cover_over(launcherWnd);
+            if (coverWnd) logf(L"launch cover up (hwnd=%p)", coverWnd);
+        } else if (coverWnd && now - launchTick >= 15000) {
+            logf(L"no game window after 15s; dropping launch cover");
+            DestroyWindow(coverWnd);
+            coverWnd = nullptr;
+        }
+        // Poll fast: the sooner the window is styled under the cover, the
+        // shorter the transition.
+        if (now - lastWindowPoll >= 50) {
             lastWindowPoll = now;
             gameWnd = find_main_window(pi.dwProcessId);
             if (gameWnd) {
@@ -192,6 +232,13 @@ void GameSession::tick(HWND launcherWnd) {
                          t.top, t.right - t.left, t.bottom - t.top);
                     force_borderless_over(gameWnd, t);
                     lastForcedRect = t;
+                }
+                bring_to_foreground(gameWnd);
+                if (coverWnd) {
+                    // Both the cover and the freshly-styled game window are
+                    // black over the same rect — the handoff is invisible.
+                    DestroyWindow(coverWnd);
+                    coverWnd = nullptr;
                 }
                 runningTick = now;
                 state = SessionState::Running;
@@ -269,6 +316,10 @@ static std::vector<std::string> read_log_tail(const std::filesystem::path& path,
 }
 
 void GameSession::finish(HWND launcherWnd) {
+    if (coverWnd) {  // game died before its window appeared
+        DestroyWindow(coverWnd);
+        coverWnd = nullptr;
+    }
     GetExitCodeProcess(pi.hProcess, &exitCode);
     logf(L"%s exited (code=%lu%s)", title.c_str(), exitCode,
          wasTerminated ? L", force-terminated" : L"");
