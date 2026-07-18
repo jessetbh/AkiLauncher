@@ -380,8 +380,10 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
             return false;
         }
         if (h != g.romSha1) {
-            *errOut = L"That file isn't the expected " + g.title +
-                      L" ROM - need the big-endian (.z64) dump of the US release.";
+            *errOut = L"That file isn't the accepted " + g.title +
+                      L" ROM. This port needs exactly one dump: the " + g.romNote +
+                      L", as an unmodified big-endian .z64 file. Patched/translated"
+                      L" or byte-swapped (.n64/.v64) dumps won't match.";
             return false;
         }
     }
@@ -409,7 +411,7 @@ static bool pick_rom(GameEntry& g, std::wstring* errOut) {
     }
     COMDLG_FILTERSPEC types[] = {{L"N64 ROM (*.z64)", L"*.z64"}, {L"All files", L"*.*"}};
     dlg->SetFileTypes(2, types);
-    std::wstring title = L"Select your " + g.title + L" ROM (" + g.romFile + L")";
+    std::wstring title = L"Select your " + g.title + L" ROM - " + g.romNote + L" (.z64)";
     dlg->SetTitle(title.c_str());
     bool ok = false;
     if (SUCCEEDED(dlg->Show(g_hwnd))) {
@@ -932,7 +934,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         else if (devCheckout) { status = "Not built - run the port build in " + narrow(s.repoDir); statusCol = palette::warn; }
         else { status = "Not available for download yet"; statusCol = palette::faint; }
     } else {
-        status = "Installed - now select your own " + narrow(s.romFile) + " ROM dump";
+        status = "Installed - select your own ROM dump: " + narrow(s.romNote) + " (.z64)";
         statusCol = palette::warn;
         action = CardAction::PickRom;
     }

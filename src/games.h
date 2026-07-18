@@ -17,6 +17,8 @@ struct GameEntry {
                               // once the repo/exe/ROM show up at the usual paths
     std::wstring githubRepo;  // "owner/repo" for in-app download ("" = none)
     std::wstring romSha1;     // expected ROM SHA1, uppercase hex ("" = accept any)
+    std::wstring romNote;     // human description of the exact dump required
+                              // (region/revision), shown in the ROM-select UI
 
     // resolved by build_game_list
     std::filesystem::path repoPath;
