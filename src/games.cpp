@@ -79,7 +79,9 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
 
     games.push_back({ L"Virtual Pro Wrestling 2", L"January 28, 2000", L"Japan",
                       L"Vpw2Recomp", L"build-msvc\\Vpw2Recompiled.exe", L"vpw2.z64",
-                      L"vpw2", true, true, true });
+                      L"vpw2", true, true, false });
+    games.back().githubRepo = L"jessetbh/VPW2Recomp";
+    games.back().romSha1 = L"82DD25A044689EAB57AB362FE10C0DA6388C217A";
 
     games.push_back({ L"WWF No Mercy", L"November 17, 2000", L"North America",
                       L"NoMercyRecomp", L"build-msvc\\NoMercyRecompiled.exe", L"nomercy.z64",
