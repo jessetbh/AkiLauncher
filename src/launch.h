@@ -17,6 +17,7 @@ struct GameSession {
     PROCESS_INFORMATION pi{};
     HWND gameWnd = nullptr;
     HWND coverWnd = nullptr;         // black topmost mask during the launch transition
+    ULONGLONG coverStableSince = 0;  // when the game window last became stable under the mask
     bool forceBorderless = true;
     ULONGLONG launchTick = 0;
     ULONGLONG runningTick = 0;       // when the game window was found

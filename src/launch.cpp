@@ -234,17 +234,50 @@ void GameSession::tick(HWND launcherWnd) {
                     lastForcedRect = t;
                 }
                 bring_to_foreground(gameWnd);
-                if (coverWnd) {
-                    // Both the cover and the freshly-styled game window are
-                    // black over the same rect — the handoff is invisible.
-                    DestroyWindow(coverWnd);
-                    coverWnd = nullptr;
-                }
+                // The cover STAYS UP: the port reapplies its own window mode
+                // during init (RT64/config), briefly re-decorating the window.
+                // The Running state drops the mask only once the window has
+                // been stable (borderless, covering the rect) for a while.
+                coverStableSince = 0;
                 runningTick = now;
                 state = SessionState::Running;
             }
         }
     } else if (state == SessionState::Running) {
+        if (coverWnd) {
+            // Masked phase: fast-poll and instantly re-force any boot-time
+            // window churn (the port's own window-mode reapply re-decorates
+            // the window briefly — the "window edges" flash). Drop the mask
+            // once the window has sat borderless over the target rect for a
+            // continuous stability window, or at a hard cap.
+            if (now - lastWindowPoll >= 50) {
+                lastWindowPoll = now;
+                RECT t{};
+                if (!IsWindow(gameWnd)) {
+                    DestroyWindow(coverWnd);  // window vanished; exit check handles the rest
+                    coverWnd = nullptr;
+                } else if (game_target_rect(launcherWnd, gameWnd, &t)) {
+                    LONG_PTR style = GetWindowLongPtrW(gameWnd, GWL_STYLE);
+                    bool ok = covers_rect(gameWnd, t) && !(style & (WS_CAPTION | WS_THICKFRAME));
+                    if (!ok) {
+                        force_borderless_over(gameWnd, t);
+                        lastForcedRect = t;
+                        coverStableSince = 0;
+                    } else if (coverStableSince == 0) {
+                        coverStableSince = now;
+                    }
+                    bool stable = coverStableSince != 0 && now - coverStableSince >= 1500;
+                    if (stable || now - runningTick >= 6000) {
+                        logf(L"launch cover down (%s, %llums after window found)",
+                             stable ? L"stable" : L"hard cap", now - runningTick);
+                        DestroyWindow(coverWnd);
+                        coverWnd = nullptr;
+                        bring_to_foreground(gameWnd);
+                    }
+                }
+            }
+            return;
+        }
         // Keep the game window glued to the launcher rect: re-force when the
         // launcher moves/resizes (windowed mode, F11 toggle), and for the
         // first 5 seconds also when the port reapplies its own window mode.
