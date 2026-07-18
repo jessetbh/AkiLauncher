@@ -21,7 +21,7 @@ game requires the user's own legally dumped ROM.**
 | Virtual Pro Wrestling 64 | [VPW64Recomp](https://github.com/jessetbh/VPW64Recomp) |
 | WCW/nWo Revenge | [WCWnWoRevengeRecomp](https://github.com/jessetbh/WCWnWoRevengeRecomp) |
 | WWF WrestleMania 2000 | [WWFWrestleMania2000Recomp](https://github.com/jessetbh/WWFWrestleMania2000Recomp) |
-| Virtual Pro Wrestling 2 | coming soon |
+| Virtual Pro Wrestling 2 | [VPW2Recomp](https://github.com/jessetbh/VPW2Recomp) |
 | WWF No Mercy | [WWFNoMercyRecomp](https://github.com/jessetbh/WWFNoMercyRecomp) |
 
 Each port is a static recompilation — the original N64 game running as a
@@ -35,9 +35,10 @@ timing, and file-backed saves.
   exe, then asks you to select your own ROM dump (SHA1-validated, copied
   alongside the game).
 - **Seamless launching**: games open borderless over the launcher window with
-  a cartridge-insert animation on the way in. `Shift+F12` or holding
-  `View+Menu` (~0.6 s) in game brings up the port's quit prompt and returns
-  you to the launcher; saves complete before exit.
+  a cartridge-insert animation on the way in; a black transition masks the
+  port's boot-time window churn. `Shift+F12` or holding the `View` button
+  (~2.5 s) in game brings up the port's quit prompt and returns you to the
+  launcher; saves complete before exit.
 - **Update flow**: when a newer port release is published, an update line
   appears — `U` / `RB` installs it in place (ROM and saves untouched).
 - **Box-art carousel** with front/back flips, per-game blurred backdrops,
