@@ -210,8 +210,20 @@ static void apply_overrides(std::vector<GameEntry>& games) {
         auto it = settings().overrides.find(g.artKey);
         if (it != settings().overrides.end()) {
             const GameOverride& o = it->second;
-            if (!o.exePath.empty()) g.exePath = o.exePath;
-            if (!o.romPath.empty()) g.romPath = o.romPath;
+            // A stale override must not shadow a healthy default: only apply
+            // path overrides whose target still exists. (The vpw2 bug: a dead
+            // exe= override from earlier testing pinned the card to "Not
+            // installed" even after a successful, SHA-verified in-app install.)
+            if (!o.exePath.empty()) {
+                if (std::filesystem::is_regular_file(o.exePath, ec)) g.exePath = o.exePath;
+                else logf(L"override exe for %s ignored (missing): %s",
+                          g.artKey.c_str(), o.exePath.c_str());
+            }
+            if (!o.romPath.empty()) {
+                if (std::filesystem::is_regular_file(o.romPath, ec)) g.romPath = o.romPath;
+                else logf(L"override rom for %s ignored (missing): %s",
+                          g.artKey.c_str(), o.romPath.c_str());
+            }
             if (o.forceBorderless != -1) g.forceBorderless = o.forceBorderless != 0;
         }
         g.exeFound = std::filesystem::is_regular_file(g.exePath, ec);
