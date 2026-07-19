@@ -1223,6 +1223,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     ImGui_ImplDX11_Init(g_device, g_context);
 
     g_hwnd = hwnd;
+    // Register the Return To Launcher keyboard hotkey at startup. This was
+    // previously only done from the Settings rebind flow, so Shift+F12 was
+    // dead on a fresh install until the user rebound it once.
+    reregister_hotkey();
     // Footer hints start in pad mode when a controller is already connected.
     for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
         XINPUT_STATE xs{};
