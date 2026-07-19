@@ -8,7 +8,7 @@ with a Return to Launcher shortcut to hop back out of a game.
 **This repository and its releases do not contain game assets or ROMs. Each
 game requires the user's own legally dumped ROM.**
 
-![Browsing the carousel, flipping a box, and launching a game](docs/demo.gif)
+![Browsing the library and launching straight into a game](docs/demo.gif)
 
 *Full demo — including the in-game Return to Launcher and a second launch:
 [docs/demo.mp4](docs/demo.mp4)*
