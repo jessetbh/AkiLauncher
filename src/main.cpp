@@ -1000,7 +1000,14 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                                                              : "SELECT ROM...";
         ImGui::PushFont(g_ui.fontBase);
         ImVec2 bsz(vw * (action == CardAction::Play ? 0.10f : 0.13f), vh * 0.048f);
-        ImGui::SetCursorPos(ImVec2((vw - bsz.x) * 0.5f, infoY + vh * 0.115f));
+        // Keep the button at a stable anchor, but never let it ride up over the
+        // stacked info lines above it (status + optional last-played + update-
+        // available line). When those flow past the anchor, drop below them so the
+        // button can't paint over the "Update available" text.
+        float btnY = infoY + vh * 0.115f;
+        float belowText = ImGui::GetCursorPosY() + vh * 0.012f;
+        if (belowText > btnY) btnY = belowText;
+        ImGui::SetCursorPos(ImVec2((vw - bsz.x) * 0.5f, btnY));
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.62f, 0.12f, 0.92f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.98f, 0.75f, 0.20f, 1.0f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.75f, 0.53f, 0.08f, 1.0f));
