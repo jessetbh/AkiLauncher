@@ -37,7 +37,9 @@ struct Settings {
 };
 
 Settings& settings();
-void settings_load();  // %LOCALAPPDATA%\AkiLauncher\settings.ini (missing = defaults)
+// %LOCALAPPDATA%\AkiLauncher\settings.ini, or settings.ini in the cwd/exe
+// dir when a portable.txt marker exists there (missing file = defaults).
+void settings_load();
 void settings_save();
 std::filesystem::path settings_path();
 

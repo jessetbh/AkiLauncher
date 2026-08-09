@@ -12,9 +12,28 @@ static Settings g_settings;
 Settings& settings() { return g_settings; }
 
 std::filesystem::path settings_path() {
-    wchar_t buf[MAX_PATH]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
-    return std::filesystem::path(buf) / L"AkiLauncher" / L"settings.ini";
+    // Resolved once per session so adding/removing portable.txt mid-run
+    // doesn't split the config across two locations.
+    static const std::filesystem::path path = [] {
+        // Portable mode, mirroring the game ports' portable.txt semantics
+        // (recompui file::get_app_folder_path): the ports check the working
+        // directory; their READMEs document "same folder as the executable".
+        // Honor both — cwd first (exact game behavior), then the exe dir
+        // (robust when launched from a shortcut with a different cwd).
+        std::error_code ec;
+        std::filesystem::path cwd = std::filesystem::current_path(ec);
+        if (!ec && std::filesystem::exists(cwd / L"portable.txt", ec))
+            return cwd / L"settings.ini";
+        wchar_t exeBuf[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, exeBuf, MAX_PATH);
+        std::filesystem::path exeDir = std::filesystem::path(exeBuf).parent_path();
+        if (std::filesystem::exists(exeDir / L"portable.txt", ec))
+            return exeDir / L"settings.ini";
+        wchar_t buf[MAX_PATH]{};
+        GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+        return std::filesystem::path(buf) / L"AkiLauncher" / L"settings.ini";
+    }();
+    return path;
 }
 
 // ---------------------------------------------------------------------------

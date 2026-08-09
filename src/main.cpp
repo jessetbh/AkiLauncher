@@ -1184,6 +1184,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     RegisterClassExW(&wc);
 
     settings_load();  // needed before window creation for the windowed pref
+    logf(L"settings file: %s", settings_path().c_str());
 
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);

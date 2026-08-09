@@ -63,7 +63,9 @@ timing, and file-backed saves.
 
 **Where do downloaded games go?** `games\` next to `AkiLauncher.exe` (or
 `%AKI_GAMES_ROOT%` if set) — the launcher is portable by default. Settings
-and play stats live in `%LOCALAPPDATA%\AkiLauncher\settings.ini`.
+and play stats live in `%LOCALAPPDATA%\AkiLauncher\settings.ini`; create an
+empty `portable.txt` next to `AkiLauncher.exe` (like the game ports) to keep
+`settings.ini` in the launcher folder instead.
 
 **What about ROMs?** You provide your own dumps (`.z64`, big-endian). The
 launcher hash-checks your pick against the known-good dump for each game and

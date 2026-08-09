@@ -1,5 +1,6 @@
 # Agent instructions and planning docs are local-only (family convention)
 CLAUDE.md
+AGENTS.md
 docs/*-plan.md
 docs/execution-plan.md
 docs/feature-ideas.md
