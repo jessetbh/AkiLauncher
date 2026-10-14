@@ -65,7 +65,9 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
                       L"vpw64", true, false });
     games.back().githubRepo = L"jessetbh/VPW64Recomp";
     games.back().romSha1 = L"F9E9FA2ED819C3A39DB5CB6AFECA186F021DB5ED";
-    games.back().romNote = L"Japanese release (the game was Japan-only)";
+    games.back().romNote = L"Japanese release (Japan-only; translations go in as patch mods)";
+    games.back().romHint = L"Translated ROM? Select the clean Japanese ROM here and add the translation"
+                           L" as a patch mod (steps in the game's README FAQ).";
 
     games.push_back({ L"WCW/nWo Revenge", L"October 26, 1998", L"North America",
                       L"WcwRevengeRecomp", L"build-msvc\\RevengeRecompiled.exe", L"revenge.z64",
@@ -86,7 +88,9 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
                       L"vpw2", true, false });
     games.back().githubRepo = L"jessetbh/VPW2Recomp";
     games.back().romSha1 = L"82DD25A044689EAB57AB362FE10C0DA6388C217A";
-    games.back().romNote = L"Japanese release (Japan-only; fan-translation patches won't match)";
+    games.back().romNote = L"Japanese release (Japan-only; translations go in as patch mods)";
+    games.back().romHint = L"Translated ROM? Select the clean Japanese ROM here and add the translation"
+                           L" as a patch mod (steps in the game's README FAQ).";
 
     games.push_back({ L"WWF No Mercy", L"November 17, 2000", L"North America",
                       L"NoMercyRecomp", L"build-msvc\\NoMercyRecompiled.exe", L"nomercy.z64",

@@ -4,6 +4,7 @@
 #include <shobjidl.h>
 #include <xinput.h>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -400,6 +401,7 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
                       L" or byte-swapped (.n64/.v64) dumps won't match.\n"
                       L"Required SHA1: " + g.romSha1 + L"\n"
                       L"Your file's SHA1: " + h;
+            if (!g.romHint.empty()) *errOut += L"\n" + g.romHint;
             return false;
         }
     }
@@ -1069,8 +1071,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::PopFont();
     } else if (!g_session.statusNote.empty()) {
         ImGui::PushFont(g_ui.fontSmall);
-        ImGui::SetCursorPosY(vh * 0.905f);
-        text_centered_colored(palette::error, narrow(g_session.statusNote));
+        // Multi-line notes (the wrong-ROM error) grow upward, clear of the footer.
+        std::string note = narrow(g_session.statusNote);
+        int lines = 1 + (int)std::count(note.begin(), note.end(), '\n');
+        float noteY = vh * 0.935f - lines * ImGui::GetTextLineHeightWithSpacing();
+        ImGui::SetCursorPosY(noteY < vh * 0.905f ? noteY : vh * 0.905f);
+        text_centered_colored(palette::error, note);
         ImGui::PopFont();
     }
 
