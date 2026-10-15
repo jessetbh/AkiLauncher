@@ -18,6 +18,7 @@ struct GameEntry {
     std::wstring romSha1;     // expected ROM SHA1, uppercase hex ("" = accept any)
     std::wstring romNote;     // human description of the exact dump required
                               // (region/revision), shown in the ROM-select UI
+    std::wstring romHint;     // extra line for the wrong-ROM error ("" = none)
 
     // resolved by build_game_list
     std::filesystem::path repoPath;
