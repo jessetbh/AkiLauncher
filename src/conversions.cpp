@@ -153,12 +153,14 @@ namespace {
         if (comps.contains("codes")) {
             c.codes = true;
             c.codesRom = wide(str(comps["codes"], "rom"));
+            if (c.codesRom.empty()) c.codesRom = wide(str(comps["codes"], "rom_revision"));
         }
         if (comps.contains("saves") && comps["saves"].is_array() && !comps["saves"].empty()) c.saves = true;
         if (comps.contains("textures")) {
             c.textures = true;
             c.texturesPackage = wide(str(comps["textures"], "package"));
             c.texturesNaming = wide(str(comps["textures"], "naming"));
+            c.texturesSha256 = wide(str(comps["textures"], "sha256"));
         }
         if (comps.contains("rt")) {
             c.rt = true;
@@ -174,8 +176,15 @@ namespace {
     void annotate(ConversionInfo& c, const GameEntry& g) {
         std::error_code ec;
         if (!c.texturesPackage.empty()) {
-            c.texturesInstalled = fs::is_directory(game_data_dir(g) / "conversions" / "_packages" / c.texturesPackage, ec);
+            const fs::path pkg = game_data_dir(g) / "conversions" / "_packages" / c.texturesPackage;
+            c.texturesInstalled = fs::is_directory(pkg, ec);
             if (!c.texturesInstalled) c.notes.push_back(L"Texture package " + c.texturesPackage + L" isn't added yet: add its zip to see the textures");
+            else if (!c.texturesSha256.empty()) {
+                const std::string have = read_text(pkg / ".package.sha256");
+                if (!have.empty() && wide(have) != c.texturesSha256)
+                    c.notes.push_back(L"The added " + c.texturesPackage + L" isn't the version this conversion was made with (sha256 differs)");
+            }
+            if (c.texturesInstalled && c.texturesNaming == L"rice") c.notes.push_back(L"Textures use Rice names (they show once the game supports Rice names)");
             else if (c.texturesNaming == L"rice") c.notes.push_back(L"Textures use Rice names (needs the game's Rice texture support)");
         }
         if (c.codes) {
@@ -266,6 +275,10 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
             fs::remove_all(tmp, ec);
             r.message = L"Couldn't add the texture package: " + err;
             return r;
+        }
+        // Pin what was added, so conversions can tell whether it's the pack they were made with.
+        if (s.zip) {
+            std::ofstream(tmp / ".package.sha256", std::ios::binary) << u8(fs::path(sha256_file(src)));
         }
         fs::remove_all(dst, ec);
         fs::rename(tmp, dst, ec);

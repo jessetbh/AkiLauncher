@@ -35,3 +35,5 @@ void install_ack();
 
 // SHA1 of a file as uppercase hex (bcrypt); empty on failure.
 std::wstring sha1_file(const std::filesystem::path& p);
+// SHA256 of a file as lowercase hex (bcrypt, streamed); empty on failure.
+std::wstring sha256_file(const std::filesystem::path& p);

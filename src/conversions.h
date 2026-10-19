@@ -17,6 +17,7 @@ struct ConversionInfo {
     std::wstring codesRom;          // e.g. nomercy-rev0
     std::wstring texturesPackage;   // dependency package "Team-Name" ("" = inline or none)
     std::wstring texturesNaming;    // rt64 / rice
+    std::wstring texturesSha256;    // the package zip it was made with ("" = not pinned)
     std::wstring rtLights, rtMaterials;
     std::filesystem::path folder;   // installed folder
     std::filesystem::path icon;     // icon.png in it ("" = none)
