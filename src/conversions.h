@@ -30,6 +30,7 @@ struct ConversionInfo {
 // %LOCALAPPDATA%\<exe stem>.
 std::filesystem::path game_data_dir(const GameEntry& g);
 // The ROM revision tag codes must have for this port (nomercy-rev1 for No Mercy, else the game key).
+std::wstring game_key(const GameEntry& g);
 std::wstring port_rom_tag(const GameEntry& g);
 
 std::vector<ConversionInfo> list_conversions(const GameEntry& g);
