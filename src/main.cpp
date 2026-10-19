@@ -1359,6 +1359,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     int playNow = -1;      // debug: launch game N at startup, keep normal UI
     std::wstring addConversionPath;  // --add-conversion <zip|folder>: install it, exit 0/6
     std::wstring playConversion;     // --conversion <id> (with --play N): launch that conversion
+    int listConversions = -1;        // --list-conversions N: log game N's conversions, exit 0
     int testInstall = -1;  // debug: download+install game N, exit 0/4
     int testRomIdx = -1;   // debug: validate+copy a ROM for game N, exit 0/4
     std::wstring testRomPath;
@@ -1378,6 +1379,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         else if (a == L"--settings") wantSettings = true;
         else if (a == L"--add-conversion" && i + 1 < __argc) addConversionPath = __wargv[++i];
         else if (a == L"--conversion" && i + 1 < __argc) playConversion = __wargv[++i];
+        else if (a == L"--list-conversions" && i + 1 < __argc) listConversions = _wtoi(__wargv[++i]);
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
     }
 
@@ -1458,6 +1460,15 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     apply_overrides(games);
     if (g_ui.selected < 0 || g_ui.selected >= (int)games.size()) g_ui.selected = 0;
     if (wantSettings) open_settings(games);
+    if (listConversions >= 0 && listConversions < (int)games.size()) {
+        for (const ConversionInfo& c : list_conversions(games[listConversions])) {
+            logf(L"conversion %s \"%s\" v%s:%s%s%s%s%s", c.id.c_str(), c.name.c_str(), c.version.c_str(),
+                 c.patch ? L" [Patch]" : L"", c.codes ? L" [Codes]" : L"", c.saves ? L" [Save]" : L"",
+                 c.textures ? L" [Textures]" : L"", c.rt ? L" [RT]" : L"");
+            for (const auto& n : c.notes) logf(L"   note: %s", n.c_str());
+        }
+        return 0;
+    }
     if (!addConversionPath.empty()) {
         AddResult r = add_conversion(games, addConversionPath);
         logf(L"add-conversion %s: %s", r.ok ? L"OK" : L"FAILED", r.message.c_str());

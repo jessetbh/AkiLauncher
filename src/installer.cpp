@@ -379,3 +379,32 @@ std::wstring sha1_file(const std::filesystem::path& p) {
     }
     return result;
 }
+
+// SHA256 of a file as lowercase hex (bcrypt, streamed); empty on failure. Conversion texture packages are pinned by it.
+std::wstring sha256_file(const std::filesystem::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return {};
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    std::wstring result;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0) {
+        if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) == 0) {
+            std::vector<char> buf(1 << 20);
+            bool ok = true;
+            while (f && ok) {
+                f.read(buf.data(), (std::streamsize)buf.size());
+                std::streamsize n = f.gcount();
+                if (n > 0 && BCryptHashData(hash, (PUCHAR)buf.data(), (ULONG)n, 0) != 0) ok = false;
+            }
+            UCHAR digest[32]{};
+            if (ok && BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0) {
+                wchar_t hex[65]{};
+                for (int i = 0; i < 32; ++i) swprintf_s(hex + i * 2, 3, L"%02x", digest[i]);
+                result = hex;
+            }
+            BCryptDestroyHash(hash);
+        }
+        BCryptCloseAlgorithmProvider(alg, 0);
+    }
+    return result;
+}
