@@ -179,10 +179,13 @@ namespace {
             else if (c.texturesNaming == L"rice") c.notes.push_back(L"Textures use Rice names (needs the game's Rice texture support)");
         }
         if (c.codes) {
-            c.codesRunnable = !c.codesRom.empty() && c.codesRom == port_rom_tag(g);
+            const std::wstring port = port_rom_tag(g);
+            auto game = [](const std::wstring& t) { return t.substr(0, t.find(L"-rev")); };
+            c.codesRunnable = !c.codesRom.empty() && game(c.codesRom) == game(port);
             if (!c.codesRunnable) {
-                c.notes.push_back(L"Its codes are for " + (c.codesRom.empty() ? std::wstring(L"an unknown ROM revision") : c.codesRom) +
-                                  L"; this game is " + port_rom_tag(g) + L", so they stay off until translated");
+                c.notes.push_back(L"Its codes aren't tagged for this game (" + (c.codesRom.empty() ? std::wstring(L"no tag") : c.codesRom) + L"), so they stay off");
+            } else if (c.codesRom != port) {
+                c.notes.push_back(L"Its codes are for " + c.codesRom + L"; they're translated to " + port + L" as they run (codes outside the known map are skipped)");
             }
         }
     }
