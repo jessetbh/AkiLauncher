@@ -16,7 +16,8 @@ struct ConversionInfo {
     bool patch = false, codes = false, saves = false, textures = false, rt = false;
     std::wstring codesRom;          // e.g. nomercy-rev0
     std::wstring texturesPackage;   // dependency package "Team-Name" ("" = inline or none)
-    std::wstring texturesNaming;    // rt64 / rice
+    std::wstring texturesNaming;    // rt64 / rice / jabo
+    std::wstring requiresPatchBase; // aki.json requires.patch.base: a ROM patch left out until the player supplies that ROM
     std::wstring texturesSha256;    // the package zip it was made with ("" = not pinned)
     std::wstring rtLights, rtMaterials;
     std::filesystem::path folder;   // installed folder
