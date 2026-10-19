@@ -148,7 +148,8 @@ void bring_to_foreground(HWND wnd) {
 // GameSession
 // ---------------------------------------------------------------------------
 
-bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
+bool GameSession::launch(const GameEntry& g, std::wstring* errorOut,
+                         const std::vector<std::pair<std::wstring, std::wstring>>* extraEnv) {
     if (active()) return false;
 
     std::wstring cmdline = L"\"" + g.exePath.wstring() + L"\"";
@@ -157,6 +158,12 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     // Env is inherited by the child; set the autoboot var around CreateProcess
     // only (skips the port's own ROM-select menu).
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", g.romPath.wstring().c_str());
+    if (extraEnv) {
+        for (const auto& [name, value] : *extraEnv) {
+            SetEnvironmentVariableW(name.c_str(), value.c_str());
+            logf(L"launch env %s=%s", name.c_str(), value.c_str());
+        }
+    }
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -164,6 +171,9 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     BOOL ok = CreateProcessW(g.exePath.wstring().c_str(), cmdline.data(), nullptr, nullptr,
                              FALSE, 0, nullptr, cwd.c_str(), &si, &newPi);
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", nullptr);
+    if (extraEnv) {
+        for (const auto& kv : *extraEnv) SetEnvironmentVariableW(kv.first.c_str(), nullptr);
+    }
 
     if (!ok) {
         DWORD err = GetLastError();

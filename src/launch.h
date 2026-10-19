@@ -3,6 +3,7 @@
 
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 struct GameEntry;
@@ -32,7 +33,9 @@ struct GameSession {
     std::filesystem::path portLogPath;  // %LOCALAPPDATA%\<exe stem>\<exe stem>.log
     std::vector<std::string> logTail;   // tail of the port's log after a bad exit
 
-    bool launch(const GameEntry& g, std::wstring* errorOut);
+    // extraEnv: variables set for this launch only (a conversion's AKI_CONVERSION and RT file overrides).
+    bool launch(const GameEntry& g, std::wstring* errorOut,
+                const std::vector<std::pair<std::wstring, std::wstring>>* extraEnv = nullptr);
     void tick(HWND launcherWnd);
     void requestQuickBack();
     bool active() const { return state != SessionState::Idle; }

@@ -1,6 +1,7 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <xinput.h>
 
@@ -15,6 +16,7 @@
 
 #include "artwork.h"
 #include "audio.h"
+#include "conversions.h"
 #include "games.h"
 #include "installer.h"
 #include "launch.h"
@@ -131,9 +133,18 @@ struct UiState {
     WORD chordPending = 0;
     bool captureHotkey = false;
     std::vector<std::string> exeEdit, romEdit;  // per-game path field buffers
+    // conversions page (full-conversion mods of the selected game, every type side by side)
+    bool showConversions = false;
+    std::vector<ConversionInfo> convList;
+    int convFor = -1;           // game the list was read for
+    std::wstring convMessage;   // last add / remove result
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
+// Files dropped on the window (conversion packages), handled by the render loop.
+static std::vector<std::filesystem::path> g_droppedFiles;
+// Env for the next launch (a conversion's), set by the Conversions page or --conversion.
+static std::vector<std::pair<std::wstring, std::wstring>> g_launchEnv;
 static DWORD g_attractMs = 60000;  // idle before attract mode (--attract-ms)
 
 static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -148,6 +159,16 @@ static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
     case WM_HOTKEY:
         if (wparam == HOTKEY_QUICKBACK) g_quickBackRequested = true;
         return 0;
+    case WM_DROPFILES: {
+        HDROP drop = reinterpret_cast<HDROP>(wparam);
+        UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        for (UINT i = 0; i < n; i++) {
+            wchar_t path[MAX_PATH * 4]{};
+            if (DragQueryFileW(drop, i, path, (UINT)std::size(path))) g_droppedFiles.emplace_back(path);
+        }
+        DragFinish(drop);
+        return 0;
+    }
     case WM_SYSCOMMAND:
         if ((wparam & 0xfff0) == SC_KEYMENU) return 0;  // no Alt menu beep
         break;
@@ -217,7 +238,13 @@ static void apply_overrides(std::vector<GameEntry>& games) {
             // exe= override from earlier testing pinned the card to "Not
             // installed" even after a successful, SHA-verified in-app install.)
             if (!o.exePath.empty()) {
-                if (std::filesystem::is_regular_file(o.exePath, ec)) g.exePath = o.exePath;
+                if (std::filesystem::is_regular_file(o.exePath, ec)) {
+                    g.exePath = o.exePath;
+                    // [fullconv] Run an overridden exe from its own checkout (build-msvc\..), so its portable.txt,
+                    // mods, conversions and saves are the ones used, not the default repo's.
+                    std::filesystem::path dir = g.exePath.parent_path();
+                    g.repoPath = (dir.filename() == L"build-msvc") ? dir.parent_path() : dir;
+                }
                 else logf(L"override exe for %s ignored (missing): %s",
                           g.artKey.c_str(), o.exePath.c_str());
             }
@@ -677,6 +704,146 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     ImGui::EndChild();
 }
 
+// ---------------------------------------------------------------------------------------- conversions page
+// Full-conversion mods for the selected game: ROM patches, code mods, save packs and texture packs, side by side.
+
+static void refresh_conversions(const std::vector<GameEntry>& games) {
+    g_ui.convFor = g_ui.selected;
+    g_ui.convList = (g_ui.selected >= 0 && g_ui.selected < (int)games.size())
+                        ? list_conversions(games[g_ui.selected])
+                        : std::vector<ConversionInfo>{};
+}
+
+static void add_conversion_from(std::vector<GameEntry>& games, const std::filesystem::path& p) {
+    AddResult r = add_conversion(games, p);
+    g_ui.convMessage = r.message;
+    if (r.ok && r.gameIndex >= 0) g_ui.selected = r.gameIndex;
+    g_ui.showConversions = true;
+    refresh_conversions(games);
+}
+
+static bool pick_package(std::filesystem::path* out) {
+    IFileOpenDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return false;
+    COMDLG_FILTERSPEC types[] = {{L"Conversion package (*.zip)", L"*.zip"}, {L"All files", L"*.*"}};
+    dlg->SetFileTypes(2, types);
+    dlg->SetTitle(L"Add a conversion package (or its texture package)");
+    bool ok = false;
+    if (SUCCEEDED(dlg->Show(g_hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item))) {
+            PWSTR psz = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &psz))) {
+                *out = psz;
+                ok = true;
+                CoTaskMemFree(psz);
+            }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    return ok;
+}
+
+static void badge(const char* label, bool on, ImVec4 col) {
+    if (!on) return;
+    ImGui::SameLine();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(col.x * 0.35f, col.y * 0.35f, col.z * 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 0.35f, col.y * 0.35f, col.z * 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(col.x * 0.35f, col.y * 0.35f, col.z * 0.35f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, col);
+    ImGui::SmallButton(label);
+    ImGui::PopStyleColor(4);
+}
+
+// Returns a game index to launch (with g_launchEnv set), or -1.
+static int draw_conversions(std::vector<GameEntry>& games, WORD pad) {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
+    if (g_ui.convFor != g_ui.selected) refresh_conversions(games);
+    GameEntry& g = games[g_ui.selected];
+    int launch = -1;
+
+    ImGui::PushFont(g_ui.fontHeader);
+    ImGui::SetCursorPosY(vh * 0.055f);
+    text_centered("C O N V E R S I O N S");
+    ImGui::PopFont();
+    ImGui::PushFont(g_ui.fontSmall);
+    text_centered_colored(palette::dim, narrow(g.title) + "  -  full-conversion mods: ROM patches, code mods, save packs, texture packs");
+    ImGui::PopFont();
+
+    float panelW = vw * 0.70f;
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
+    ImGui::BeginChild("##conversions", ImVec2(panelW, vh * 0.62f), ImGuiChildFlags_None);
+    ImGui::PushFont(g_ui.fontBase);
+    if (g_ui.convList.empty()) {
+        ImGui::TextColored(palette::dim, "No conversions yet.");
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::TextColored(palette::faint, "Add a conversion package (.zip) with the button below, or drop it on this window.");
+        ImGui::PopFont();
+    }
+    std::wstring removeId;
+    for (size_t i = 0; i < g_ui.convList.size(); i++) {
+        const ConversionInfo& c = g_ui.convList[i];
+        ImGui::PushID((int)i);
+        ImGui::Separator();
+        ImGui::TextColored(palette::accent, "%s", narrow(c.name).c_str());
+        badge("Patch", c.patch, ImVec4(0.55f, 0.75f, 1.0f, 1.0f));
+        badge("Codes", c.codes, ImVec4(1.0f, 0.80f, 0.40f, 1.0f));
+        badge("Save", c.saves, ImVec4(0.55f, 0.95f, 0.60f, 1.0f));
+        badge("Textures", c.textures, ImVec4(0.95f, 0.60f, 0.95f, 1.0f));
+        badge("RT", c.rt, ImVec4(0.70f, 0.90f, 0.95f, 1.0f));
+        ImGui::PushFont(g_ui.fontSmall);
+        std::string line = (c.version.empty() ? std::string() : "v" + narrow(c.version)) +
+                           (c.authors.empty() ? std::string() : "   by " + narrow(c.authors));
+        if (!line.empty()) ImGui::TextColored(palette::dim, "%s", line.c_str());
+        if (!c.description.empty()) ImGui::TextWrapped("%s", narrow(c.description).c_str());
+        for (const auto& n : c.notes) ImGui::TextColored(palette::warn, "%s", narrow(n).c_str());
+        ImGui::PopFont();
+        if (ImGui::Button("Play")) {
+            if (g.launchable()) {
+                g_launchEnv = conversion_env(c);
+                launch = g_ui.selected;
+                g_ui.showConversions = false;
+                play_launch();
+            } else {
+                g_ui.convMessage = L"Install the game and select its ROM first.";
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Remove")) removeId = c.id;
+        ImGui::PopID();
+    }
+    ImGui::PopFont();
+    ImGui::EndChild();
+
+    if (!removeId.empty()) {
+        std::wstring err;
+        g_ui.convMessage = remove_conversion(g, removeId, &err) ? (L"Removed " + removeId + L" (its saves are kept).")
+                                                                 : (L"Couldn't remove " + removeId + L": " + err);
+        refresh_conversions(games);
+    }
+
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.79f));
+    ImGui::PushFont(g_ui.fontBase);
+    if (ImGui::Button("Add conversion...")) {
+        std::filesystem::path p;
+        if (pick_package(&p)) add_conversion_from(games, p);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Back") || ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) g_ui.showConversions = false;
+    ImGui::PopFont();
+    if (!g_ui.convMessage.empty()) {
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::SetCursorPosX((vw - panelW) * 0.5f);
+        ImGui::PushTextWrapPos((vw + panelW) * 0.5f);
+        ImGui::TextColored(palette::dim, "%s", narrow(g_ui.convMessage).c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::PopFont();
+    }
+    return launch;
+}
+
 // Returns the index of a game to launch this frame, or -1.
 static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                    const std::filesystem::path& depotRoot) {
@@ -724,6 +891,19 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         draw_settings(games, pad);
         ImGui::End();
         return -1;
+    }
+
+    // ------------------------------------------------------------------ conversions page
+    // Dropped packages go to the game their aki.json names, whatever page is open.
+    while (!g_droppedFiles.empty()) {
+        std::filesystem::path p = g_droppedFiles.front();
+        g_droppedFiles.erase(g_droppedFiles.begin());
+        add_conversion_from(games, p);
+    }
+    if (g_ui.showConversions) {
+        int li = draw_conversions(games, pad);
+        ImGui::End();
+        return li;
     }
 
     int launchIndex = -1;
@@ -1041,6 +1221,21 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
     }
 
+    // [fullconv] The selected game's conversions (full-conversion mods of every kind): C / LB.
+    if (s.exeFound && !inserting) {
+        ImGui::PushFont(g_ui.fontSmall);
+        const float cw = vw * 0.16f;
+        ImGui::SetCursorPosX((vw - cw) * 0.5f);
+        const std::string label = g_ui.padInput ? "CONVERSIONS  (LB)" : "CONVERSIONS  (C)";
+        if (ImGui::Button(label.c_str(), ImVec2(cw, 0)) || ImGui::IsKeyPressed(ImGuiKey_C) ||
+            (pad & XINPUT_GAMEPAD_LEFT_SHOULDER)) {
+            g_ui.showConversions = true;
+            g_ui.convMessage.clear();
+            refresh_conversions(games);
+        }
+        ImGui::PopFont();
+    }
+
     }  // end if (no crash panel)
 
     // Crash panel: statusNote + tail of the port's own log, dismissible.
@@ -1156,6 +1351,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     bool wantSettings = false;
     int testLaunch = -1;
     int playNow = -1;      // debug: launch game N at startup, keep normal UI
+    std::wstring addConversionPath;  // --add-conversion <zip|folder>: install it, exit 0/6
+    std::wstring playConversion;     // --conversion <id> (with --play N): launch that conversion
     int testInstall = -1;  // debug: download+install game N, exit 0/4
     int testRomIdx = -1;   // debug: validate+copy a ROM for game N, exit 0/4
     std::wstring testRomPath;
@@ -1173,6 +1370,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             testRomPath = __wargv[++i];
         }
         else if (a == L"--settings") wantSettings = true;
+        else if (a == L"--add-conversion" && i + 1 < __argc) addConversionPath = __wargv[++i];
+        else if (a == L"--conversion" && i + 1 < __argc) playConversion = __wargv[++i];
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
     }
 
@@ -1231,6 +1430,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     ImGui_ImplDX11_Init(g_device, g_context);
 
     g_hwnd = hwnd;
+    DragAcceptFiles(hwnd, TRUE);  // conversion packages can be dropped on the window
     // Register the Return To Launcher keyboard hotkey at startup. This was
     // previously only done from the Settings rebind flow, so Shift+F12 was
     // dead on a fresh install until the user rebound it once.
@@ -1252,6 +1452,11 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     apply_overrides(games);
     if (g_ui.selected < 0 || g_ui.selected >= (int)games.size()) g_ui.selected = 0;
     if (wantSettings) open_settings(games);
+    if (!addConversionPath.empty()) {
+        AddResult r = add_conversion(games, addConversionPath);
+        logf(L"add-conversion %s: %s", r.ok ? L"OK" : L"FAILED", r.message.c_str());
+        return r.ok ? 0 : 6;
+    }
     logf(L"depot root: %s", depotRoot.empty() ? L"(NOT FOUND)" : depotRoot.c_str());
 
     releases_check_start(games);
@@ -1355,7 +1560,14 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         }
         if (playNow >= 0 && frame == 30 && playNow < (int)games.size()) {
             std::wstring err;
-            g_session.launch(games[playNow], &err);
+            std::vector<std::pair<std::wstring, std::wstring>> env;
+            if (!playConversion.empty()) {
+                for (const ConversionInfo& c : list_conversions(games[playNow])) {
+                    if (c.id == playConversion) env = conversion_env(c);
+                }
+                if (env.empty()) logf(L"play: conversion %s isn't installed for %s", playConversion.c_str(), games[playNow].title.c_str());
+            }
+            if (!g_session.launch(games[playNow], &err, env.empty() ? nullptr : &env)) logf(L"play: launch failed: %s", err.c_str());
         }
         if (testLaunch >= 0) {
             if (frame == 30 && testLaunch < (int)games.size()) {
@@ -1447,7 +1659,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (launchIdx >= 0) {
             // play_launch() already fired when the cart-insert animation began.
             std::wstring err;
-            if (!g_session.launch(games[launchIdx], &err)) {
+            const bool withConversion = !g_launchEnv.empty();
+            const bool launched = g_session.launch(games[launchIdx], &err, withConversion ? &g_launchEnv : nullptr);
+            g_launchEnv.clear();
+            if (!launched) {
                 g_session.statusNote = games[launchIdx].title + L": " + err;
                 if (testLaunch >= 0) {
                     logf(L"test-launch: launch failed: %s", err.c_str());
