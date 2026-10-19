@@ -45,6 +45,7 @@ add_executable(AkiLauncher WIN32
     src/settings.cpp
     src/audio.cpp
     src/installer.cpp
+    src/conversions.cpp
 )
 if(MSVC)
     # App icon + version resource (title bar / taskbar / Explorer)
