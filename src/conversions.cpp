@@ -30,6 +30,15 @@ namespace {
         return std::string(s.begin(), s.end());
     }
 
+    // An absolute path with the \\?\ prefix, so file calls on it aren't held to MAX_PATH (260 characters).
+    fs::path long_path(const fs::path& p) {
+        std::wstring w = fs::absolute(p).lexically_normal().wstring();
+        std::replace(w.begin(), w.end(), L'/', L'\\');
+        if (w.rfind(L"\\\\?\\", 0) == 0) return w;
+        if (w.rfind(L"\\\\", 0) == 0) return L"\\\\?\\UNC\\" + w.substr(2);
+        return L"\\\\?\\" + w;
+    }
+
     std::string str(const json& j, const char* key) {
         auto it = j.find(key);
         return (it != j.end() && it->is_string()) ? it->get<std::string>() : std::string();
@@ -102,7 +111,7 @@ namespace {
             std::error_code ec;
             fs::create_directories(dst, ec);
             if (!zip) {
-                fs::copy(path, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+                fs::copy(long_path(path), long_path(dst), fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
                 if (ec && err) *err = L"copy failed: " + wide(ec.message());
                 return !ec;
             }
@@ -116,10 +125,19 @@ namespace {
                     if (err) *err = L"unsafe path in the package: " + wide(name);
                     return false;
                 }
-                fs::path out = dst / fs::u8path(name);
+                // Texture packs nest deep (Showdown 64's artist folders pass MAX_PATH): write through \\?\ paths.
+                const fs::path out = long_path(dst / fs::u8path(name));
                 fs::create_directories(out.parent_path(), ec);
-                std::string u8s = u8(out);
-                if (!mz_zip_reader_extract_to_file(&archive, i, u8s.c_str(), 0)) {
+                size_t size = 0;
+                void* data = mz_zip_reader_extract_to_heap(&archive, i, &size, 0);
+                bool written = false;
+                if (data != nullptr) {
+                    std::ofstream file(out, std::ios::binary);
+                    file.write(static_cast<const char*>(data), std::streamsize(size));
+                    written = file.good();
+                    mz_free(data);
+                }
+                if (!written) {
                     if (err) *err = L"couldn't extract " + wide(name);
                     return false;
                 }
@@ -170,6 +188,9 @@ namespace {
         c.folder = folder;
         std::error_code ec;
         if (fs::is_regular_file(folder / "icon.png", ec)) c.icon = folder / "icon.png";
+        if (auto r = j.find("requires"); r != j.end() && r->is_object() && r->contains("patch") && (*r)["patch"].is_object()) {
+            c.requiresPatchBase = wide(str((*r)["patch"], "base"));
+        }
         return c;
     }
 
@@ -184,8 +205,10 @@ namespace {
                 if (!have.empty() && wide(have) != c.texturesSha256)
                     c.notes.push_back(L"The added " + c.texturesPackage + L" isn't the version this conversion was made with (sha256 differs)");
             }
-            if (c.texturesInstalled && c.texturesNaming == L"rice") c.notes.push_back(L"Textures use Rice names (they show once the game supports Rice names)");
-            else if (c.texturesNaming == L"rice") c.notes.push_back(L"Textures use Rice names (needs the game's Rice texture support)");
+        }
+        if (!c.requiresPatchBase.empty()) {
+            c.notes.push_back(L"Its ROM patch isn't included: it needs your own " + c.requiresPatchBase +
+                L" ROM (rerun the import with --base-rom)");
         }
         if (c.codes) {
             const std::wstring port = port_rom_tag(g);
@@ -275,10 +298,10 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
         std::wstring pkg = (s.zip && dash != std::wstring::npos) ? stem.substr(0, dash) : src.filename().wstring();
         const fs::path dst = data / "conversions" / "_packages" / pkg;
         const fs::path tmp = data / "conversions" / "_packages" / (L".tmp-" + pkg);
-        fs::remove_all(tmp, ec);
+        fs::remove_all(long_path(tmp), ec);
         std::wstring err;
         if (!s.extract_all(tmp, &err)) {
-            fs::remove_all(tmp, ec);
+            fs::remove_all(long_path(tmp), ec);
             r.message = L"Couldn't add the texture package: " + err;
             return r;
         }
@@ -286,8 +309,8 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
         if (s.zip) {
             std::ofstream(tmp / ".package.sha256", std::ios::binary) << u8(fs::path(sha256_file(src)));
         }
-        fs::remove_all(dst, ec);
-        fs::rename(tmp, dst, ec);
+        fs::remove_all(long_path(dst), ec);
+        fs::rename(long_path(tmp), long_path(dst), ec);
         if (ec) {
             r.message = L"Couldn't add the texture package: " + wide(ec.message());
             return r;
@@ -340,16 +363,16 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
 
     const fs::path dst = data / "conversions" / fs::u8path(id);
     const fs::path tmp = data / "conversions" / fs::u8path(".tmp-" + id);
-    fs::remove_all(tmp, ec);
+    fs::remove_all(long_path(tmp), ec);
     std::wstring err;
     if (!s.extract_all(tmp, &err)) {
-        fs::remove_all(tmp, ec);
+        fs::remove_all(long_path(tmp), ec);
         r.message = L"Couldn't install: " + err;
         return r;
     }
     const bool update = fs::exists(dst, ec);
-    fs::remove_all(dst, ec);
-    fs::rename(tmp, dst, ec);
+    fs::remove_all(long_path(dst), ec);
+    fs::rename(long_path(tmp), long_path(dst), ec);
     if (ec) {
         r.message = L"Couldn't install: " + wide(ec.message());
         return r;
@@ -384,7 +407,7 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
 bool remove_conversion(const GameEntry& g, const std::wstring& id, std::wstring* err) {
     std::error_code ec;
     if (!valid_id(u8(fs::path(id)))) { if (err) *err = L"invalid id"; return false; }
-    fs::remove_all(game_data_dir(g) / "conversions" / id, ec);
+    fs::remove_all(long_path(game_data_dir(g) / "conversions" / id), ec);
     if (ec && err) *err = wide(ec.message());
     logf(L"conversions: removed %s", id.c_str());
     return !ec;
