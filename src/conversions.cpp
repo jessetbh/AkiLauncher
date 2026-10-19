@@ -208,9 +208,15 @@ fs::path game_data_dir(const GameEntry& g) {
     return fs::path(lad) / g.exePath.stem();
 }
 
+// The manifest's game key (AkiTools/AkiMods keys); only World Tour's differs from the launcher's art key.
+std::wstring game_key(const GameEntry& g) {
+    if (g.artKey == L"worldtour") return L"wt";
+    return g.artKey;
+}
+
 std::wstring port_rom_tag(const GameEntry& g) {
     if (g.artKey == L"nomercy") return L"nomercy-rev1";
-    return g.artKey;
+    return game_key(g) + L"-rev0";
 }
 
 std::vector<ConversionInfo> list_conversions(const GameEntry& g) {
@@ -252,7 +258,7 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
     const std::string format = str(j, "format");
     const std::string gameKey = str(j, "game");
     for (size_t i = 0; i < games.size(); i++) {
-        if (games[i].artKey == wide(gameKey)) r.gameIndex = (int)i;
+        if (game_key(games[i]) == wide(gameKey)) r.gameIndex = (int)i;
     }
     if (r.gameIndex < 0) {
         r.message = L"This package is for \"" + wide(gameKey) + L"\", which AKI Launcher doesn't know.";
