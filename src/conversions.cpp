@@ -58,9 +58,23 @@ namespace {
     }
 
     // A package path that stays inside its folder (no "..", no drive or root).
+    // A relative path inside the install folder: no drive or stream colon, not absolute, and no component that is
+    // empty or only dots and spaces ("..", "...", " . ": Windows resolves or collapses those). A folder name that merely
+    // contains dots is fine (WWF inVasion's "Sorry... can't do blood").
     bool safe_rel(const std::string& p) {
-        if (p.empty() || p.find("..") != std::string::npos || p.find(':') != std::string::npos) return false;
-        return p[0] != '/' && p[0] != '\\';
+        if (p.empty() || p.find(':') != std::string::npos || p[0] == '/' || p[0] == '\\') return false;
+        size_t start = 0;
+        while (start <= p.size()) {
+            size_t end = p.find_first_of("/\\", start);
+            if (end == std::string::npos) end = p.size();
+            const std::string part = p.substr(start, end - start);
+            if (part.empty() || part.find_first_not_of(". ") == std::string::npos) {
+                // a trailing separator ("dir/") is the only empty part allowed
+                if (!(part.empty() && end == p.size() && end > 0)) return false;
+            }
+            start = end + 1;
+        }
+        return true;
     }
 
     std::string read_text(const fs::path& p) {
