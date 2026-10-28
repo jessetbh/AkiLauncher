@@ -559,10 +559,20 @@ static void close_settings(std::vector<GameEntry>& games) {
 static void draw_rom_scan(std::vector<GameEntry>& games) {
     ImGui::TextColored(palette::accent, "ROM Folder");
     ImGui::Spacing();
-    RomScanStatus st = romscan_status();
+    // Copy the results only when the scan changed (they can be thousands).
+    static RomScanStatus st;
+    static unsigned stGen = ~0u;
+    static std::string note;  // last set-up result
+    if (romscan_generation() != stGen) {
+        st = romscan_status();
+        stGen = st.generation;
+    }
     if (st.phase == RomScanPhase::Scanning) {
-        ImGui::TextColored(palette::warn, "Scanning %s  -  %zu / %zu files",
-                           narrow(st.dir.wstring()).c_str(), st.done, st.total);
+        if (st.total == 0)
+            ImGui::TextColored(palette::warn, "Listing the files in %s...", narrow(st.dir.wstring()).c_str());
+        else
+            ImGui::TextColored(palette::warn, "Scanning %s  -  %zu / %zu files",
+                               narrow(st.dir.wstring()).c_str(), st.done, st.total);
         return;
     }
     if (ImGui::Button("Scan a folder for ROMs...")) {
@@ -570,6 +580,7 @@ static void draw_rom_scan(std::vector<GameEntry>& games) {
         if (!dir.empty()) {
             settings().romScanDir = dir.wstring();
             settings_save();
+            note.clear();
             romscan_start(dir, games);
         }
     }
@@ -583,8 +594,14 @@ static void draw_rom_scan(std::vector<GameEntry>& games) {
     ImGui::PushFont(g_ui.fontSmall);
     ImGui::TextColored(palette::dim, "%zu files in %s", st.results.size(), narrow(st.dir.wstring()).c_str());
     ImGui::SameLine();
-    if (ImGui::SmallButton("Clear##romscan")) romscan_clear();
-    static std::string note;  // last set-up result
+    if (ImGui::SmallButton("Clear##romscan")) {
+        romscan_clear();
+        note.clear();
+    }
+    if (st.truncated)
+        ImGui::TextColored(palette::warn, "Stopped at %zu files: scan a smaller folder for the rest", st.results.size());
+    if (st.skippedDirs)
+        ImGui::TextColored(palette::warn, "%zu folders couldn't be read (see aki-launcher.log)", st.skippedDirs);
     for (int gi = 0; gi < (int)games.size(); ++gi) {
         GameEntry& g = games[gi];
         bool any = false;
@@ -1709,6 +1726,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     if (g_session.active()) {
         logf(L"launcher exiting with game still running; leaving it alone");
     }
+    romscan_shutdown();  // a scan thread must not outlive its globals
     // A build left behind would write into a pipe nobody reads: end it (its
     // build slot frees itself).
     if (rebuild_running()) {

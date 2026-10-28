@@ -45,21 +45,33 @@ struct RomScanEntry {
 // The games[] index whose cartridge code (id + region) matches, or -1.
 int rom_match_game(const RomHeader& h, const std::vector<GameEntry>& games);
 RomScanEntry rom_classify(const std::filesystem::path& file, const std::vector<GameEntry>& games);
-// ROM-like files (.z64, .v64, .n64, .rom, .bin) under dir, up to 3 levels deep,
-// sorted by path; at most maxFiles.
-std::vector<std::filesystem::path> rom_candidates(const std::filesystem::path& dir, size_t maxFiles = 4000);
+// ROM-like files (.z64, .v64, .n64, .rom, .bin) in dir and up to 3 folders
+// below it, sorted by path; at most maxFiles (truncated says so). A folder
+// that can't be listed is skipped and counted in skippedDirs.
+struct RomCandidates {
+    std::vector<std::filesystem::path> files;
+    bool truncated = false;
+    size_t skippedDirs = 0;
+};
+RomCandidates rom_candidates(const std::filesystem::path& dir, size_t maxFiles = 4000);
 
 // Background scan, one at a time; poll romscan_status() each frame.
 enum class RomScanPhase { Idle, Scanning, Done };
 struct RomScanStatus {
     RomScanPhase phase = RomScanPhase::Idle;
     std::filesystem::path dir;
-    size_t done = 0, total = 0;
+    size_t done = 0, total = 0;        // total stays 0 while the folders are listed
+    bool truncated = false;            // more files than the scan takes
+    size_t skippedDirs = 0;            // folders that couldn't be listed
+    unsigned generation = 0;           // changes whenever anything above does
     std::vector<RomScanEntry> results;  // complete once phase == Done
 };
 bool romscan_start(const std::filesystem::path& dir, const std::vector<GameEntry>& games);
 RomScanStatus romscan_status();
+unsigned romscan_generation();  // cheap: compare before copying romscan_status()
 void romscan_clear();
+// Stops a running scan between files and waits for it (call before exit).
+void romscan_shutdown();
 
 // Sets a game up from a scanned base dump: writes the ROM in .z64 order to the
 // game's ROM path (re-checking its SHA1 on the way). Never overwrites a ROM

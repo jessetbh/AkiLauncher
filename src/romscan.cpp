@@ -7,7 +7,9 @@
 #include <bcrypt.h>
 
 #include <algorithm>
+#include <atomic>
 #include <fstream>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -119,7 +121,8 @@ static std::wstring widen_name(const std::string& s) {
 }
 
 static std::wstring describe(const RomHeader& h) {
-    std::wstring code(h.gameCode.begin(), h.gameCode.end());
+    std::wstring code;
+    for (char c : h.gameCode) code += (wchar_t)(unsigned char)c;
     return L"\"" + widen_name(h.internalName) + L"\", " + code;
 }
 
@@ -177,24 +180,51 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
     return e;
 }
 
-std::vector<fs::path> rom_candidates(const fs::path& dir, size_t maxFiles) {
+RomCandidates rom_candidates(const fs::path& dir, size_t maxFiles) {
     static const wchar_t* exts[] = {L".z64", L".v64", L".n64", L".rom", L".bin"};
-    std::vector<fs::path> out;
-    std::error_code ec;
-    fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end;
-    for (; !ec && it != end && out.size() < maxFiles; it.increment(ec)) {
-        if (it.depth() >= 3) it.disable_recursion_pending();
-        std::error_code fec;
-        if (!it->is_regular_file(fec)) continue;
-        std::wstring ext = it->path().extension().wstring();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
-        for (const wchar_t* x : exts)
-            if (ext == x) {
-                out.push_back(it->path());
+    RomCandidates out;
+    // One folder at a time, so a folder that fails to list (a broken link, an
+    // offline share) skips only itself.
+    std::function<void(const fs::path&, int)> walk = [&](const fs::path& d, int depth) {
+        std::error_code ec;
+        fs::directory_iterator it(d, fs::directory_options::skip_permission_denied, ec), end;
+        if (ec) {
+            ++out.skippedDirs;
+            logf(L"rom scan: can't list %s (%S)", d.c_str(), ec.message().c_str());
+            return;
+        }
+        std::vector<fs::path> subdirs;
+        for (; it != end; it.increment(ec)) {
+            if (ec) {
+                ++out.skippedDirs;
+                logf(L"rom scan: listing %s stopped (%S)", d.c_str(), ec.message().c_str());
                 break;
             }
-    }
-    std::sort(out.begin(), out.end());
+            std::error_code fec;
+            if (it->is_directory(fec)) {
+                if (depth < 3) subdirs.push_back(it->path());
+                continue;
+            }
+            if (!it->is_regular_file(fec)) continue;
+            std::wstring ext = it->path().extension().wstring();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+            for (const wchar_t* x : exts)
+                if (ext == x) {
+                    if (out.files.size() >= maxFiles) {
+                        out.truncated = true;
+                        return;
+                    }
+                    out.files.push_back(it->path());
+                    break;
+                }
+        }
+        for (const auto& s : subdirs) {
+            if (out.truncated) return;
+            walk(s, depth + 1);
+        }
+    };
+    walk(dir, 0);
+    std::sort(out.files.begin(), out.files.end());
     return out;
 }
 
@@ -204,26 +234,38 @@ std::vector<fs::path> rom_candidates(const fs::path& dir, size_t maxFiles) {
 
 static std::mutex g_mu;
 static RomScanStatus g_scan;
+static std::thread g_worker;
+static std::atomic<bool> g_stop{false};
 
 bool romscan_start(const fs::path& dir, const std::vector<GameEntry>& games) {
     {
         std::lock_guard<std::mutex> lk(g_mu);
         if (g_scan.phase == RomScanPhase::Scanning) return false;
+        unsigned gen = g_scan.generation + 1;
         g_scan = RomScanStatus{};
         g_scan.phase = RomScanPhase::Scanning;
         g_scan.dir = dir;
+        g_scan.generation = gen;
     }
-    std::thread([dir, games]() {
-        std::vector<fs::path> files = rom_candidates(dir);
+    if (g_worker.joinable()) g_worker.join();  // the previous scan has finished
+    g_stop = false;
+    g_worker = std::thread([dir, games]() {
+        RomCandidates cand = rom_candidates(dir);
+        const std::vector<fs::path>& files = cand.files;
         {
             std::lock_guard<std::mutex> lk(g_mu);
             g_scan.total = files.size();
+            g_scan.truncated = cand.truncated;
+            g_scan.skippedDirs = cand.skippedDirs;
+            ++g_scan.generation;
         }
         std::vector<RomScanEntry> results;
         for (const auto& f : files) {
+            if (g_stop) break;
             results.push_back(rom_classify(f, games));
             std::lock_guard<std::mutex> lk(g_mu);
             g_scan.done = results.size();
+            ++g_scan.generation;
         }
         size_t base = 0, other = 0;
         for (auto& r : results) {
@@ -235,7 +277,8 @@ bool romscan_start(const fs::path& dir, const std::vector<GameEntry>& games) {
         std::lock_guard<std::mutex> lk(g_mu);
         g_scan.results = std::move(results);
         g_scan.phase = RomScanPhase::Done;
-    }).detach();
+        ++g_scan.generation;
+    });
     return true;
 }
 
@@ -244,9 +287,22 @@ RomScanStatus romscan_status() {
     return g_scan;
 }
 
+unsigned romscan_generation() {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return g_scan.generation;
+}
+
 void romscan_clear() {
     std::lock_guard<std::mutex> lk(g_mu);
-    if (g_scan.phase == RomScanPhase::Done) g_scan = RomScanStatus{};
+    if (g_scan.phase != RomScanPhase::Done) return;
+    unsigned gen = g_scan.generation + 1;
+    g_scan = RomScanStatus{};
+    g_scan.generation = gen;
+}
+
+void romscan_shutdown() {
+    g_stop = true;
+    if (g_worker.joinable()) g_worker.join();
 }
 
 // ---------------------------------------------------------------------------
@@ -278,9 +334,9 @@ bool rom_provision(GameEntry& g, const RomScanEntry& e, std::wstring* errorOut) 
     {
         std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
         f.write((const char*)data.data(), (std::streamsize)data.size());
-        if (!f) {
-            *errorOut = L"can't write " + tmp.wstring();
-            f.close();
+        f.close();  // the last chunk is written here: check after it
+        if (f.fail() || fs::file_size(tmp, ec) != data.size() || ec) {
+            *errorOut = L"can't write " + tmp.wstring() + L" (disk full?)";
             fs::remove(tmp, ec);
             return false;
         }

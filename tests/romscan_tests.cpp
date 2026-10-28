@@ -122,7 +122,15 @@ void run_romscan_tests(const fs::path& dir) {
     CHECK(r1.verdict == RomVerdict::OtherBuild && has(r1.note, L"another revision") && has(r1.note, L"(v0)"));
     CHECK(!has(r1.note, L"make_patch_mod.py"));
 
-    auto files = rom_candidates(roms);
+    write_bytes(roms / L"a" / L"b" / L"c" / L"three-deep.z64", other);          // depth 3: found
+    auto cand = rom_candidates(roms);
+    auto& files = cand.files;
+    CHECK(files.size() == 6 && !cand.truncated && cand.skippedDirs == 0);
+    auto capped = rom_candidates(roms, 2);
+    CHECK(capped.files.size() == 2 && capped.truncated);
+    CHECK(rom_candidates(roms / L"missing").skippedDirs == 1);
+    fs::remove(roms / L"a" / L"b" / L"c" / L"three-deep.z64");
+    files = rom_candidates(roms).files;
     CHECK(files.size() == 5);
 
     std::vector<RomScanEntry> res;
@@ -150,8 +158,14 @@ void run_romscan_tests(const fs::path& dir) {
     for (int i = 0; i < 500 && romscan_status().phase == RomScanPhase::Scanning; ++i) Sleep(10);
     RomScanStatus st = romscan_status();
     CHECK(st.phase == RomScanPhase::Done && st.results.size() == 5 && st.done == 5 && st.total == 5);
+    unsigned gen = romscan_generation();
     romscan_clear();
-    CHECK(romscan_status().phase == RomScanPhase::Idle);
+    CHECK(romscan_status().phase == RomScanPhase::Idle && romscan_generation() != gen);
+    // Shutdown mid-scan stops between files and returns.
+    CHECK(romscan_start(roms, games));
+    romscan_shutdown();
+    CHECK(romscan_status().phase == RomScanPhase::Done && romscan_status().results.size() <= 5);
+    romscan_clear();
 
     // Provisioning writes .z64 order, never over an existing ROM, only base dumps.
     GameEntry g = games[0];
@@ -160,6 +174,12 @@ void run_romscan_tests(const fs::path& dir) {
     CHECK(!rom_provision(g, *hk, &err) && !err.empty());
     CHECK(v && rom_provision(g, *v, &err));
     CHECK(read_bytes(g.romPath) == base0);
+    // A little-endian (.n64) dump too.
+    write_bytes(roms / L"le" / L"Test Game.n64", swapped(base0, RomByteOrder::N64));
+    RomScanEntry le = rom_classify(roms / L"le" / L"Test Game.n64", games);
+    GameEntry g2 = games[0];
+    g2.romPath = dir / L"game2" / L"test.z64";
+    CHECK(le.verdict == RomVerdict::BaseDump && rom_provision(g2, le, &err) && read_bytes(g2.romPath) == base0);
     CHECK(!fs::exists(dir / L"game" / L"test.z64.new"));
     err.clear();
     CHECK(b && !rom_provision(g, *b, &err) && has(err, L"already has a ROM"));
