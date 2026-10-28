@@ -18,6 +18,9 @@ struct GameEntry {
     std::wstring romSha1;     // expected ROM SHA1, uppercase hex ("" = accept any)
     std::wstring romNote;     // human description of the exact dump required
                               // (region/revision), shown in the ROM-select UI
+    std::wstring romCode;     // cartridge code in the ROM header (0x3B, e.g. "NW4E"):
+                              // the ROM folder scan finds the game's dumps and hacks by it
+    int romVersion = -1;      // the accepted dump's header version byte (0x3F; -1 = unknown)
 
     // resolved by build_game_list
     std::filesystem::path repoPath;

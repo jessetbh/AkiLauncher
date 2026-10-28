@@ -1,0 +1,67 @@
+#pragma once
+#include <filesystem>
+#include <string>
+#include <vector>
+
+struct GameEntry;
+
+// ROM folder scan (aki-roadmap#26, phase 1): identify every N64 ROM in a
+// folder against the launcher's games, so the player can point it at their
+// ROM collection instead of picking each dump by hand.
+//   - the accepted dump of a game (by SHA1, also when byte-swapped) -> it can
+//     set that game up;
+//   - another build of a supported game (same cartridge code, other SHA1: a
+//     ROM hack, translation or revision) -> named, with how to play it (a
+//     patch mod: tools/romhack/make_patch_mod.py in the game's repo);
+//   - anything else -> "not a supported ROM".
+// Only files whose header matches one of the games are hashed, so a big
+// collection scans quickly.
+
+enum class RomByteOrder { Z64, V64, N64, NotARom };  // big-endian, byte-swapped, little-endian
+
+struct RomHeader {
+    RomByteOrder order = RomByteOrder::NotARom;
+    std::string internalName;  // 0x20, 20 bytes, trailing spaces trimmed (Shift-JIS left as is)
+    std::string gameCode;      // 0x3B, 4 chars: media, 2-char id, region (e.g. "NW4E")
+    int version = 0;           // 0x3F
+};
+
+// Header of a ROM image's first 64 bytes, in whatever byte order the file is.
+RomHeader rom_parse_header(const unsigned char* first64, size_t len);
+// Rewrites a byte-swapped or little-endian image to big-endian (.z64) order in place.
+void rom_to_z64(std::vector<unsigned char>& data, RomByteOrder from);
+
+enum class RomVerdict { BaseDump, OtherBuild, NotSupported, Unreadable };
+
+struct RomScanEntry {
+    std::filesystem::path file;
+    RomVerdict verdict = RomVerdict::NotSupported;
+    int gameIndex = -1;        // games[] index for BaseDump / OtherBuild
+    RomHeader header;
+    std::wstring sha1;         // of the .z64-order bytes; only for files that matched a game
+    std::wstring note;         // one line for the UI
+};
+
+// The games[] index whose cartridge code (id + region) matches, or -1.
+int rom_match_game(const RomHeader& h, const std::vector<GameEntry>& games);
+RomScanEntry rom_classify(const std::filesystem::path& file, const std::vector<GameEntry>& games);
+// ROM-like files (.z64, .v64, .n64, .rom, .bin) under dir, up to 3 levels deep,
+// sorted by path; at most maxFiles.
+std::vector<std::filesystem::path> rom_candidates(const std::filesystem::path& dir, size_t maxFiles = 4000);
+
+// Background scan, one at a time; poll romscan_status() each frame.
+enum class RomScanPhase { Idle, Scanning, Done };
+struct RomScanStatus {
+    RomScanPhase phase = RomScanPhase::Idle;
+    std::filesystem::path dir;
+    size_t done = 0, total = 0;
+    std::vector<RomScanEntry> results;  // complete once phase == Done
+};
+bool romscan_start(const std::filesystem::path& dir, const std::vector<GameEntry>& games);
+RomScanStatus romscan_status();
+void romscan_clear();
+
+// Sets a game up from a scanned base dump: writes the ROM in .z64 order to the
+// game's ROM path (re-checking its SHA1 on the way). Never overwrites a ROM
+// the game already has.
+bool rom_provision(GameEntry& g, const RomScanEntry& e, std::wstring* errorOut);
