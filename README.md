@@ -91,6 +91,25 @@ cmake --build build-msvc
 Dependencies (Dear ImGui, miniz) are fetched automatically by CMake.
 `tools\package.ps1` reproduces the release zip.
 
+### Dev mode
+
+For developers working in the depot (the folder with the game checkouts and
+`AkiTools`); players never see it. Turn it on with `--dev`, `AKI_DEV=1`, or
+`dev_mode=1` in `settings.ini`. Then the selected game shows a line:
+`R` / `LB` rebuilds its depot checkout. The launcher runs
+`AkiTools\aki-build.ps1 -Worktree <checkout> -Target <exe> -Owner Launcher`.
+That build waits for the shared build slot like any agent's build and shows
+its output and Ninja progress in a panel. `Backspace` / `B` cancels it (the
+whole process tree), or dismisses the result. A finished build re-scans the
+games, so a first build becomes playable. Closing the launcher cancels a
+running build.
+
+`cmake -B build-msvc -DAKI_LAUNCHER_TESTS=ON` also builds
+`AkiLauncherTests.exe`, console checks for the rebuild action (output
+parsing, exit codes, cancel) against a fake `aki-build.ps1`. Its exit code is
+the number of failures. `--test-rebuild <game index>` rebuilds one game
+through the UI loop and exits with 0 (built) or 4.
+
 ## Libraries used
 
 - [Dear ImGui](https://github.com/ocornut/imgui) (MIT) — UI
