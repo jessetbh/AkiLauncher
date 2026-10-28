@@ -1,27 +1,16 @@
 // Checks for the dev-mode Rebuild game action (src/rebuild.cpp): the output
 // parser, and the real process path (pipe, job, exit code, cancel) against a
-// fake depot whose AkiTools\aki-build.ps1 is a short script. No window, no
-// compiler, no game: build with -DAKI_LAUNCHER_TESTS=ON, run
-// build-msvc\AkiLauncherTests.exe (exit code = number of failures).
+// fake depot whose AkiTools\aki-build.ps1 is a short script (tests_main.cpp).
 #include "../src/games.h"
 #include "../src/rebuild.h"
+#include "check.h"
 
 #include <windows.h>
 
-#include <cstdio>
 #include <fstream>
 #include <string>
 
 namespace fs = std::filesystem;
-
-static int g_failed = 0;
-#define CHECK(cond)                                                       \
-    do {                                                                  \
-        if (!(cond)) {                                                    \
-            ++g_failed;                                                   \
-            printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond);        \
-        }                                                                 \
-    } while (0)
 
 static void write_file(const fs::path& p, const std::string& text) {
     fs::create_directories(p.parent_path());
@@ -150,15 +139,8 @@ static void test_process(const fs::path& depot) {
     SetEnvironmentVariableW(L"FAKE_SLEEP", nullptr);
 }
 
-int main() {
-    wchar_t tmpBuf[MAX_PATH]{};
-    GetTempPathW(MAX_PATH, tmpBuf);
-    fs::path depot = fs::path(tmpBuf) / (L"akilauncher-rebuild-" + std::to_wstring(GetCurrentProcessId()));
+void run_rebuild_tests(const fs::path& depot) {
     fs::create_directories(depot);
     test_parser();
     test_process(depot);
-    std::error_code ec;
-    fs::remove_all(depot, ec);
-    printf("%s (%d failed)\n", g_failed ? "FAILED" : "OK", g_failed);
-    return g_failed;
 }

@@ -72,6 +72,19 @@ launcher hash-checks your pick against the known-good dump for each game and
 keeps a copy with the installed port. Nothing is downloaded from anywhere
 except the ports' own GitHub releases, which contain no game data.
 
+**I have a folder full of ROMs. Can it find them?** Yes: Settings → ROM
+Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
+`.rom`/`.bin`, three folders deep) and sorts them under their games:
+- the accepted dump of an installed game gets a *Use this ROM* button (a
+  byte-swapped dump is saved as `.z64`);
+- another build of a supported game (a hack, translation or other revision)
+  is named as such, with how it plays: as a patch mod made with
+  `tools\romhack\make_patch_mod.py` from the game's repository;
+- everything else is listed as not supported.
+
+Only files whose header names one of the games are read in full and
+hashed. The ROMs stay where they are; nothing is uploaded.
+
 **Can I change the box art?** Yes — swap the images in `assets\boxart\`
 (see the README there for file naming).
 
