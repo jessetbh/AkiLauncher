@@ -32,6 +32,7 @@ struct Settings {
     UINT hotkeyVk = VK_F12;
     bool windowed = false;                       // launcher in a normal window (F11)
     int winX = 0, winY = 0, winW = 0, winH = 0;  // last windowed placement (0x0 = unset)
+    bool devMode = false;  // dev_mode=1: developer actions (Rebuild game); not in the settings UI
     std::map<std::wstring, GameOverride> overrides;
     std::map<std::wstring, GameStats> stats;
 };

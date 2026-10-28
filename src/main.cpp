@@ -17,6 +17,7 @@
 #include "audio.h"
 #include "games.h"
 #include "installer.h"
+#include "rebuild.h"
 #include "launch.h"
 #include "settings.h"
 
@@ -750,13 +751,19 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             ImGui::End();
             return -1;
         }
-        // dismiss the crash panel
-        if (!g_session.logTail.empty() &&
-            (ImGui::IsKeyPressed(ImGuiKey_Backspace) || (pad & XINPUT_GAMEPAD_B))) {
+        // dismiss the crash panel; else cancel or dismiss the rebuild panel
+        // No key repeat: a held Backspace must not cancel and then dismiss.
+        bool back = ImGui::IsKeyPressed(ImGuiKey_Backspace, false) || (pad & XINPUT_GAMEPAD_B);
+        if (back && !g_session.logTail.empty()) {
             g_session.logTail.clear();
             g_session.statusNote.clear();
+        } else if (back && rebuild_running()) {
+            rebuild_cancel();
+        } else if (back && rebuild_status().phase != RebuildPhase::Idle) {
+            rebuild_ack();
         }
     }
+    const bool rebuildPanel = g_session.logTail.empty() && rebuild_status().phase != RebuildPhase::Idle;
 
     // ------------------------------------------------------------------ header
     ImGui::PushFont(g_ui.fontHeader);
@@ -876,7 +883,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         DWORD idle = GetLastInputInfo(&lii) ? nowTick - lii.dwTime : 0;
         if (nowTick - lastPadTick < idle) idle = nowTick - lastPadTick;
         ULONGLONG now64 = GetTickCount64();
-        if (idle > g_attractMs && g_session.logTail.empty()) {
+        if (idle > g_attractMs && g_session.logTail.empty() && !rebuildPanel) {
             if (now64 - g_ui.attractTick > 5000) {
                 g_ui.attractTick = now64;
                 g_ui.selected = (g_ui.selected + 1) % n;
@@ -894,8 +901,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     bool soon = s.comingSoon && !s.launchable() && !release_for(s.artKey, &selRelProbe);
     float infoY = vh * 0.60f;
 
-    // The crash panel replaces this whole zone until dismissed.
-    if (g_session.logTail.empty()) {
+    // The crash panel, or the dev-mode rebuild panel, replaces this whole zone
+    // until dismissed.
+    if (g_session.logTail.empty() && !rebuildPanel) {
     ImGui::PushFont(g_ui.fontTitle);
     ImGui::SetCursorPosY(infoY);
     text_centered(narrow(s.title));
@@ -993,6 +1001,33 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
     }
 
+    // Dev mode (aki-roadmap#25): rebuild the selected game's depot checkout
+    // through AkiTools' aki-build.ps1. Players never see this line.
+    if (dev_mode() && !installingSel) {
+        std::wstring why = rebuild_unavailable_reason(s, depotRoot);
+        ImGui::PushFont(g_ui.fontSmall);
+        if (why.empty()) {
+            text_centered_colored(palette::faint, "Dev:  R / LB Rebuilds " + narrow(s.repoDir) +
+                                                      " (AkiTools aki-build)");
+            if (!inserting &&
+                (ImGui::IsKeyPressed(ImGuiKey_R, false) || (pad & XINPUT_GAMEPAD_LEFT_SHOULDER))) {
+                std::wstring err;
+                if (rebuild_start(g_ui.selected, s, depotRoot, &err)) {
+                    play_flip();
+                    g_session.statusNote.clear();
+                    // Not this frame's Play too: the exe is about to be relinked.
+                    actLaunch = false;
+                    action = CardAction::None;
+                } else {
+                    g_session.statusNote = err;
+                }
+            }
+        } else {
+            text_centered_colored(palette::faint, "Dev:  Rebuild unavailable - " + narrow(why));
+        }
+        ImGui::PopFont();
+    }
+
     // Action button (mouse users; keyboard/pad use Enter/A)
     if (action != CardAction::None) {
         const char* label = action == CardAction::Play       ? "PLAY"
@@ -1066,6 +1101,59 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
         ImGui::SetCursorPos(ImVec2(px0 + 24, py1 - ImGui::GetFontSize() * 1.9f));
         ImGui::TextColored(palette::faint, "Backspace / B to dismiss");
+        ImGui::PopFont();
+    } else if (rebuildPanel) {
+        // Rebuild panel: progress line + the tail of aki-build's output.
+        const RebuildStatus& rb = rebuild_status();
+        float px0 = vw * 0.16f, px1 = vw * 0.84f;
+        float py0 = vh * 0.615f, py1 = vh * 0.935f;
+        ImVec2 p0(vp->WorkPos.x + px0, vp->WorkPos.y + py0);
+        ImVec2 p1(vp->WorkPos.x + px1, vp->WorkPos.y + py1);
+        bool running = rb.phase == RebuildPhase::Running;
+        bool good = rb.phase == RebuildPhase::Done;
+        dl->AddRectFilled(p0, p1, IM_COL32(12, 14, 18, 246), 10.0f);
+        dl->AddRect(p0, p1, running ? IM_COL32(250, 199, 72, 160)
+                            : good  ? IM_COL32(110, 200, 120, 200)
+                                    : IM_COL32(180, 80, 70, 200),
+                    10.0f, 0, 2.0f);
+        ULONGLONG ms = (running ? GetTickCount64() : rb.endTick) - rb.startTick;
+        char head[256];
+        if (running && rb.stepTotal > 0)
+            snprintf(head, sizeof(head), "Rebuilding %s  -  %d / %d  (%d%%)  -  %llum %02llus",
+                     narrow(rb.title).c_str(), rb.stepDone, rb.stepTotal,
+                     rb.stepDone * 100 / rb.stepTotal, ms / 60000, ms / 1000 % 60);
+        else if (running)
+            snprintf(head, sizeof(head), "Rebuilding %s  -  %llum %02llus", narrow(rb.title).c_str(),
+                     ms / 60000, ms / 1000 % 60);
+        else if (good)
+            snprintf(head, sizeof(head), "Rebuilt %s in %llum %02llus", narrow(rb.title).c_str(),
+                     ms / 60000, ms / 1000 % 60);
+        else if (rb.cancelled)
+            snprintf(head, sizeof(head), "Rebuild of %s cancelled", narrow(rb.title).c_str());
+        else
+            snprintf(head, sizeof(head), "Rebuild of %s failed (exit %lu)", narrow(rb.title).c_str(),
+                     rb.exitCode);
+        ImGui::SetCursorPos(ImVec2(px0 + 24, py0 + 16));
+        ImGui::PushFont(g_ui.fontBase);
+        ImGui::TextColored(running ? palette::accent : good ? palette::ready : palette::error, "%s", head);
+        ImGui::PopFont();
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::Dummy(ImVec2(0, 6));
+        // As many of the last lines as fit above the hint line.
+        float lineH = ImGui::GetTextLineHeightWithSpacing();
+        float room = (py1 - ImGui::GetFontSize() * 2.4f) - ImGui::GetCursorPosY();
+        size_t fit = room > 0 ? (size_t)(room / lineH) : 0;
+        size_t first = rb.tail.size() > fit ? rb.tail.size() - fit : 0;
+        float textW = px1 - px0 - 48;
+        for (size_t i = first; i < rb.tail.size(); ++i) {
+            ImGui::SetCursorPosX(px0 + 24);
+            ImGui::PushClipRect(ImVec2(p0.x + 24, p0.y), ImVec2(p0.x + 24 + textW, p1.y), true);
+            ImGui::TextColored(palette::dim, "%s", rb.tail[i].c_str());
+            ImGui::PopClipRect();
+        }
+        ImGui::SetCursorPos(ImVec2(px0 + 24, py1 - ImGui::GetFontSize() * 1.9f));
+        ImGui::TextColored(palette::faint, running ? "Backspace / B cancels the build"
+                                                   : "Backspace / B to dismiss");
         ImGui::PopFont();
     } else if (!g_session.statusNote.empty()) {
         ImGui::PushFont(g_ui.fontSmall);
@@ -1158,6 +1246,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     int playNow = -1;      // debug: launch game N at startup, keep normal UI
     int testInstall = -1;  // debug: download+install game N, exit 0/4
     int testRomIdx = -1;   // debug: validate+copy a ROM for game N, exit 0/4
+    int testRebuild = -1;  // debug: dev-mode rebuild of game N through aki-build, exit 0/4
     std::wstring testRomPath;
     for (int i = 1; i < __argc; ++i) {
         std::wstring a = __wargv[i];
@@ -1174,6 +1263,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         }
         else if (a == L"--settings") wantSettings = true;
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
+        else if (a == L"--dev") set_dev_mode_from_args(true);
+        else if (a == L"--test-rebuild" && i + 1 < __argc) testRebuild = _wtoi(__wargv[++i]);
     }
 
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -1327,6 +1418,24 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             }
         }
 
+        // --- dev-mode rebuild (poll the pipe; the panel stays until dismissed) ---
+        {
+            static RebuildPhase lastPhase = RebuildPhase::Idle;
+            rebuild_tick();
+            RebuildPhase ph = rebuild_status().phase;
+            if (lastPhase == RebuildPhase::Running && ph != RebuildPhase::Running) {
+                if (testRebuild >= 0) {
+                    exitCodeOut = ph == RebuildPhase::Done ? 0 : 4;
+                    break;
+                }
+                // A first build makes the exe appear: re-scan like after an install.
+                games = build_game_list(depotRoot);
+                apply_overrides(games);
+                if (ph == RebuildPhase::Done) play_flip();
+            }
+            lastPhase = ph;
+        }
+
         // --- automated test drivers ---
         frame++;
         if (smoke && frame > 60) break;
@@ -1349,6 +1458,15 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             }
             if (!started && frame > 1800) {  // ~30s without release info
                 logf(L"test-install: release check never produced a result");
+                exitCodeOut = 4;
+                break;
+            }
+        }
+        if (testRebuild >= 0 && frame == 5) {
+            std::wstring err;
+            if (testRebuild >= (int)games.size() ||
+                !rebuild_start(testRebuild, games[testRebuild], depotRoot, &err)) {
+                logf(L"test-rebuild: FAILED to start (%s)", err.c_str());
                 exitCodeOut = 4;
                 break;
             }
@@ -1470,6 +1588,12 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     if (g_session.active()) {
         logf(L"launcher exiting with game still running; leaving it alone");
+    }
+    // A build left behind would write into a pipe nobody reads: end it (its
+    // build slot frees itself).
+    if (rebuild_running()) {
+        logf(L"launcher exiting during a rebuild; cancelling it");
+        rebuild_cancel();
     }
 
     if (!smoke && settings().windowed) {
