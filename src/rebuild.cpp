@@ -119,8 +119,9 @@ static void push_lines(std::vector<std::string>& lines) {
 static void close_handles() {
     if (g_pipe) CloseHandle(g_pipe);
     if (g_process) CloseHandle(g_process);
-    // No KILL_ON_JOB_CLOSE: a finished build may leave the sccache server
-    // running, which the next build reuses. Cancel terminates the job instead.
+    // KILL_ON_JOB_CLOSE: this also ends the sccache server aki-build started
+    // (outside its own build job), which costs nothing: aki-build restarts it
+    // before every build, and the cache itself is on disk.
     if (g_job) CloseHandle(g_job);
     g_pipe = g_process = g_job = nullptr;
 }
@@ -164,11 +165,21 @@ bool rebuild_start(int gameIndex, const GameEntry& g, const fs::path& depotRoot,
         logf(L"rebuild: CreateProcess failed (%lu): %s", e, cmd.c_str());
         return false;
     }
-    // The job holds aki-build and everything it starts, so Cancel ends them all.
+    // The job holds aki-build and everything it starts, so Cancel ends them
+    // all; kill-on-close, so a launcher that crashes mid-build doesn't leave a
+    // headless build holding the build slot.
     g_job = CreateJobObjectW(nullptr, nullptr);
-    if (g_job && !AssignProcessToJobObject(g_job, pi.hProcess)) {
-        CloseHandle(g_job);
-        g_job = nullptr;
+    if (g_job) {
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION li{};
+        li.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        SetInformationJobObject(g_job, JobObjectExtendedLimitInformation, &li, sizeof(li));
+        if (!AssignProcessToJobObject(g_job, pi.hProcess)) {
+            logf(L"rebuild: no job for the build (error %lu): Cancel ends powershell only", GetLastError());
+            CloseHandle(g_job);
+            g_job = nullptr;
+        }
+    } else {
+        logf(L"rebuild: CreateJobObject failed (%lu): Cancel ends powershell only", GetLastError());
     }
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);

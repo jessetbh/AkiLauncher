@@ -752,7 +752,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             return -1;
         }
         // dismiss the crash panel; else cancel or dismiss the rebuild panel
-        bool back = ImGui::IsKeyPressed(ImGuiKey_Backspace) || (pad & XINPUT_GAMEPAD_B);
+        // No key repeat: a held Backspace must not cancel and then dismiss.
+        bool back = ImGui::IsKeyPressed(ImGuiKey_Backspace, false) || (pad & XINPUT_GAMEPAD_B);
         if (back && !g_session.logTail.empty()) {
             g_session.logTail.clear();
             g_session.statusNote.clear();
@@ -1009,10 +1010,17 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             text_centered_colored(palette::faint, "Dev:  R / LB Rebuilds " + narrow(s.repoDir) +
                                                       " (AkiTools aki-build)");
             if (!inserting &&
-                (ImGui::IsKeyPressed(ImGuiKey_R) || (pad & XINPUT_GAMEPAD_LEFT_SHOULDER))) {
+                (ImGui::IsKeyPressed(ImGuiKey_R, false) || (pad & XINPUT_GAMEPAD_LEFT_SHOULDER))) {
                 std::wstring err;
-                if (rebuild_start(g_ui.selected, s, depotRoot, &err)) play_flip();
-                else g_session.statusNote = err;
+                if (rebuild_start(g_ui.selected, s, depotRoot, &err)) {
+                    play_flip();
+                    g_session.statusNote.clear();
+                    // Not this frame's Play too: the exe is about to be relinked.
+                    actLaunch = false;
+                    action = CardAction::None;
+                } else {
+                    g_session.statusNote = err;
+                }
             }
         } else {
             text_centered_colored(palette::faint, "Dev:  Rebuild unavailable - " + narrow(why));
