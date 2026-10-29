@@ -71,7 +71,8 @@ ModManifest parse_mod_manifest(const std::string& raw) {
     m.version = j.wstr("version");
     m.name = j.wstr("display_name");
     m.gameId = j.wstr("game_id");
-    m.description = j.wstr("short_description", j.wstr("description"));
+    m.description = j.wstr("short_description");
+    if (m.description.empty()) m.description = j.wstr("description");
     if (const JsonValue* a = j.get("authors"); a && a->is(JsonValue::Type::Array))
         for (const auto& v : a->items)
             if (v.is(JsonValue::Type::String)) m.authors.push_back(json_utf8_to_wide(v.s));

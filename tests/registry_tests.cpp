@@ -50,6 +50,9 @@ static void test_json() {
     CHECK(!json_parse(std::string(100, '[') + std::string(100, ']'), &v));  // nesting cap
     CHECK(json_parse(std::string(60, '[') + std::string(60, ']'), &v));
     CHECK(json_parse("{\"n\": 1.5}", &v) && v.integer("n", -1) == -1 && v.wstr("n", L"d") == L"d");
+    for (const char* bad : {"-inf", "nan", "0x10", "01", "1.", ".5", "1e", "-"}) CHECK(!json_parse(bad, &v));
+    CHECK(json_parse("{\"big\": 1e10, \"neg\": -0.0}", &v) && v.integer("big", -1) == -1 && v.integer("neg", 5) == 0);
+    CHECK(json_parse("[\"\\ud800\\u0041\"]", &v) && v.items[0].s == "\xEF\xBF\xBD" "A");  // unpaired: kept apart
 }
 
 void run_registry_tests(const fs::path& dir) {
@@ -94,11 +97,14 @@ void run_registry_tests(const fs::path& dir) {
     put(installs / L"ecwmod" / L"aki-game.json",
         R"({"id":"ecwmod","title":"ECW Mod","exe":"build-msvc\\Wm2kRecompiled.exe","base":"wm2k"})");
     put(installs / L"misnamed" / L"aki-game.json", R"({"id":"other","title":"Other","exe":"o.exe"})");
+    put(depot / L"Dots" / L"aki-game.json", R"({"id":"..","title":"Dots","exe":"x.exe"})");  // refused
+    put(depot / L"Vpw2Recomp-freem2" / L"aki-game.json",
+        R"({"id":"vpw2freem2","title":"Freem 2","exe":"build-msvc\\Vpw2Recompiled.exe","base":"vpw2freem"})");
 
     std::vector<GameEntry> all = registry_from_json(embedded_games_json(), &err);
     discover_games(all, depot, installs);
     std::vector<std::wstring> want = {L"worldtour", L"vpw64", L"revenge", L"wm2k", L"ecwmod", L"vpw2", L"vpw2freem",
-                                      L"nomercy", L"bmhero"};
+                                      L"vpw2freem2", L"nomercy", L"bmhero"};
     CHECK(ids(all) == want);
     for (const auto& g : all) {
         if (g.artKey == L"nomercy") CHECK(g.title == L"WWF No Mercy" && g.manifestPath.empty());  // not replaced

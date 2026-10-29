@@ -117,10 +117,10 @@ int make_game_portable(const GameEntry& g, const fs::path& appDataDir) {
     return marker ? copied : -1;
 }
 
-// assets/games.json, built in (CMake writes games_json.inc from it).
-static const char kEmbeddedGamesJson[] =
+// assets/games.json, built in: CMake writes its bytes (and a closing 0) to games_json.inc.
+static const char kEmbeddedGamesJson[] = {
 #include "games_json.inc"
-    ;
+};
 
 const char* embedded_games_json() { return kEmbeddedGamesJson; }
 
@@ -135,6 +135,12 @@ bool game_from_json(const JsonValue& v, GameEntry* g, std::wstring* err) {
     e.exeRel = v.wstr("exe");
     if (e.artKey.empty() || e.title.empty() || e.exeRel.empty()) {
         *err = L"a game needs \"id\", \"title\" and \"exe\" (" + (e.artKey.empty() ? e.title : e.artKey) + L")";
+        return false;
+    }
+    // The id names folders (games\<id>) and art files: it must start with a letter or digit ("." / ".." would
+    // point an install at the launcher's own folder).
+    if (!iswalnum(e.artKey[0])) {
+        *err = L"game id \"" + e.artKey + L"\" must start with a letter or digit";
         return false;
     }
     for (wchar_t c : e.artKey)
@@ -204,22 +210,23 @@ std::vector<GameEntry> load_registry(const fs::path& file) {
     return games;
 }
 
-// Puts each variant right after its base game (and that base's earlier variants).
+// Puts each variant right after its base game (and that base's earlier
+// variants); a variant of a variant follows that one.
+static void place_with_variants(const std::vector<GameEntry>& games, size_t i, std::vector<bool>& placed,
+                                std::vector<GameEntry>& out) {
+    out.push_back(games[i]);
+    placed[i] = true;
+    for (size_t k = 0; k < games.size(); ++k)
+        if (!placed[k] && games[k].baseId == games[i].artKey) place_with_variants(games, k, placed, out);
+}
+
 static void order_variants(std::vector<GameEntry>& games) {
     std::vector<GameEntry> out;
     std::vector<bool> placed(games.size(), false);
-    for (size_t i = 0; i < games.size(); ++i) {
-        if (placed[i] || !games[i].baseId.empty()) continue;
-        out.push_back(games[i]);
-        placed[i] = true;
-        for (size_t k = 0; k < games.size(); ++k)
-            if (!placed[k] && games[k].baseId == games[i].artKey) {
-                out.push_back(games[k]);
-                placed[k] = true;
-            }
-    }
-    for (size_t i = 0; i < games.size(); ++i)  // a variant whose base isn't listed
-        if (!placed[i]) out.push_back(games[i]);
+    for (size_t i = 0; i < games.size(); ++i)
+        if (!placed[i] && games[i].baseId.empty()) place_with_variants(games, i, placed, out);
+    for (size_t i = 0; i < games.size(); ++i)  // variants whose base isn't listed (or a cycle)
+        if (!placed[i]) place_with_variants(games, i, placed, out);
     games.swap(out);
 }
 

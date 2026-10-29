@@ -32,7 +32,8 @@ bool JsonValue::boolean(const char* key, bool def) const {
 
 int JsonValue::integer(const char* key, int def) const {
     const JsonValue* v = get(key);
-    return v && v->type == Type::Number && std::floor(v->n) == v->n ? (int)v->n : def;
+    if (!v || v->type != Type::Number || std::floor(v->n) != v->n) return def;
+    return v->n >= -2147483648.0 && v->n <= 2147483647.0 ? (int)v->n : def;
 }
 
 namespace {
@@ -100,11 +101,14 @@ struct Parser {
                     unsigned cp;
                     if (!hex4(&cp)) return false;
                     if (cp >= 0xD800 && cp < 0xDC00 && i + 1 < s.size() && s[i] == '\\' && s[i + 1] == 'u') {
+                        size_t back = i;
                         i += 2;
                         unsigned lo;
                         if (!hex4(&lo)) return false;
                         if (lo >= 0xDC00 && lo < 0xE000) cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                        else i = back;  // not a pair: that escape is read on its own next
                     }
+                    if (cp >= 0xD800 && cp < 0xE000) cp = 0xFFFD;  // a lone surrogate
                     put_utf8(*o, cp);
                     break;
                 }
@@ -154,13 +158,28 @@ struct Parser {
         if (lit("false")) { v->type = JsonValue::Type::Bool; v->b = false; return true; }
         if (lit("null")) { v->type = JsonValue::Type::Null; return true; }
         if (c == '-' || (c >= '0' && c <= '9')) {
-            const char* start = s.c_str() + i;
-            char* end = nullptr;
-            double d = strtod(start, &end);
-            if (end == start) return fail("bad number");
-            i += end - start;
+            // The JSON grammar first (strtod would also take inf, nan and hex).
+            size_t j = i;
+            auto digits = [&]() {
+                size_t k = j;
+                while (j < s.size() && s[j] >= '0' && s[j] <= '9') ++j;
+                return j > k;
+            };
+            if (s[j] == '-') ++j;
+            if (j < s.size() && s[j] == '0') ++j;
+            else if (!digits()) return fail("bad number");
+            if (j < s.size() && s[j] == '.') {
+                ++j;
+                if (!digits()) return fail("bad number");
+            }
+            if (j < s.size() && (s[j] == 'e' || s[j] == 'E')) {
+                ++j;
+                if (j < s.size() && (s[j] == '+' || s[j] == '-')) ++j;
+                if (!digits()) return fail("bad number");
+            }
             v->type = JsonValue::Type::Number;
-            v->n = d;
+            v->n = strtod(s.substr(i, j - i).c_str(), nullptr);
+            i = j;
             return true;
         }
         return fail("unexpected character");

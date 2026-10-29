@@ -38,9 +38,13 @@ target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_D
 target_compile_definitions(imgui_lib PUBLIC UNICODE _UNICODE NOMINMAX)
 
 # assets/games.json (the game registry, aki-roadmap#24) is built in as the
-# fallback: a raw string literal in games_json.inc. Edits re-run the configure.
-file(READ ${CMAKE_SOURCE_DIR}/assets/games.json AKI_GAMES_JSON)
-file(WRITE ${CMAKE_BINARY_DIR}/generated/games_json.inc "R\"AKIJSON(${AKI_GAMES_JSON})AKIJSON\"\n")
+# fallback: its bytes as a char array in games_json.inc (no string-literal size
+# limit, no source-charset question). Edits re-run the configure; the .inc is
+# rewritten only when it changes.
+file(READ ${CMAKE_SOURCE_DIR}/assets/games.json AKI_GAMES_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," AKI_GAMES_BYTES "${AKI_GAMES_HEX}")
+string(REGEX REPLACE "((0x..,){32})" "\\1\n" AKI_GAMES_BYTES "${AKI_GAMES_BYTES}")
+file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/generated/games_json.inc CONTENT "${AKI_GAMES_BYTES}0x00\n" @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/assets/games.json)
 
 add_executable(AkiLauncher WIN32
