@@ -448,6 +448,58 @@ static void test_review_fixes(const fs::path& tmp) {
     CHECK(!fs::exists(data3));
 }
 
+
+// Soldier Ant's three rules for conversions with a patch (154-contract.md).
+static void test_patch_rules(const fs::path& tmp) {
+    fs::path data = tmp / L"data-rules";
+    pkg::InstallTarget t = target(data);
+    pkg::InstallOptions o;
+    o.today = "20261029";
+    std::string hackNrm = zip_bytes({{"mod.json", R"({"id":"nm_hack","version":"1.0.0","game_id":"wwfnomercy","display_name":"Hack"})"},
+                                     {"patch.bps", "BPS1...."}});
+    // 2. Moved, not copied: the hack in mods\ (Move to Conversions) and another .nrm there with its mod id both leave
+    //    mods\; other mods stay. 1. The generated aki.json names the patch's mod id.
+    put(data / L"mods" / L"nm_hack.nrm", hackNrm);
+    put(data / L"mods" / L"Hack (old copy).nrm", hackNrm);
+    put(data / L"mods" / L"other.nrm", zip_bytes({{"mod.json", mod_json("other")}, {"mod_binary.bin", "b"}}));
+    pkg::PackageInstall r = pkg::install_patch_mod(data / L"mods" / L"nm_hack.nrm", t, o);
+    CHECK(r.ok());
+    CHECK(!fs::exists(data / L"mods" / L"nm_hack.nrm") && !fs::exists(data / L"mods" / L"Hack (old copy).nrm"));
+    CHECK(fs::exists(data / L"mods" / L"other.nrm") && get(data / L"conversions" / L"nm_hack" / L"patch.nrm") == hackNrm);
+    JsonValue conv;
+    CHECK(json_parse(get(data / L"conversions" / L"nm_hack" / L"aki.json"), &conv));
+    const JsonValue* patch = conv.get("components") ? conv.get("components")->get("patch") : nullptr;
+    CHECK(patch && patch->wstr("mod_id") == L"nm_hack" && patch->wstr("file") == L"patch.nrm");
+    int left = 0;
+    for (auto& e : fs::directory_iterator(data)) left += e.path().filename().wstring().rfind(L".aki-", 0) == 0;
+    CHECK(left == 0);
+    // A refused install puts them back in mods\ as they were.
+    fs::path data2 = tmp / L"data-rules2";
+    put(data2 / L"mods" / L"nm_hack.nrm", hackNrm);
+    put(data2 / L"packages.json", R"({"format":9,"packages":[]})");
+    r = pkg::install_patch_mod(data2 / L"mods" / L"nm_hack.nrm", target(data2), o);
+    CHECK(!r.ok() && get(data2 / L"mods" / L"nm_hack.nrm") == hackNrm && !fs::exists(data2 / L"conversions"));
+
+    // 3. No bare .bps; 1. the patch .nrm's mod id is the conversion id, and mod_id (when given) agrees.
+    auto convWithPatch = [&](const wchar_t* name, const std::string& patchJson, const std::string& file, const std::string& bytes) {
+        fs::path p = conversion(tmp / name, "nm_hack", "1.0.0", kRomSha1);
+        put(p / L"conversion" / L"aki.json", R"({"id":"nm_hack","components":{"patch":)" + patchJson + "}}");
+        put(p / L"conversion" / fs::u8path(file), bytes);
+        return pkg::check_package(p);
+    };
+    pkg::CheckResult c = convWithPatch(L"c1", R"({"file":"patch.bps"})", "patch.bps", "BPS1");
+    CHECK(!c.ok() && has(c.first_error(), L"bare .bps"));
+    c = convWithPatch(L"c2", R"({"file":"patch.nrm"})", "patch.nrm",
+                      zip_bytes({{"mod.json", R"({"id":"another_hack"})"}, {"patch.bps", "BPS1"}}));
+    CHECK(!c.ok() && has(c.first_error(), L"is mod another_hack, the conversion is nm_hack"));
+    c = convWithPatch(L"c3", R"({"file":"patch.nrm","mod_id":"x"})", "patch.nrm", hackNrm);
+    CHECK(!c.ok() && has(c.first_error(), L"components.patch.mod_id is \"x\""));
+    c = convWithPatch(L"c4", R"({"file":"missing.nrm"})", "patch.nrm", hackNrm);
+    CHECK(!c.ok() && has(c.first_error(), L"not in the conversion folder"));
+    c = convWithPatch(L"c5", R"({"file":"patch.nrm","mod_id":"nm_hack"})", "patch.nrm", hackNrm);
+    CHECK(c.ok());
+}
+
 void run_packages_tests(const fs::path& tmp) {
     std::error_code ec;
     fs::remove_all(tmp, ec);
@@ -461,4 +513,5 @@ void run_packages_tests(const fs::path& tmp) {
     test_kinds_zip_and_conversions(tmp);
     test_patch_mod(tmp);
     test_review_fixes(tmp);
+    test_patch_rules(tmp);
 }

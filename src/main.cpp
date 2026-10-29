@@ -1179,9 +1179,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     g_ui.convRemove = -1;
     if (g_ui.convMove >= 0 && g_ui.convMove < (int)g_ui.modItems.size()) {
         std::filesystem::path from = g_ui.modItems[g_ui.convMove].path;
-        pkg::PackageInstall r = install_one_package(g, from, true);
-        std::wstring err;
-        if (r.ok() && !recycle_path(from, &err)) r.message += L" (the copy in mods\\ is still there: " + err + L")";
+        pkg::PackageInstall r = install_one_package(g, from, true);  // moves it, and any copy with its mod id, out of the mods folder
         mods_note(r.message, r.ok());
         refresh_mods(games);
     }

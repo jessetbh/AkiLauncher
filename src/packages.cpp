@@ -634,6 +634,33 @@ CheckResult check_package(const fs::path& src) {
             std::string cid = str(cv, "id");
             if (!cid.empty() && cid != m.id)
                 problem(ps, true, "payload", w("the conversion's aki.json id is \"" + cid + "\", the package says \"" + m.id + "\""));
+            // Its patch (the game's rules, #154): wrapped in a patch .nrm, never a bare .bps; that .nrm's own mod id
+            // is the conversion id (the hack's saves are in saves\<mod id>\), and components.patch.mod_id says it too.
+            const JsonValue* comp = member(cv, "components");
+            const JsonValue* patch = comp ? member(*comp, "patch") : nullptr;
+            if (patch && patch->is(JsonValue::Type::Object)) {
+                std::string pf = str(*patch, "file"), mid = str(*patch, "mod_id");
+                std::string rel = base + "/" + pf;
+                if (ends_with(lower(pf), ".bps")) {
+                    problem(ps, true, "payload", w("components.patch.file " + pf + " is a bare .bps: the game takes a patch "
+                                                   "wrapped in a patch .nrm (aki-package package --from <hack>.nrm)"));
+                } else if (pf.empty() || !safe_path(pf) || !pk.has(rel)) {
+                    problem(ps, true, "payload", w("components.patch.file \"" + pf + "\" is not in the conversion folder"));
+                } else {
+                    std::set<std::string> names;
+                    std::string mj;
+                    JsonValue mv;
+                    std::string modId;
+                    if (inner_zip(pk, rel, &names, &mj) && json_parse(mj, &mv) && mv.is(JsonValue::Type::Object)) modId = str(mv, "id");
+                    if (modId.empty())
+                        problem(ps, true, "payload", w("the patch " + pf + " has no mod.json id: not a patch .nrm"));
+                    else if (modId != m.id)
+                        problem(ps, true, "payload", w("the patch " + pf + " is mod " + modId + ", the conversion is " + m.id +
+                                                       ": they must be the same id (its saves are in saves\\" + modId + "\\)"));
+                    if (!mid.empty() && mid != modId)
+                        problem(ps, true, "payload", w("components.patch.mod_id is \"" + mid + "\", the patch is mod \"" + modId + "\""));
+                }
+            }
         }
         for (auto& a : m.addons)
             if (need_file(a, "addon") && !ends_with(lower(a), ".nrm") && !ends_with(lower(a), ".rtz"))
@@ -1255,15 +1282,54 @@ PackageInstall install_patch_mod(const fs::path& nrm, const InstallTarget& t, co
                           {"name", json_string(name.empty() ? id : name)}, {"version", json_string(version)},
                           {"game", json_string(shortKey)}, {"authors", arr(authors)},
                           {"base_rom", obj({{"sha1", arr({rom})}})},
-                          {"components", obj({{"patch", obj({{"file", json_string("patch.nrm")}})}})}});
+                          {"components", obj({{"patch", obj({{"file", json_string("patch.nrm")}, {"mod_id", json_string(id)}})}})}});
     JsonValue man = obj({{"format", json_number(1)}, {"kind", json_string("conversion")}, {"id", json_string(id)},
                          {"version", json_string(version)}, {"game_id", json_string(t.gameId)},
                          {"display_name", json_string(name.empty() ? id : name)}, {"authors", arr(authors)},
                          {"base_rom", obj({{"sha1", arr({rom})}})}, {"payload", obj({{"folder", json_string("conversion/")}})}});
     std::ofstream(stage / L"conversion" / L"aki.json", std::ios::binary) << json_write(conv) << "\n";
     std::ofstream(stage / L"aki-package.json", std::ios::binary) << json_write(man) << "\n";
+    // Every .nrm in mods\ with this mod id (the hack itself on a Move to Conversions, or an older copy) leaves it: the
+    // game refuses a conversion whose mod id is also in mods\. Put aside first, back on a failed install; afterwards
+    // to the Recycle Bin (its content is in conversions\<id>\ now).
+    std::vector<std::pair<fs::path, fs::path>> aside;  // (in mods\, put aside)
+    fs::path dups = t.dataDir / (L".aki-dups-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+    struct DupGuard { fs::path p; ~DupGuard() { std::error_code e; fs::remove(p, e); } } dupGuard{dups};  // only when empty
+    auto put_back = [&] {
+        for (auto it = aside.rbegin(); it != aside.rend(); ++it) move_path(it->second, it->first);
+    };
+    for (auto it = fs::directory_iterator(t.dataDir / L"mods", ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        if (!it->is_regular_file(ec) || _wcsicmp(it->path().extension().c_str(), L".nrm") != 0) continue;
+        std::set<std::string> n2;
+        std::string mj2;
+        JsonValue v2;
+        if (!nrm_names(it->path(), &n2, &mj2) || !json_parse(mj2, &v2) || str(v2, "id") != id) continue;
+        aside.push_back({it->path(), dups / std::to_wstring(aside.size())});
+    }
+    for (size_t i = 0; i < aside.size(); ++i) {
+        if (!move_path(aside[i].first, aside[i].second)) {
+            fs::path failed = aside[i].first;
+            aside.resize(i);
+            put_back();
+            return refuse(r, L"Not installed: couldn't move " + failed.filename().wstring() + L" out of mods\\ (is it open?)",
+                          PackageInstall::Outcome::Failed);
+        }
+    }
     PackageInstall res = install_package(stage, t, o);
-    if (res.ok()) res.message += L" (a ROM hack: now a conversion, one at a time, with its saves in saves\\" + w(id) + L"\\)";
+    if (!res.ok()) {
+        put_back();
+        return res;
+    }
+    res.message += L" (a ROM hack: now a conversion, one at a time, with its saves in saves\\" + w(id) + L"\\)";
+    for (auto& [inMods, held] : aside) {
+        if (recycle_path(held, nullptr)) {
+            res.notes.push_back(inMods.filename().wstring() + L" moved out of mods\\");
+        } else {
+            fs::path kept = edited_name(inMods, o.today.empty() ? today_yyyymmdd() : o.today);
+            move_path(held, kept);
+            res.notes.push_back(inMods.filename().wstring() + L" moved out of mods\\ as " + kept.filename().wstring());
+        }
+    }
     return res;
 }
 
