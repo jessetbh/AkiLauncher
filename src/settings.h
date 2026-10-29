@@ -40,6 +40,7 @@ struct Settings {
     bool updatePrerelease = false; // update_prerelease=1: pre-releases count too
     std::wstring updateSkip;       // update_skip=<tag>: "Skip this version"
     std::wstring updateEtag;       // update_etag: the release feed's ETag (If-None-Match)
+    int tourStop = 0;              // tour_stop: the History Tour's next stop (0-based; past the end = finished)
     std::map<std::wstring, GameOverride> overrides;
     std::map<std::wstring, GameStats> stats;
 };

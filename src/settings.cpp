@@ -100,6 +100,7 @@ void settings_load() {
             else if (key == "update_prerelease") g_settings.updatePrerelease = atoi(val.c_str()) != 0;
             else if (key == "update_skip") g_settings.updateSkip = u8_to_w(val);
             else if (key == "update_etag") g_settings.updateEtag = u8_to_w(val);
+            else if (key == "tour_stop") g_settings.tourStop = atoi(val.c_str()) > 0 ? atoi(val.c_str()) : 0;
         } else if (section.rfind("game:", 0) == 0) {
             GameOverride& o = g_settings.overrides[u8_to_w(section.substr(5))];
             if (key == "exe") o.exePath = u8_to_w(val);
@@ -140,6 +141,7 @@ void settings_save() {
     if (!g_settings.updateSkip.empty()) f << "update_skip=" << w_to_u8(g_settings.updateSkip) << "\n";
     if (!g_settings.updateEtag.empty()) f << "update_etag=" << w_to_u8(g_settings.updateEtag) << "\n";
     if (!g_settings.romScanDir.empty()) f << "rom_scan_dir=" << w_to_u8(g_settings.romScanDir) << "\n";
+    if (g_settings.tourStop > 0) f << "tour_stop=" << g_settings.tourStop << "\n";
     for (auto& [key, o] : g_settings.overrides) {
         if (!o.any()) continue;
         f << "[game:" << w_to_u8(key) << "]\n";

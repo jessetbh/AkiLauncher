@@ -26,6 +26,7 @@
 #include "mods.h"
 #include "modelpacks.h"
 #include "quickmatch.h"
+#include "tour.h"
 #include "selfupdate.h"
 #include "launch.h"
 #include "settings.h"
@@ -178,6 +179,14 @@ struct UiState {
     std::string quickNote;
     bool qmLaunch = false;    // the launch draw_ui returns is a quick match, with these values
     std::map<std::string, std::string> qmValues;
+    // History Tour (aki-roadmap#23)
+    bool showTour = false;
+    Tour tour;
+    bool tourOk = false;
+    std::string tourErr, tourSource, tourNote;
+    int tourSel = 0;
+    int tourLaunch = -1;   // the stop the launch draw_ui returns is for
+    int tourRunning = -1;  // the stop whose game is running
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
@@ -1131,14 +1140,28 @@ static bool exe_running(const std::filesystem::path& exe) {
     return found;
 }
 
+// The game's Quick Match mod (bundled with the game, else in its mods folder).
+static bool game_quickmatch(const GameEntry& g, QuickMatchMod* mod, std::wstring* why) {
+    std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
+    return find_quickmatch(bundled, game_mods_dir(g), mod, why);
+}
+
+// An install or rebuild that a launch of this game must wait for.
+static bool game_busy(int index) {
+    InstallStatus inst = install_status();
+    return rebuild_running() ||
+           ((inst.phase == InstallPhase::Downloading || inst.phase == InstallPhase::Extracting) && inst.gameIndex == index);
+}
+
+static void open_tour();
+
 static void open_quick(const std::vector<GameEntry>& games, int index) {
     const GameEntry& g = games[index];
     carry_portable(g);  // the data folder the run's settings go into
     g_ui.quickGame = index;
     g_ui.quickNote.clear();
-    std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
     std::wstring why;
-    g_ui.qmFound = find_quickmatch(bundled, game_mods_dir(g), &g_ui.qm, &why);
+    g_ui.qmFound = game_quickmatch(g, &g_ui.qm, &why);
     g_ui.qmWhy = narrow(why);
     g_ui.qmPick.assign(g_ui.qm.options.size(), 0);
     for (size_t i = 0; g_ui.qmFound && i < g_ui.qm.options.size(); ++i) {
@@ -1162,9 +1185,7 @@ static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
         g_ui.showQuick = false;
         return -1;
     }
-    InstallStatus inst = install_status();
-    bool busy = rebuild_running() || ((inst.phase == InstallPhase::Downloading || inst.phase == InstallPhase::Extracting) &&
-                                      inst.gameIndex == g_ui.quickGame);
+    bool busy = game_busy(g_ui.quickGame);
     ImGui::PushFont(g_ui.fontHeader);
     ImGui::SetCursorPosY(vh * 0.055f);
     text_centered("Q U I C K   M A T C H");
@@ -1246,11 +1267,143 @@ static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
             ImGui::PopFont();
         }
     }
+    ImGui::Spacing();
+    if (launch < 0 && ImGui::Button("History Tour...")) {
+        g_ui.showQuick = false;
+        open_tour();
+    }
     ImGui::PopFont();
     ImGui::EndChild();
     ImGui::PushFont(g_ui.fontSmall);
     ImGui::SetCursorPosY(vh * 0.92f);
     text_centered_colored(palette::faint, g_ui.padInput ? "Start  Start Match      B Back" : "Esc Back");
+    ImGui::PopFont();
+    return launch;
+}
+
+// --- History Tour (aki-roadmap#23) -------------------------------------------
+
+// The page on the tour's next stop (the last one once it's complete).
+static void open_tour() {
+    std::wstring source, err;
+    g_ui.tourOk = load_tour(app_root(), &g_ui.tour, &source, &err);
+    g_ui.tourErr = narrow(err);
+    g_ui.tourSource = narrow(source);
+    g_ui.tourNote.clear();
+    int n = g_ui.tourOk ? (int)g_ui.tour.stops.size() : 0;
+    g_ui.tourSel = n ? (settings().tourStop < n ? settings().tourStop : n - 1) : 0;
+    g_ui.showTour = true;
+}
+
+// The launch index once a stop is started (with g_ui.qmLaunch, qmValues and tourLaunch set), else -1.
+static int draw_tour(std::vector<GameEntry>& games, WORD pad) {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
+    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+        (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || (pad & XINPUT_GAMEPAD_B))) {
+        g_ui.showTour = false;
+        return -1;
+    }
+    ImGui::PushFont(g_ui.fontHeader);
+    ImGui::SetCursorPosY(vh * 0.055f);
+    text_centered("H I S T O R Y   T O U R");
+    ImGui::PopFont();
+    int launch = -1;
+    float panelW = vw * 0.62f;
+    if (!g_ui.tourOk) {
+        ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.18f));
+        ImGui::BeginChild("##tour", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_None);
+        ImGui::PushFont(g_ui.fontBase);
+        ImGui::TextColored(palette::error, "The tour couldn't be read");
+        ImGui::PopFont();
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::TextWrapped("%s", g_ui.tourErr.c_str());
+        ImGui::TextColored(palette::faint, "Fix or remove %s to get the built-in tour back.", g_ui.tourSource.c_str());
+        ImGui::PopFont();
+        ImGui::EndChild();
+        return -1;
+    }
+    const Tour& tour = g_ui.tour;
+    int n = (int)tour.stops.size();
+    int next = settings().tourStop;
+    ImGui::PushFont(g_ui.fontBase);
+    text_centered_colored(palette::dim, tour.name + (next >= n ? "  -  complete" : "  -  stop " + std::to_string(next + 1) +
+                                                                                  " of " + std::to_string(n)));
+    ImGui::PopFont();
+
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.17f));
+    ImGui::BeginChild("##tour", ImVec2(panelW, vh * 0.72f), ImGuiChildFlags_None);
+    ImGui::PushFont(g_ui.fontBase);
+    for (int i = 0; i < n; ++i) {
+        const TourStop& s = tour.stops[i];
+        const GameEntry* gm = nullptr;
+        for (const auto& g : games)
+            if (narrow(g.artKey) == s.game) gm = &g;
+        std::string mark = i < next ? "done   " : i == next ? "next   " : "       ";
+        std::string line = mark + std::to_string(s.year) + "   " + s.title + "   -   " + (gm ? narrow(gm->title) : s.game);
+        ImGui::PushID(i);
+        if (ImGui::Selectable(line.c_str(), i == g_ui.tourSel)) g_ui.tourSel = i;
+        if (i == g_ui.tourSel && ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
+        else if (ImGui::IsItemFocused()) g_ui.tourSel = i;  // the D-pad moves the selection, so Start plays what's shown
+        ImGui::PopID();
+    }
+    ImGui::Separator();
+    ImGui::Spacing();
+    const TourStop& s = tour.stops[(size_t)g_ui.tourSel];
+    int gameIndex = -1;
+    for (int i = 0; i < (int)games.size(); ++i)
+        if (narrow(games[i].artKey) == s.game) gameIndex = i;
+    ImGui::TextColored(palette::accent, "%d   %s", s.year, s.title.c_str());
+    ImGui::PopFont();
+    ImGui::PushFont(g_ui.fontSmall);
+    for (const auto& l : s.blurb) ImGui::TextWrapped("%s", l.c_str());
+    ImGui::TextColored(palette::faint, "%s, %s%s%s", gameIndex >= 0 ? narrow(games[gameIndex].title).c_str() : s.game.c_str(),
+                       s.venue.c_str(), s.match.empty() ? "" : ", ", s.match.c_str());
+    ImGui::TextColored(palette::faint, "A CPU-vs-CPU match through the game's Quick Match mod; close the game for the next stop.");
+    ImGui::PopFont();
+    ImGui::Spacing();
+    ImGui::PushFont(g_ui.fontBase);
+    if (ImGui::Button("Play this stop") || (pad & XINPUT_GAMEPAD_START)) {
+        std::wstring why;
+        QuickMatchMod mod;
+        std::map<std::string, std::string> values;
+        static std::mt19937 rng{std::random_device{}()};
+        if (g_ui.tourSel > next)
+            why = L"the tour goes in order: play stop " + std::to_wstring(next + 1) + L" first (done stops can be replayed)";
+        else if (gameIndex < 0) why = widen(s.game) + L" isn't one of this launcher's games";
+        else if (!games[gameIndex].launchable()) why = games[gameIndex].title + L" isn't set up yet (it needs its exe and ROM)";
+        else if (game_busy(gameIndex)) why = L"wait for the install or rebuild to finish";
+        else if (carry_portable(games[gameIndex]);  // first: the mods folder the mod lookup reads
+                 game_quickmatch(games[gameIndex], &mod, &why) &&
+                 resolve_quickmatch(mod, tour_stop_picks(s), rng, &values, &why)) {
+            logf(L"history tour: stop %d (%s) in %s", g_ui.tourSel + 1, widen(s.title).c_str(), games[gameIndex].title.c_str());
+            g_ui.qm = mod;
+            g_ui.qmValues = values;
+            g_ui.qmLaunch = true;
+            g_ui.tourLaunch = g_ui.tourSel;
+            g_ui.showTour = false;
+            play_launch();
+            launch = gameIndex;
+            why.clear();
+        }
+        g_ui.tourNote = narrow(why);
+    }
+    ImGui::SameLine();
+    if (next > 0 && ImGui::Button("Start the tour over")) {
+        settings().tourStop = 0;
+        settings_save();
+        g_ui.tourSel = 0;
+    }
+    ImGui::PopFont();
+    if (!g_ui.tourNote.empty()) {
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::TextColored(palette::error, "%s", g_ui.tourNote.c_str());
+        ImGui::PopFont();
+    }
+    ImGui::EndChild();
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::SetCursorPosY(vh * 0.92f);
+    text_centered_colored(palette::faint, g_ui.padInput ? "Start  Play This Stop      B Back" : "Esc Back");
     ImGui::PopFont();
     return launch;
 }
@@ -1760,6 +1913,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         return -1;
     }
 
+    // ------------------------------------------------------------------ history tour page
+    if (g_ui.showTour) {
+        int launch = draw_tour(games, pad);
+        ImGui::End();
+        return launch;
+    }
+
     // ------------------------------------------------------------------ quick match page
     if (g_ui.showQuick) {
         int launch = draw_quick(games, pad);
@@ -1818,10 +1978,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             ImGui::End();
             return -1;
         }
-        if ((ImGui::IsKeyPressed(ImGuiKey_Q, false) || (pad & XINPUT_GAMEPAD_BACK)) &&
-            !(rebuild_running() || ((install_status().phase == InstallPhase::Downloading ||
-                                     install_status().phase == InstallPhase::Extracting) &&
-                                    install_status().gameIndex == g_ui.selected))) {
+        if (ImGui::IsKeyPressed(ImGuiKey_H, false)) {
+            play_flip();
+            open_tour();
+            ImGui::End();
+            return -1;
+        }
+        if ((ImGui::IsKeyPressed(ImGuiKey_Q, false) || (pad & XINPUT_GAMEPAD_BACK)) && !game_busy(g_ui.selected)) {
             play_flip();
             open_quick(games, g_ui.selected);
             ImGui::End();
@@ -2271,7 +2434,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     else
         text_centered_colored(palette::faint,
                               "Left/Right Browse      Enter Play      F Flip Box      "
-                              "S Settings      M Mods      Q Quick Match      Esc Quit      In Game:  " +
+                              "S Settings      M Mods      Q Quick Match      H History Tour      Esc Quit      In Game:  " +
                                   hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
                                   "  To Return");
     ImGui::PopFont();
@@ -2696,7 +2859,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         {
             ImGuiIO& nio = ImGui::GetIO();
             if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods || g_ui.showUpdate ||
-                g_ui.showQuick)
+                g_ui.showQuick || g_ui.showTour)
                 nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
             else
                 nio.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
@@ -2705,7 +2868,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && !g_ui.showUpdate && !g_ui.showQuick &&
+        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && !g_ui.showUpdate && !g_ui.showQuick && !g_ui.showTour &&
             g_ui.insertIndex < 0 &&
             ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0)
             done = true;
@@ -2724,7 +2887,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             // left over (its undo failed) are undone first, or a plain Play would start a quick match.
             std::filesystem::path data = game_data_dir(games[launchIdx]);
             bool quick = g_ui.qmLaunch, ready = true;
+            int tourStop = g_ui.tourLaunch;
             g_ui.qmLaunch = false;
+            g_ui.tourLaunch = -1;
             if (quickmatch_pending(data) && !quickmatch_restore(data, &err)) {
                 ready = false;
                 g_session.statusNote = games[launchIdx].title + L": an earlier quick match's mod settings couldn't be "
@@ -2736,7 +2901,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                     g_session.statusNote = L"Quick match: " + err;
                 }
             }
-            if (ready && !g_session.launch(games[launchIdx], &err)) {
+            bool launched = ready && g_session.launch(games[launchIdx], &err);
+            if (launched) g_ui.tourRunning = tourStop;
+            if (ready && !launched) {
                 g_session.statusNote = games[launchIdx].title + L": " + err;
                 if (testLaunch >= 0) {
                     logf(L"test-launch: launch failed: %s", err.c_str());
@@ -2744,6 +2911,18 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                     break;
                 }
             }
+        }
+        // A History Tour stop's game closed: the tour moves on and its page comes back.
+        // Only a stop that ran and ended normally counts: a crash (its panel stays in front), a forced close or a
+        // game whose window never came up leaves the tour where it was. Replaying a done stop doesn't move it.
+        if (g_ui.tourRunning >= 0 && !g_session.active()) {
+            bool played = g_session.runningTick != 0 && !g_session.wasTerminated && g_session.logTail.empty();
+            if (played && g_ui.tourRunning == settings().tourStop) {
+                settings().tourStop = g_ui.tourRunning + 1;
+                settings_save();
+            }
+            g_ui.tourRunning = -1;
+            if (played) open_tour();  // on the next stop
         }
         // A quick match's run is over (or never started): the player's mod settings come back.
         if (!g_qmRunDir.empty() && !g_session.active()) {
