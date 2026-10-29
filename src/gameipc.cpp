@@ -1,6 +1,7 @@
 #include "gameipc.h"
 
 #include <bcrypt.h>
+#include <sddl.h>
 
 #include <cstdio>
 
@@ -51,15 +52,44 @@ static std::string random_hex(size_t bytes) {
     return s;
 }
 
+// Only this user (and nobody else: the default pipe DACL also lets Everyone read, which would let another account
+// take the one client slot).
+static bool user_only_security(SECURITY_ATTRIBUTES* sa, PSECURITY_DESCRIPTOR* sd) {
+    HANDLE tok = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok)) return false;
+    DWORD n = 0;
+    GetTokenInformation(tok, TokenUser, nullptr, 0, &n);
+    std::vector<BYTE> buf(n ? n : 1);
+    bool ok = GetTokenInformation(tok, TokenUser, buf.data(), n, &n) != 0;
+    CloseHandle(tok);
+    LPWSTR sid = nullptr;
+    ok = ok && ConvertSidToStringSidW(((TOKEN_USER*)buf.data())->User.Sid, &sid);
+    if (!ok) return false;
+    std::wstring sddl = std::wstring(L"D:P(A;;GA;;;") + sid + L")";
+    LocalFree(sid);
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, sd, nullptr)) return false;
+    sa->nLength = sizeof(*sa);
+    sa->lpSecurityDescriptor = *sd;
+    sa->bInheritHandle = FALSE;
+    return true;
+}
+
 bool GameLink::open(std::wstring* err) {
     close();
     token_ = random_hex(16);
     std::string nonce = random_hex(8);
     name_ = L"\\\\.\\pipe\\aki-launcher-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
             std::wstring(nonce.begin(), nonce.end());
+    SECURITY_ATTRIBUTES sa{};
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    if (!user_only_security(&sa, &sd)) {
+        if (err) *err = L"can't make the pipe's security descriptor (error " + std::to_wstring(GetLastError()) + L")";
+        return false;
+    }
     pipe_ = CreateNamedPipeW(name_.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
                              PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, 1, 4096, 4096,
-                             0, nullptr);
+                             0, &sa);
+    LocalFree(sd);
     if (pipe_ == INVALID_HANDLE_VALUE) {
         if (err) *err = L"CreateNamedPipe failed (error " + std::to_wstring(GetLastError()) + L")";
         return false;
@@ -94,7 +124,8 @@ void GameLink::fail(const std::string& why, bool tellGame) {
             CancelIoEx(pipe_, &ov);
         GetOverlappedResult(pipe_, &ov, &n, TRUE);
         CloseHandle(ov.hEvent);
-        FlushFileBuffers(pipe_);
+        // No FlushFileBuffers: it waits, without a limit, for a client that may never read. close() doesn't
+        // disconnect either, so a client that does read still gets the line before the pipe breaks.
     }
     close();
     error_ = why;
@@ -120,6 +151,12 @@ void GameLink::poll() {
                 fail("connect failed (error " + std::to_string(e) + ")", false);
                 return;
             }
+        }
+        // The launched game, nobody else (another process of this user could find the name).
+        ULONG client = 0;
+        if (expectedPid_ && (!GetNamedPipeClientProcessId(pipe_, &client) || client != expectedPid_)) {
+            fail("the client (pid " + std::to_string(client) + ") isn't the launched game", false);
+            return;
         }
         state_ = LinkState::Connected;
         connectedTick_ = GetTickCount64();
@@ -207,7 +244,8 @@ void GameLink::close() {
         DWORD n;
         if (reading_) GetOverlappedResult(pipe_, &readOv_, &n, TRUE);
         if (state_ == LinkState::Listening) GetOverlappedResult(pipe_, &connectOv_, &n, TRUE);
-        DisconnectNamedPipe(pipe_);
+        // CloseHandle without DisconnectNamedPipe: what was written stays readable for the client, then it sees the
+        // pipe broken (DisconnectNamedPipe would throw it away).
         CloseHandle(pipe_);
         pipe_ = INVALID_HANDLE_VALUE;
     }

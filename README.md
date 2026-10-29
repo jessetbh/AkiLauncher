@@ -295,9 +295,12 @@ The protocol is in `src/gameipc.h`, and `tests/ipc_tests.cpp` has a fake game th
   game library can give it a small background thread and the game loop never waits on the launcher.
 - **Both ways, in order.** The launcher can send (quit, and later match requests), and a match result is a stream of
   messages, not one window message.
-- **Private by construction.** There is one pipe per launch, under a random name, local only
-  (`PIPE_REJECT_REMOTE_CLIENTS`). It takes one client, the game's first message must carry a one-time token, and
-  both name and token reach only the child's environment. `WM_COPYDATA` can come from any window on the desktop.
+- **Private.** There is one pipe per launch, under a random name, local only (`PIPE_REJECT_REMOTE_CLIENTS`).
+  - Its DACL lets in only the user running the launcher. The default pipe DACL would also give Everyone read access,
+    and pipe names can be listed.
+  - It takes one client, which must be the process the launcher started (`GetNamedPipeClientProcessId`).
+  - That client's first message must carry a one-time token, which only the game's environment holds.
+  - `WM_COPYDATA`, by comparison, can come from any window on the desktop.
 - **Testable without a game.** A thread with `CreateFile` on the pipe is a complete fake game.
 
 **How it works:**
@@ -306,8 +309,11 @@ The protocol is in `src/gameipc.h`, and `tests/ipc_tests.cpp` has a fake game th
 - It polls the pipe from the frame loop with overlapped I/O, so it never blocks.
 - The game sends one compact JSON object per line. The first is a `hello` (protocol, token, game id, version, pid)
   within 10 s, and the launcher answers `welcome`. After that come `state`, `match_end` and `bye`.
-- The launcher may send `quit` (quick-back on a linked game uses it in place of `WM_CLOSE`) and `ping`.
+- The launcher may send `quit` and `ping`. Quick-back on a linked game whose window is up sends `quit` in place of
+  `WM_CLOSE`, with the same fallbacks: a game that doesn't close comes back to the launcher's running state, as
+  today.
 - A bad hello (wrong token, another protocol, not JSON, nothing at all) gets an `error` line, and the pipe closes.
+  That error is best effort: the launcher never waits on a client that doesn't read, so its frame loop can't stall.
 - Unknown message types and fields are ignored on both sides, so the protocol grows without breaking either end.
 - The launcher logs every message (`ipc: ...` in `aki-launcher.log`), and a `match_end` shows on the launcher page.
 

@@ -9,7 +9,8 @@
 // Launcher <-> game link (aki-roadmap#21, the launcher half; behind --dev-ipc / AKI_DEV_IPC=1 for now).
 //
 // Transport: one named pipe per launch, made by the launcher before it starts the game. Its name and a one-time
-// token reach the game in its environment, the way WCW_AUTOBOOT already does:
+// token reach the game in its environment, the way WCW_AUTOBOOT already does (the pipe's DACL lets only this user in,
+// and the client must be the launched process):
 //   AKI_LAUNCHER_PIPE   \\.\pipe\aki-launcher-<launcher pid>-<random>
 //   AKI_LAUNCHER_TOKEN  32 hex digits
 // A game without those variables (started by hand, or by an older launcher) runs as before. The pipe takes one
@@ -68,6 +69,8 @@ public:
     const JsonValue& hello() const { return hello_; }  // the game's hello (Ready)
     const std::string& last_error() const { return error_; }
     void set_hello_timeout(DWORD ms) { helloMs_ = ms; }  // tests
+    // The launched game's pid: a client that is another process is refused (0 = any process of this user).
+    void set_expected_pid(DWORD pid) { expectedPid_ = pid; }
 
 private:
     void fail(const std::string& why, bool tellGame);
@@ -83,6 +86,7 @@ private:
     LinkState state_ = LinkState::Closed;
     ULONGLONG connectedTick_ = 0;
     DWORD helloMs_ = kIpcHelloMs;
+    DWORD expectedPid_ = 0;
     JsonValue hello_;
     std::vector<JsonValue> inbox_;
     std::string error_;

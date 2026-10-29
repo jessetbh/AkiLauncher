@@ -206,6 +206,7 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     }
 
     pi = newPi;
+    link.set_expected_pid(pi.dwProcessId);  // it can't have connected before this poll: the link is polled in tick()
     title = g.title;
     artKey = g.artKey;
     forceBorderless = g.forceBorderless;
@@ -380,8 +381,9 @@ void GameSession::tick(HWND launcherWnd) {
 void GameSession::requestQuickBack() {
     if (!active() || state == SessionState::Closing) return;
     closeRequestTick = GetTickCount64();
-    // A game on the dev IPC is asked to close itself (it saves first); the others get the window close.
-    if (link.state() == LinkState::Ready && link.send(ipc_line("quit"))) {
+    // A game on the dev IPC is asked to close itself (it saves first); the others get the window close. Only once its
+    // window is up: before that the Closing state's fallbacks (and the launch cover's) need the window path.
+    if (state == SessionState::Running && gameWnd && link.state() == LinkState::Ready && link.send(ipc_line("quit"))) {
         logf(L"quick-back: ipc quit -> %s", title.c_str());
         state = SessionState::Closing;
         return;

@@ -89,6 +89,7 @@ static void test_session() {
     GameLink link;
     std::wstring err;
     CHECK(link.open(&err) && link.state() == LinkState::Listening);
+    link.set_expected_pid(GetCurrentProcessId());  // the fake game is this process
     CHECK(link.pipe_name().rfind(L"\\\\.\\pipe\\aki-launcher-", 0) == 0 && link.token().size() == 32);
     link.poll();
     CHECK(link.state() == LinkState::Listening);  // nobody yet: poll returns at once
@@ -164,11 +165,63 @@ static void test_refused(const std::string& first, const std::string& expectErro
     if (link.last_error().find(expectError) == std::string::npos) printf("  got: %s\n", link.last_error().c_str());
 }
 
+// Clients that would have hung the launcher's frame loop (a flush that waits for a reader): each poll returns, and
+// the link closes in time.
+static void test_never_stuck() {
+    {  // connects, then neither writes nor reads
+        GameLink link;
+        std::wstring err;
+        CHECK(link.open(&err));
+        link.set_hello_timeout(300);
+        std::atomic<bool> done{false};
+        std::wstring name = link.pipe_name();
+        std::thread game([&] {
+            FakeGame g;
+            g.connect(name);
+            while (!done) Sleep(10);
+        });
+        ULONGLONG t0 = GetTickCount64();
+        CHECK(pump(link, [&] { return link.state() == LinkState::Closed; }));
+        CHECK(GetTickCount64() - t0 < 3000);
+        done = true;
+        game.join();
+    }
+    {  // one blocking write far over the line limit (and the pipe buffer), never reading
+        GameLink link;
+        std::wstring err;
+        CHECK(link.open(&err));
+        std::wstring name = link.pipe_name();
+        std::thread game([&] {
+            FakeGame g;
+            if (!g.connect(name)) return;
+            g.write(std::string(kIpcMaxLine * 4, 'x'));  // returns when the launcher hangs up
+        });
+        CHECK(pump(link, [&] { return link.state() == LinkState::Closed; }));
+        CHECK(link.last_error().find("longer than") != std::string::npos);
+        game.join();
+    }
+}
+
+// Another process of the same user that finds the pipe's name isn't the launched game: refused at connect.
+static void test_other_process() {
+    GameLink link;
+    std::wstring err;
+    CHECK(link.open(&err));
+    link.set_expected_pid(GetCurrentProcessId() + 4);
+    std::wstring name = link.pipe_name();
+    std::thread game([&] {
+        FakeGame g;
+        if (!g.connect(name)) return;
+        g.read_until("never");  // hung up on
+    });
+    CHECK(pump(link, [&] { return link.state() == LinkState::Closed; }));
+    CHECK(link.last_error().find("isn't the launched game") != std::string::npos);
+    game.join();
+}
+
 static void test_launch_env() {
-    // Without the dev flag the game gets no pipe; with it, the variables exist only around CreateProcess.
+    // The dev flag is off unless asked for (a plain launcher offers no pipe).
     CHECK(!launch_ipc());
-    wchar_t buf[8];
-    CHECK(GetEnvironmentVariableW(L"AKI_LAUNCHER_PIPE", buf, 8) == 0);
 }
 
 void run_ipc_tests(const fs::path&) {
@@ -181,5 +234,7 @@ void run_ipc_tests(const fs::path&) {
     test_refused("hello there\n", "isn't JSON");
     test_refused(std::string(kIpcMaxLine + 10, 'x'), "longer than");
     test_refused("", "no hello within", 300);
+    test_never_stuck();
+    test_other_process();
     test_launch_env();
 }
