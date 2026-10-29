@@ -210,8 +210,10 @@ static void write_string(std::string& o, const std::string& s) {
     o += '"';
 }
 
+// indent < 0: compact (one line, no spaces), for line-based messages.
 static void write_value(std::string& o, const JsonValue& v, int indent) {
-    std::string pad((size_t)indent + 4, ' ');
+    bool compact = indent < 0;
+    std::string pad(compact ? 0 : (size_t)indent + 4, ' ');
     switch (v.type) {
         case JsonValue::Type::Null: o += "null"; break;
         case JsonValue::Type::Bool: o += v.b ? "true" : "false"; break;
@@ -234,26 +236,28 @@ static void write_value(std::string& o, const JsonValue& v, int indent) {
                 o += obj ? "{}" : "[]";
                 break;
             }
-            o += obj ? "{\n" : "[\n";
+            o += obj ? '{' : '[';
+            if (!compact) o += '\n';
             for (size_t i = 0; i < v.items.size(); ++i) {
                 o += pad;
                 if (obj) {
                     write_string(o, i < v.keys.size() ? v.keys[i] : std::string());
-                    o += ": ";
+                    o += compact ? ":" : ": ";
                 }
-                write_value(o, v.items[i], indent + 4);
-                o += i + 1 < v.items.size() ? ",\n" : "\n";
+                write_value(o, v.items[i], compact ? -1 : indent + 4);
+                if (i + 1 < v.items.size()) o += ',';
+                if (!compact) o += '\n';
             }
-            o += std::string((size_t)indent, ' ');
+            if (!compact) o += std::string((size_t)indent, ' ');
             o += obj ? '}' : ']';
             break;
         }
     }
 }
 
-std::string json_write(const JsonValue& v) {
+std::string json_write(const JsonValue& v, bool compact) {
     std::string o;
-    write_value(o, v, 0);
+    write_value(o, v, compact ? -1 : 0);
     return o;
 }
 
@@ -261,6 +265,13 @@ JsonValue json_string(const std::string& s) {
     JsonValue v;
     v.type = JsonValue::Type::String;
     v.s = s;
+    return v;
+}
+
+JsonValue json_number(double n) {
+    JsonValue v;
+    v.type = JsonValue::Type::Number;
+    v.n = n;
     return v;
 }
 

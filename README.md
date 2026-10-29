@@ -282,6 +282,41 @@ parsing, exit codes, cancel) against a fake `aki-build.ps1`. Its exit code is
 the number of failures. `--test-rebuild <game index>` rebuilds one game
 through the UI loop and exits with 0 (built) or 4.
 
+### Game link (dev, aki-roadmap#21)
+
+With `--dev-ipc` (or `AKI_DEV_IPC=1`), each launch gives the game a private line back to the launcher. The game can
+say what it's doing (menus, a match, results) and when a match ends, and the launcher can ask it to close. This is
+the launcher half only. Until a port speaks it, nothing changes: a game that doesn't connect runs exactly as before.
+The protocol is in `src/gameipc.h`, and `tests/ipc_tests.cpp` has a fake game that follows it.
+
+**Why a named pipe, not `WM_COPYDATA`?**
+- **No window needed.** `WM_COPYDATA` needs an HWND and a message pump on both sides. The game's window belongs to
+  its SDL loop, it doesn't exist during boot, and it's busy in a match. A pipe is served from any thread, so the
+  game library can give it a small background thread and the game loop never waits on the launcher.
+- **Both ways, in order.** The launcher can send (quit, and later match requests), and a match result is a stream of
+  messages, not one window message.
+- **Private.** There is one pipe per launch, under a random name, local only (`PIPE_REJECT_REMOTE_CLIENTS`).
+  - Its DACL lets in only the user running the launcher. The default pipe DACL would also give Everyone read access,
+    and pipe names can be listed.
+  - It takes one client, which must be the process the launcher started (`GetNamedPipeClientProcessId`).
+  - That client's first message must carry a one-time token, which only the game's environment holds.
+  - `WM_COPYDATA`, by comparison, can come from any window on the desktop.
+- **Testable without a game.** A thread with `CreateFile` on the pipe is a complete fake game.
+
+**How it works:**
+- The launcher makes the pipe before `CreateProcess`, and puts `AKI_LAUNCHER_PIPE` and `AKI_LAUNCHER_TOKEN` in the
+  game's environment, exactly as it does with `WCW_AUTOBOOT`.
+- It polls the pipe from the frame loop with overlapped I/O, so it never blocks.
+- The game sends one compact JSON object per line. The first is a `hello` (protocol, token, game id, version, pid)
+  within 10 s, and the launcher answers `welcome`. After that come `state`, `match_end` and `bye`.
+- The launcher may send `quit` and `ping`. Quick-back on a linked game whose window is up sends `quit` in place of
+  `WM_CLOSE`, with the same fallbacks: a game that doesn't close comes back to the launcher's running state, as
+  today.
+- A bad hello (wrong token, another protocol, not JSON, nothing at all) gets an `error` line, and the pipe closes.
+  That error is best effort: the launcher never waits on a client that doesn't read, so its frame loop can't stall.
+- Unknown message types and fields are ignored on both sides, so the protocol grows without breaking either end.
+- The launcher logs every message (`ipc: ...` in `aki-launcher.log`), and a `match_end` shows on the launcher page.
+
 ## Libraries used
 
 - [Dear ImGui](https://github.com/ocornut/imgui) (MIT) — UI

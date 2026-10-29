@@ -157,6 +157,10 @@ static bool g_launchBlocked = false;
 void launch_set_blocked(bool blocked) { g_launchBlocked = blocked; }
 bool launch_blocked() { return g_launchBlocked; }
 
+static bool g_ipc = false;
+void launch_set_ipc(bool on) { g_ipc = on; }
+bool launch_ipc() { return g_ipc; }
+
 bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     if (active()) return false;
     if (g_launchBlocked) {
@@ -171,6 +175,18 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     // Env is inherited by the child; set the autoboot var around CreateProcess
     // only (skips the port's own ROM-select menu).
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", g.romPath.wstring().c_str());
+    // Dev IPC (aki-roadmap#21): the pipe is made before the game starts, so it can connect at once.
+    link.close();
+    if (g_ipc) {
+        std::wstring ipcErr;
+        if (link.open(&ipcErr)) {
+            SetEnvironmentVariableW(L"AKI_LAUNCHER_PIPE", link.pipe_name().c_str());
+            SetEnvironmentVariableW(L"AKI_LAUNCHER_TOKEN", std::wstring(link.token().begin(), link.token().end()).c_str());
+            logf(L"ipc: offering %s", link.pipe_name().c_str());
+        } else {
+            logf(L"ipc: no link for this launch: %s", ipcErr.c_str());
+        }
+    }
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -178,15 +194,19 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     BOOL ok = CreateProcessW(g.exePath.wstring().c_str(), cmdline.data(), nullptr, nullptr,
                              FALSE, 0, nullptr, cwd.c_str(), &si, &newPi);
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", nullptr);
+    SetEnvironmentVariableW(L"AKI_LAUNCHER_PIPE", nullptr);
+    SetEnvironmentVariableW(L"AKI_LAUNCHER_TOKEN", nullptr);
 
     if (!ok) {
         DWORD err = GetLastError();
         if (errorOut) *errorOut = L"CreateProcess failed (error " + std::to_wstring(err) + L")";
         logf(L"launch FAILED for %s (err=%lu)", g.title.c_str(), err);
+        link.close();
         return false;
     }
 
     pi = newPi;
+    link.set_expected_pid(pi.dwProcessId);  // it can't have connected before this poll: the link is polled in tick()
     title = g.title;
     artKey = g.artKey;
     forceBorderless = g.forceBorderless;
@@ -210,9 +230,30 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     return true;
 }
 
+// The dev IPC's news (aki-roadmap#21): logged; a finished match also shows on the launcher.
+void GameSession::poll_link() {
+    LinkState before = link.state();
+    link.poll();
+    if (before != LinkState::Ready && link.state() == LinkState::Ready)
+        logf(L"ipc: %s said hello (game %s, version %s)", title.c_str(), link.hello().wstr("game").c_str(),
+             link.hello().wstr("version").c_str());
+    if (before != LinkState::Closed && link.state() == LinkState::Closed && !link.last_error().empty())
+        logf(L"ipc: link closed: %s", json_utf8_to_wide(link.last_error()).c_str());
+    for (const JsonValue& m : link.take()) {
+        std::wstring type = m.wstr("type");
+        if (type == L"state") logf(L"ipc: %s state %s", title.c_str(), m.wstr("state").c_str());
+        else if (type == L"match_end") {
+            logf(L"ipc: %s match over: %s", title.c_str(), json_utf8_to_wide(json_write(m, true)).c_str());
+            statusNote = title + L": match over (dev IPC)";
+        } else if (type == L"bye") logf(L"ipc: %s says bye", title.c_str());
+        else logf(L"ipc: %s sent %s", title.c_str(), type.c_str());
+    }
+}
+
 void GameSession::tick(HWND launcherWnd) {
     if (!active()) return;
     ULONGLONG now = GetTickCount64();
+    poll_link();
 
     // Process gone? (any state)
     if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
@@ -340,6 +381,13 @@ void GameSession::tick(HWND launcherWnd) {
 void GameSession::requestQuickBack() {
     if (!active() || state == SessionState::Closing) return;
     closeRequestTick = GetTickCount64();
+    // A game on the dev IPC is asked to close itself (it saves first); the others get the window close. Only once its
+    // window is up: before that the Closing state's fallbacks (and the launch cover's) need the window path.
+    if (state == SessionState::Running && gameWnd && link.state() == LinkState::Ready && link.send(ipc_line("quit"))) {
+        logf(L"quick-back: ipc quit -> %s", title.c_str());
+        state = SessionState::Closing;
+        return;
+    }
     if (gameWnd && IsWindow(gameWnd)) {
         logf(L"quick-back: WM_CLOSE -> %s (opens the port's quit prompt)", title.c_str());
         PostMessageW(gameWnd, WM_CLOSE, 0, 0);
@@ -371,6 +419,8 @@ static std::vector<std::string> read_log_tail(const std::filesystem::path& path,
 }
 
 void GameSession::finish(HWND launcherWnd) {
+    poll_link();  // a last bye or match_end
+    link.close();
     if (coverWnd) {  // game died before its window appeared
         DestroyWindow(coverWnd);
         coverWnd = nullptr;
