@@ -41,6 +41,9 @@ private:
     void finish(HWND launcherWnd);
 };
 
+// Screenshot mode: GameSession::launch refuses from then on, before anything is started or set.
+void launch_set_blocked(bool blocked);
+
 void bring_to_foreground(HWND wnd);
 
 // Hold the configured chord (settings().chordMask) on any XInput pad for the

@@ -148,8 +148,17 @@ void bring_to_foreground(HWND wnd) {
 // GameSession
 // ---------------------------------------------------------------------------
 
+static bool g_launchBlocked = false;
+
+void launch_set_blocked(bool blocked) { g_launchBlocked = blocked; }
+
 bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     if (active()) return false;
+    if (g_launchBlocked) {
+        if (errorOut) *errorOut = L"launching is off in screenshot mode";
+        logf(L"launch blocked (screenshot mode): %s", g.title.c_str());
+        return false;
+    }
 
     std::wstring cmdline = L"\"" + g.exePath.wstring() + L"\"";
     std::wstring cwd = g.repoPath.wstring();

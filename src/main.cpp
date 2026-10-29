@@ -27,6 +27,7 @@
 #include "modelpacks.h"
 #include "quickmatch.h"
 #include "tour.h"
+#include "shots.h"
 #include "selfupdate.h"
 #include "launch.h"
 #include "settings.h"
@@ -42,10 +43,24 @@ static ID3D11DeviceContext* g_context = nullptr;
 static IDXGISwapChain* g_swapChain = nullptr;
 static ID3D11RenderTargetView* g_rtv = nullptr;
 static UINT g_resizeW = 0, g_resizeH = 0;
+// Screenshot mode draws into this texture instead of a swapchain: nothing is presented, and it works without a
+// display (a server session, a locked screen).
+static ID3D11Texture2D* g_offscreen = nullptr;
+
+// The texture frames are drawn into (the swapchain's back buffer, or g_offscreen), with a reference to release.
+static ID3D11Texture2D* frame_texture() {
+    ID3D11Texture2D* t = nullptr;
+    if (g_offscreen) {
+        g_offscreen->AddRef();
+        t = g_offscreen;
+    } else if (g_swapChain) {
+        g_swapChain->GetBuffer(0, IID_PPV_ARGS(&t));
+    }
+    return t;
+}
 
 static void create_render_target() {
-    ID3D11Texture2D* back = nullptr;
-    g_swapChain->GetBuffer(0, IID_PPV_ARGS(&back));
+    ID3D11Texture2D* back = frame_texture();
     if (back) {
         g_device->CreateRenderTargetView(back, nullptr, &g_rtv);
         back->Release();
@@ -54,6 +69,30 @@ static void create_render_target() {
 
 static void destroy_render_target() {
     if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; }
+}
+
+// A device and a w x h render texture, no swapchain (screenshot mode). Hardware first, else WARP (no GPU).
+static bool create_offscreen_device(UINT w, UINT h) {
+    D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0};
+    D3D_FEATURE_LEVEL got{};
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, levels, 2, D3D11_SDK_VERSION,
+                                   &g_device, &got, &g_context);
+    if (FAILED(hr))
+        hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 2, D3D11_SDK_VERSION, &g_device,
+                               &got, &g_context);
+    if (FAILED(hr)) return false;
+    D3D11_TEXTURE2D_DESC d{};
+    d.Width = w;
+    d.Height = h;
+    d.MipLevels = 1;
+    d.ArraySize = 1;
+    d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    d.SampleDesc.Count = 1;
+    d.Usage = D3D11_USAGE_DEFAULT;
+    d.BindFlags = D3D11_BIND_RENDER_TARGET;
+    if (FAILED(g_device->CreateTexture2D(&d, nullptr, &g_offscreen))) return false;
+    create_render_target();
+    return g_rtv != nullptr;
 }
 
 static bool create_device(HWND hwnd) {
@@ -99,6 +138,7 @@ static bool create_device(HWND hwnd) {
 static void destroy_device() {
     destroy_render_target();
     if (g_swapChain) { g_swapChain->Release(); g_swapChain = nullptr; }
+    if (g_offscreen) { g_offscreen->Release(); g_offscreen = nullptr; }
     if (g_context) { g_context->Release(); g_context = nullptr; }
     if (g_device) { g_device->Release(); g_device = nullptr; }
 }
@@ -108,6 +148,10 @@ static void destroy_device() {
 // ---------------------------------------------------------------------------
 
 static GameSession g_session;
+// Screenshot mode (--shot / --shot-all, shots.h): no launches, no config writes, no carry_portable.
+static bool g_shot = false;
+static std::filesystem::path g_shotModsDir;  // the mods folder pages show instead of the game's (demo data)
+static bool g_shotScrollPacks = false;       // the model-packs shot: the Mods page scrolled to Model packs
 // Quick match (aki-roadmap#22): the data folder whose mod settings the running game's quick match changed, put back
 // once the session ends (empty = none).
 static std::filesystem::path g_qmRunDir;
@@ -859,7 +903,7 @@ static void draw_model_packs(const GameEntry& g, float panelW, float thumb) {
 static void refresh_mods(const std::vector<GameEntry>& games) {
     release_mod_thumbs();
     const GameEntry& g = games[g_ui.modsGame];
-    g_ui.modsDir = game_mods_dir(g);
+    g_ui.modsDir = g_shotModsDir.empty() ? game_mods_dir(g) : g_shotModsDir;
     // Bundled mods sit in assets\mods next to the exe (none known without one).
     std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
     g_ui.modItems = list_mods(g_ui.modsDir, bundled);
@@ -888,6 +932,7 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
 // (once: portable.txt + a copy of their AppData data) before they start or
 // their mods folder is shown.
 static void carry_portable(const GameEntry& g) {
+    if (g_shot) return;  // screenshots change nothing on disk
     if (!wants_portable_game(g, launcher_portable(), settings().portableGames)) return;
     wchar_t lad[MAX_PATH]{};
     GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
@@ -1101,7 +1146,10 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         ImGui::PopID();
     }
     g_ui.modsRemove = removeIndex;  // the thumbnails drawn above stay alive this frame
-    if (!g.modelProfile.empty()) draw_model_packs(g, panelW, thumb);
+    if (!g.modelProfile.empty()) {
+        if (g_shotScrollPacks) ImGui::SetScrollHereY(0.0f);
+        draw_model_packs(g, panelW, thumb);
+    }
     ImGui::PopFont();
     ImGui::EndChild();
     ImGui::PushFont(g_ui.fontSmall);
@@ -1142,8 +1190,9 @@ static bool exe_running(const std::filesystem::path& exe) {
 
 // The game's Quick Match mod (bundled with the game, else in its mods folder).
 static bool game_quickmatch(const GameEntry& g, QuickMatchMod* mod, std::wstring* why) {
-    std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
-    return find_quickmatch(bundled, game_mods_dir(g), mod, why);
+    std::filesystem::path bundled = g.exeFound && g_shotModsDir.empty() ? g.exePath.parent_path() / L"assets" / L"mods"
+                                                                         : std::filesystem::path();
+    return find_quickmatch(bundled, g_shotModsDir.empty() ? game_mods_dir(g) : g_shotModsDir, mod, why);
 }
 
 // An install or rebuild that a launch of this game must wait for.
@@ -1339,9 +1388,11 @@ static int draw_tour(std::vector<GameEntry>& games, WORD pad) {
         const GameEntry* gm = nullptr;
         for (const auto& g : games)
             if (narrow(g.artKey) == s.game) gm = &g;
-        std::string mark = i < next ? "done   " : i == next ? "next   " : "       ";
-        std::string line = mark + std::to_string(s.year) + "   " + s.title + "   -   " + (gm ? narrow(gm->title) : s.game);
+        std::string line = std::to_string(s.year) + "   " + s.title + "   -   " + (gm ? narrow(gm->title) : s.game);
         ImGui::PushID(i);
+        // The marker in a column of its own (spaces don't line up in a proportional font).
+        ImGui::TextColored(i < next ? palette::ready : palette::accent, "%s", i < next ? "done" : i == next ? "next" : "");
+        ImGui::SameLine(ImGui::CalcTextSize("done").x + ImGui::GetFontSize() * 1.5f);
         if (ImGui::Selectable(line.c_str(), i == g_ui.tourSel)) g_ui.tourSel = i;
         if (i == g_ui.tourSel && ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
         else if (ImGui::IsItemFocused()) g_ui.tourSel = i;  // the D-pad moves the selection, so Start plays what's shown
@@ -2492,6 +2543,78 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 // wWinMain
 // ---------------------------------------------------------------------------
 
+// --- Screenshots (--shot / --shot-all) ------------------------------------------
+
+// The frame just drawn (before any Present) as a PNG.
+static bool capture_png(const std::filesystem::path& out, std::wstring* err) {
+    ID3D11Texture2D* back = frame_texture();
+    if (!back) {
+        *err = L"no frame texture";
+        return false;
+    }
+    D3D11_TEXTURE2D_DESC d{};
+    back->GetDesc(&d);
+    d.Usage = D3D11_USAGE_STAGING;
+    d.BindFlags = 0;
+    d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    d.MiscFlags = 0;
+    ID3D11Texture2D* staging = nullptr;
+    bool ok = SUCCEEDED(g_device->CreateTexture2D(&d, nullptr, &staging));
+    if (ok) {
+        g_context->CopyResource(staging, back);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        ok = SUCCEEDED(g_context->Map(staging, 0, D3D11_MAP_READ, 0, &m));
+        if (ok) {
+            ok = write_png(out, (int)d.Width, (int)d.Height, (const uint8_t*)m.pData, m.RowPitch, err);
+            g_context->Unmap(staging, 0);
+        } else {
+            *err = L"can't read the back buffer";
+        }
+        staging->Release();
+    } else {
+        *err = L"can't make a staging texture";
+    }
+    back->Release();
+    return ok;
+}
+
+// Puts the UI on a shot's page. Pages with nothing to show get the demo mods folder.
+static void shot_setup(ShotPage page, std::vector<GameEntry>& games, int gameIndex, bool demo,
+                       const std::filesystem::path& demoDir) {
+    if (g_ui.showMods) close_mods();
+    g_ui.showSettings = g_ui.showQuick = g_ui.showTour = g_ui.showUpdate = false;
+    g_shotModsDir.clear();
+    g_shotScrollPacks = false;
+    set_dev_mode_from_args(page == ShotPage::Dev);
+    if (gameIndex >= 0) g_ui.selected = gameIndex;
+    if (gameIndex < 0) return;
+    switch (page) {
+        case ShotPage::Settings: open_settings(games); break;
+        case ShotPage::Mods:
+        case ShotPage::ModelPacks:
+            if (demo) g_shotModsDir = demoDir;
+            open_mods(games, gameIndex);
+            if (g_shotModsDir.empty() &&
+                (page == ShotPage::ModelPacks ? g_ui.packs.empty() : g_ui.modItems.empty() && g_ui.packs.empty())) {
+                close_mods();
+                g_shotModsDir = demoDir;
+                open_mods(games, gameIndex);
+            }
+            g_shotScrollPacks = page == ShotPage::ModelPacks;
+            break;
+        case ShotPage::QuickMatch:
+            if (demo) g_shotModsDir = demoDir;
+            open_quick(games, gameIndex);
+            if (!g_ui.qmFound && g_shotModsDir.empty()) {
+                g_shotModsDir = demoDir;
+                open_quick(games, gameIndex);
+            }
+            break;
+        case ShotPage::HistoryTour: open_tour(); break;
+        default: break;
+    }
+}
+
 int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     bool smoke = false;
     bool wantSettings = false;
@@ -2503,7 +2626,17 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     std::wstring updateConfirm;  // self-update: the event the previous launcher waits on (set once running)
     std::wstring updatedFrom;    // self-update: the version this one replaced
     std::wstring testRomPath;
-    for (int i = 1; i < __argc; ++i) {
+    ShotRequest shot;
+    {
+        std::vector<std::wstring> args(__wargv + 1, __wargv + __argc);
+        std::wstring err;
+        if (!parse_shot_args(args, &shot, &err)) {
+            logf(L"shot: %s", err.c_str());
+            return 2;
+        }
+        g_shot = shot.active;
+    }
+    for (int i = 1; i < __argc && !g_shot; ++i) {
         std::wstring a = __wargv[i];
         if (a == L"--smoke") smoke = true;
         else if (a == L"--test-launch" && i + 1 < __argc) testLaunch = _wtoi(__wargv[++i]);
@@ -2533,12 +2666,22 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     settings_load();  // needed before window creation for the windowed pref
     logf(L"settings file: %s", settings_path().c_str());
+    if (g_shot) {
+        // Nothing a screenshot run does may reach the config or start a game.
+        settings_set_read_only(true);
+        launch_set_blocked(true);
+        logf(L"shot: %d page(s), no launches, settings read-only", (int)shot.shots.size());
+    }
 
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);
     bool windowed = smoke || settings().windowed;  // smoke shouldn't take over the screen
     HWND hwnd;
-    if (smoke) {
+    if (g_shot) {
+        // Never shown: no focus taken, nothing on the screen. The swapchain renders all the same.
+        hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"AKI Launcher (screenshot)", WS_POPUP,
+                               -32000, -32000, 1600, 900, nullptr, nullptr, hinst, nullptr);
+    } else if (smoke) {
         hwnd = CreateWindowW(wc.lpszClassName, L"AKI Launcher", WS_OVERLAPPEDWINDOW, 100, 100,
                              1280, 720, nullptr, nullptr, hinst, nullptr);
     } else if (windowed) {
@@ -2550,15 +2693,18 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                              nullptr, nullptr, hinst, nullptr);
     }
 
-    if (!create_device(hwnd)) {
+    if (g_shot ? !create_offscreen_device(1600, 900) : !create_device(hwnd)) {
+        logf(L"no D3D11 device");
         destroy_device();
         UnregisterClassW(wc.lpszClassName, hinst);
         return 1;
     }
 
-    ShowWindow(hwnd, SW_SHOWDEFAULT);
-    UpdateWindow(hwnd);
-    DragAcceptFiles(hwnd, TRUE);  // drop mods / texture packs on the window (aki-roadmap#96)
+    if (!g_shot) {
+        ShowWindow(hwnd, SW_SHOWDEFAULT);
+        UpdateWindow(hwnd);
+        DragAcceptFiles(hwnd, TRUE);  // drop mods / texture packs on the window (aki-roadmap#96)
+    }
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -2573,7 +2719,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     RECT cr{};
     GetClientRect(hwnd, &cr);
     float uiH = (float)(cr.bottom - cr.top);
-    if (uiH < 400) uiH = (float)screenH;
+    if (uiH < 400 && !g_shot) uiH = (float)screenH;
     build_fonts(uiH);
 
     ImGui_ImplWin32_Init(hwnd);
@@ -2583,18 +2729,20 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     // Register the Return To Launcher keyboard hotkey at startup. This was
     // previously only done from the Settings rebind flow, so Shift+F12 was
     // dead on a fresh install until the user rebound it once.
-    reregister_hotkey();
-    // Footer hints start in pad mode when a controller is already connected.
-    for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
-        XINPUT_STATE xs{};
-        if (XInputGetState(i, &xs) == ERROR_SUCCESS) {
-            g_ui.padInput = true;
-            break;
+    if (!g_shot) {  // a screenshot run takes no hotkeys and makes no sound
+        reregister_hotkey();
+        // Footer hints start in pad mode when a controller is already connected.
+        for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
+            XINPUT_STATE xs{};
+            if (XInputGetState(i, &xs) == ERROR_SUCCESS) {
+                g_ui.padInput = true;
+                break;
+            }
         }
+        audio_init();
+        RegisterHotKey(hwnd, HOTKEY_QUICKBACK, settings().hotkeyMods | MOD_NOREPEAT,
+                       settings().hotkeyVk);
     }
-    audio_init();
-    RegisterHotKey(hwnd, HOTKEY_QUICKBACK, settings().hotkeyMods | MOD_NOREPEAT,
-                   settings().hotkeyVk);
 
     std::filesystem::path depotRoot = detect_depot_root();
     std::vector<GameEntry> games = build_game_list(depotRoot);
@@ -2603,7 +2751,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     // A quick match whose launcher stopped before the game did: its settings are undone now, unless that game is
     // still running (it could still save them; then the game's next launch does it).
     for (const auto& g : games) {
-        std::filesystem::path data = g.exeFound ? game_data_dir(g) : std::filesystem::path();
+        std::filesystem::path data = g.exeFound && !g_shot ? game_data_dir(g) : std::filesystem::path();
         if (data.empty() || !quickmatch_pending(data)) continue;
         if (exe_running(g.exePath)) {
             logf(L"quick match: %s is still running; its run settings in %s are undone at its next launch",
@@ -2618,8 +2766,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     if (wantSettings) open_settings(games);
     logf(L"depot root: %s", depotRoot.empty() ? L"(NOT FOUND)" : depotRoot.c_str());
 
-    releases_check_start(games);
-    if (!smoke && testInstall < 0 && testRomIdx < 0 && testRebuild < 0 && testLaunch < 0) update_tick();
+    if (!g_shot) releases_check_start(games);
+    if (!smoke && !g_shot && testInstall < 0 && testRomIdx < 0 && testRebuild < 0 && testLaunch < 0) update_tick();
     if (!updatedFrom.empty()) logf(L"update: running after an update from %s", updatedFrom.c_str());
 
     // Box art: assets\boxart\<key>_front.png / _back.png under the app root.
@@ -2632,6 +2780,27 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         art[i].backdrop = load_texture_blurred(g_device, artDir / (games[i].artKey + L"_front.png"));
         logf(L"game: %s exe=%d rom=%d art(front=%d back=%d)", games[i].title.c_str(),
              games[i].exeFound, games[i].romFound, art[i].front.ok(), art[i].back.ok());
+    }
+
+    // Screenshots: which shot, how many frames of it so far, the game, the demo folder (a temp folder, removed at exit).
+    size_t shotIndex = 0;
+    int shotFrame = 0, shotFailed = 0;
+    int shotGame = -1;
+    std::filesystem::path shotDemo;
+    if (g_shot) {
+        std::wstring want = shot.game.empty() ? L"nomercy" : shot.game;
+        for (int i = 0; i < (int)games.size(); ++i)
+            if (games[i].artKey == want) shotGame = i;
+        if (shotGame < 0 && !shot.game.empty()) {
+            logf(L"shot: no game \"%s\" in the registry", shot.game.c_str());
+            return 2;
+        }
+        if (shotGame < 0 && !games.empty()) shotGame = 0;
+        wchar_t tmpBuf[MAX_PATH]{};
+        GetTempPathW(MAX_PATH, tmpBuf);
+        shotDemo = std::filesystem::path(tmpBuf) / (L"akilauncher-shot-demo-" + std::to_wstring(GetCurrentProcessId()));
+        std::wstring err;
+        if (!make_demo_mods_dir(shotDemo, &err)) logf(L"shot: %s", err.c_str());
     }
 
     int frame = 0;
@@ -2649,6 +2818,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             if (msg.message == WM_QUIT) done = true;
         }
         if (done) break;
+        if (g_shot && shotFrame == 0) shot_setup(shot.shots[shotIndex].first, games, shotGame, shot.demo, shotDemo);
 
         // Window-mode switches happen between frames: the font atlas rebuild
         // must not race an in-flight ImGui frame.
@@ -2657,7 +2827,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             g_pendingWindowMode = -1;
         }
 
-        if (g_resizeW && g_resizeH) {
+        if (g_resizeW && g_resizeH && g_swapChain) {
             destroy_render_target();
             g_swapChain->ResizeBuffers(0, g_resizeW, g_resizeH, DXGI_FORMAT_UNKNOWN, 0);
             g_resizeW = g_resizeH = 0;
@@ -2879,6 +3049,15 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             g_pendingWindowMode = settings().windowed ? 0 : 1;
 
         int launchIdx = draw_ui(games, art, depotRoot);
+        if (g_shot) {
+            launchIdx = -1;  // nothing starts from a screenshot run
+            g_ui.qmLaunch = false;
+            if (!g_shotModsDir.empty()) {
+                ImGui::GetForegroundDrawList()->AddText(ImVec2(ImGui::GetMainViewport()->WorkPos.x + 12,
+                                                               ImGui::GetMainViewport()->WorkPos.y + 8),
+                                                        IM_COL32(250, 199, 72, 255), "demo data");
+            }
+        }
         if (launchIdx >= 0) {
             // play_launch() already fired when the cart-insert animation began.
             std::wstring err;
@@ -2942,7 +3121,22 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
         g_context->ClearRenderTargetView(g_rtv, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-        g_swapChain->Present(1, 0);
+        // A shot is taken once the page has had a few frames to lay out and load (fonts, thumbnails).
+        if (g_shot && ++shotFrame >= 20) {
+            const auto& [page, out] = shot.shots[shotIndex];
+            std::wstring err;
+            if (capture_png(out, &err)) logf(L"shot: %s", out.c_str());
+            else {
+                ++shotFailed;
+                logf(L"shot FAILED: %s: %s", out.c_str(), err.c_str());
+            }
+            shotFrame = 0;
+            if (++shotIndex >= shot.shots.size()) {
+                exitCodeOut = shotFailed ? 1 : 0;
+                done = true;
+            }
+        }
+        if (g_swapChain) g_swapChain->Present(1, 0);
 
         // While the game owns the screen the launcher just idles behind it.
         if (g_session.state == SessionState::Running) Sleep(100);
@@ -2960,7 +3154,12 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         rebuild_cancel();
     }
 
-    if (!smoke && !exitForUpdate && settings().windowed) {
+    if (g_shot) {
+        if (g_ui.showMods) close_mods();  // its thumbnails may hold demo files open
+        std::error_code ec;
+        std::filesystem::remove_all(shotDemo, ec);
+    }
+    if (!smoke && !g_shot && !exitForUpdate && settings().windowed) {
         remember_windowed_placement();
         settings_save();
     }

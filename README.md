@@ -238,6 +238,28 @@ cmake --build build-msvc
 Dependencies (Dear ImGui, miniz) are fetched automatically by CMake.
 `tools\package.ps1` reproduces the release zip.
 
+### Page screenshots
+
+To check the launcher's pages without anyone at the screen, render them to PNG files:
+
+```powershell
+AkiLauncher.exe --shot quick-match C:\shots\quick-match.png [--game nomercy] [--demo]
+AkiLauncher.exe --shot-all C:\shots                        # every page as C:\shots\<page>.png
+```
+
+Pages: `home`, `settings`, `mods`, `model-packs`, `quick-match`, `history-tour`, `dev` (the home page with dev mode
+on). `--game` is a games.json id; it defaults to `nomercy`.
+
+How a screenshot run behaves:
+- It draws into an offscreen texture, with no window shown and no focus taken. It needs no display, falling back
+  to WARP without a GPU.
+- It never launches a game and never writes the launcher settings. It skips update checks, hotkeys, sounds and
+  the portable copy.
+- A page with nothing to show (no mods, no model packs, no Quick Match mod), or every page with `--demo`, uses demo
+  data: a temp folder in the real file formats, removed at exit. The shot is marked "demo data".
+- The exit code is 0 when every shot was written, 1 if one failed and 2 for bad arguments.
+- It still writes `aki-launcher.log` next to the exe, as every run does.
+
 ### Dev mode
 
 For developers working in the depot (the folder with the game checkouts and

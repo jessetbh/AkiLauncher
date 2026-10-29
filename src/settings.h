@@ -50,6 +50,8 @@ Settings& settings();
 // dir when a portable.txt marker exists there (missing file = defaults).
 void settings_load();
 void settings_save();
+// Screenshot mode: settings_save does nothing from then on (the launcher runs, the config stays as it was).
+void settings_set_read_only(bool readOnly);
 std::filesystem::path settings_path();
 // The launcher itself runs portable (portable.txt in the cwd or next to the exe).
 bool launcher_portable();
