@@ -17,6 +17,7 @@ void run_portable_tests(const std::filesystem::path& tmp);
 void run_registry_tests(const std::filesystem::path& tmp);
 void run_selfupdate_tests(const std::filesystem::path& tmp);
 void run_modelpacks_tests(const std::filesystem::path& tmp);
+void run_quickmatch_tests(const std::filesystem::path& tmp);
 
 int main() {
     wchar_t tmpBuf[MAX_PATH]{};
@@ -32,6 +33,7 @@ int main() {
     run_registry_tests(tmp / L"registry");
     run_selfupdate_tests(tmp / L"selfupdate");
     run_modelpacks_tests(tmp / L"modelpacks");
+    run_quickmatch_tests(tmp / L"quickmatch");
     std::error_code ec;
     std::filesystem::remove_all(tmp, ec);
     printf("%s (%d failed)\n", g_failed ? "FAILED" : "OK", g_failed);

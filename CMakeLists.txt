@@ -61,6 +61,7 @@ add_executable(AkiLauncher WIN32
     src/json.cpp
     src/selfupdate.cpp
     src/modelpacks.cpp
+    src/quickmatch.cpp
 )
 target_include_directories(AkiLauncher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 if(MSVC)
@@ -75,7 +76,7 @@ target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9
 option(AKI_LAUNCHER_TESTS "Build AkiLauncherTests" OFF)
 if(AKI_LAUNCHER_TESTS)
     add_executable(AkiLauncherTests tests/tests_main.cpp tests/rebuild_tests.cpp tests/romscan_tests.cpp
-                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp tests/selfupdate_tests.cpp tests/modelpacks_tests.cpp src/json.cpp src/modelpacks.cpp src/selfupdate.cpp
+                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp tests/selfupdate_tests.cpp tests/modelpacks_tests.cpp tests/quickmatch_tests.cpp src/json.cpp src/quickmatch.cpp src/modelpacks.cpp src/selfupdate.cpp
                    src/installer.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
                    src/launch.cpp src/games.cpp)
     target_compile_definitions(AkiLauncherTests PRIVATE UNICODE _UNICODE NOMINMAX)

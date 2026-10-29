@@ -45,6 +45,8 @@ timing, and file-backed saves.
   play-time stats, and controller-aware button hints.
 - **Windowed or fullscreen** (`F11` / `Alt+Enter`); running games follow the
   launcher window live.
+- **Quick match** (`Q` / `Back`): the game starts straight into a CPU-vs-CPU
+  match in the venue you pick, through the Quick Match mod the games bundle.
 
 ## Controls
 
@@ -55,12 +57,27 @@ timing, and file-backed saves.
 | F, X | flip the box art |
 | U, RB | install an available update |
 | M, Start | the game's Mods page (install / remove mods and texture packs) |
+| Q, Back | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
 | S, Y | settings (Return to Launcher binding, per-game paths) |
 | F11, Alt+Enter | windowed / fullscreen |
 | Esc | quit |
 | Shift+F12, hold View (in game) | quit prompt → back to launcher |
 
 ## FAQ
+
+**How does Quick match work, and does it change my mod settings?** `Q` (`Back` on a controller) opens the selected
+game's Quick match page. It needs the game's bundled Quick Match mod (`assets\mods\aki_quickmatch.nrm` next to the game,
+or `aki_quickmatch.nrm` in its mods folder), and offers that mod's own options: **Venue** and **Match** (each with
+**Random**, a venue or match of the game's own list, never the game's pick), and on some games **Demo length** and
+**Entrances**. What a match is in each game (the attract demo in No Mercy and VPW2, a Watch exhibition in the others) is
+in the AkiMods `quickmatch` README. **Start match** turns the mod on for that run only:
+- It adds `aki_quickmatch` to the game's `mods.json` and writes the picks to `mod_config\aki_quickmatch.json`.
+- First, it notes what it changed in `aki-launcher-quickmatch.json` in the game's data folder.
+- When the game closes, the mod leaves `mods.json` again, unless it was already on. Other mods turned on or off in the
+  game meanwhile stay that way. The mod's config file goes back to exactly what it was, or away if there was none.
+- If the launcher closes first, the next launcher start does the undo, or the game's next launch does it if the game is
+  still running then. An undo that fails (a file locked by another program) is tried again before the game's next
+  launch, which waits for it.
 
 **Where do downloaded games go?** `games\` next to `AkiLauncher.exe` (or
 `%AKI_GAMES_ROOT%` if set) — the launcher is portable by default. Settings
