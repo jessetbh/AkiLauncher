@@ -11,7 +11,8 @@ struct GameOverride {
     std::wstring exePath;
     std::wstring romPath;
     int forceBorderless = -1;
-    bool any() const { return !exePath.empty() || !romPath.empty() || forceBorderless != -1; }
+    std::wstring playAs;  // play_as: the conversion Play starts it as (aki-roadmap#154; "" = the original game)
+    bool any() const { return !exePath.empty() || !romPath.empty() || forceBorderless != -1 || !playAs.empty(); }
 };
 
 // Per-game play stats, keyed by GameEntry::artKey. Recorded on session end.

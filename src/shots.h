@@ -40,3 +40,6 @@ bool write_png(const std::filesystem::path& file, int width, int height, const u
 // A demo mods folder: two code mods (one of them aki_quickmatch with No Mercy's options), a texture pack, and
 // models\ with two No Mercy model packs and a models.txt assigning one of them.
 bool make_demo_mods_dir(const std::filesystem::path& dir, std::wstring* err);
+// A demo data folder for conversions (aki-roadmap#154): conversions\ with one recorded in packages.json (with a
+// texture pack that came with it, and saves) and one added by hand for another ROM.
+bool make_demo_conversions(const std::filesystem::path& dataDir, std::wstring* err);

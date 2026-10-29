@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <map>
 #include <random>
 #include <string>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "romscan.h"
 #include "mods.h"
 #include "modelpacks.h"
+#include "packages.h"
 #include "quickmatch.h"
 #include "tour.h"
 #include "shots.h"
@@ -209,6 +211,11 @@ struct UiState {
     std::string packsNote;
     bool packsNoteOk = true;
     bool modelsTxtOk = true;  // read without errors: editable
+    // Conversions (aki-roadmap#154): the Mods page's list, and each game's for Play as... (by game index)
+    std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
+    std::vector<pkg::ConversionInfo> convs;
+    int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
+    std::map<int, std::vector<pkg::ConversionInfo>> convCache;
     // launcher self-update (aki-roadmap#117)
     bool showUpdate = false;
     bool updateRequested = false;  // "Update now": install as soon as the download is verified
@@ -921,6 +928,8 @@ static void draw_model_packs(const GameEntry& g, float panelW, float thumb) {
     }
 }
 
+static std::filesystem::path conversions_data_dir(const GameEntry& g);
+
 static void refresh_mods(const std::vector<GameEntry>& games) {
     release_mod_thumbs();
     const GameEntry& g = games[g_ui.modsGame];
@@ -948,6 +957,11 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
     std::error_code ec;
     std::filesystem::remove(tmp, ec);
     refresh_model_packs(g);
+    g_ui.modIsHack.clear();
+    for (const auto& m : g_ui.modItems)
+        g_ui.modIsHack.push_back(m.kind == ModKind::Nrm && !m.code && !m.bundled && pkg::is_patch_mod(m.path));
+    g_ui.convs = pkg::list_conversions(conversions_data_dir(g));
+    g_ui.convCache.clear();
 }
 
 // aki-roadmap#14: a portable launcher makes the games it installed portable
@@ -970,6 +984,81 @@ static void carry_portable(const GameEntry& g) {
              g.repoPath.c_str(), n, appData.c_str(), GetTickCount64() - t0);
 }
 
+// --- Conversions and packages (aki-roadmap#154) ---------------------------------
+
+// Where a game's conversions are: its data folder, or in screenshot mode the demo one beside the demo mods folder.
+static std::filesystem::path conversions_data_dir(const GameEntry& g) {
+    return g_shotModsDir.empty() ? game_data_dir(g) : std::filesystem::path(g_shotModsDir.wstring() + L"-data");
+}
+
+// The game's conversions (cached per game; dropped when the Mods page closes or a game ends).
+static const std::vector<pkg::ConversionInfo>& game_conversions(const std::vector<GameEntry>& games, int i) {
+    auto it = g_ui.convCache.find(i);
+    if (it == g_ui.convCache.end()) {
+        std::vector<pkg::ConversionInfo> v;
+        if (g_shot ? !g_shotModsDir.empty() : games[i].exeFound) v = pkg::list_conversions(conversions_data_dir(games[i]));
+        it = g_ui.convCache.emplace(i, std::move(v)).first;
+    }
+    return it->second;
+}
+
+// The conversion Play starts game i as: the remembered pick while it is still installed, else nullptr (the original).
+static const pkg::ConversionInfo* play_as(const std::vector<GameEntry>& games, int i) {
+    auto o = settings().overrides.find(games[i].artKey);
+    if (o == settings().overrides.end() || o->second.playAs.empty()) return nullptr;
+    for (const auto& c : game_conversions(games, i))
+        if (widen(c.id) == o->second.playAs) return &c;
+    return nullptr;
+}
+
+static void set_play_as(const GameEntry& g, const std::string& id) {
+    settings().overrides[g.artKey].playAs = widen(id);
+    settings_save();
+}
+
+static std::vector<std::string> rom_sha1_of(const GameEntry& g) {
+    std::vector<std::string> v;
+    if (!g.romSha1.empty()) v.push_back(narrow(g.romSha1));
+    return v;
+}
+
+static pkg::InstallTarget install_target(const GameEntry& g) {
+    pkg::InstallTarget t;
+    t.dataDir = game_data_dir(g);
+    t.gameTitle = g.title;
+    t.gameId = narrow(g.modGameId);
+    t.romSha1 = rom_sha1_of(g);  // the dump the game accepts: the player's ROM was checked against it
+    std::filesystem::path rom = g.romPath;
+    t.hashRom = [rom] { return narrow(sha1_file(rom)); };
+    return t;
+}
+
+static bool is_package_source(const std::filesystem::path& p) {
+    pkg::Package pk(p);
+    return pk.opened() && pk.has("aki-package.json");
+}
+
+// A package (or a patch-mod ROM hack, which becomes a conversion), with Yes/No for a reinstall or a downgrade.
+static pkg::PackageInstall install_one_package(const GameEntry& g, const std::filesystem::path& src, bool patchMod) {
+    pkg::InstallTarget t = install_target(g);
+    pkg::InstallOptions o;
+    o.gameRunning = g_session.active() && g_session.artKey == g.artKey;
+    auto run = [&] { return patchMod ? pkg::install_patch_mod(src, t, o) : pkg::install_package(src, t, o); };
+    pkg::PackageInstall r = run();
+    using O = pkg::PackageInstall::Outcome;
+    if (r.outcome == O::AlreadyInstalled || r.outcome == O::NeedsDowngradeConfirm) {
+        bool down = r.outcome == O::NeedsDowngradeConfirm;
+        std::wstring ask = r.message + (down ? L".\n\nInstall the older version anyway? Files you changed are kept as .edited copies."
+                                             : L".\n\nInstall it again? Files you changed are kept as .edited copies.");
+        if (MessageBoxW(g_hwnd, ask.c_str(), L"AKI Launcher", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+            (down ? o.allowDowngrade : o.reinstall) = true;
+            r = run();
+        }
+    }
+    for (const auto& n : r.notes) r.message += L"  (" + n + L")";
+    return r;
+}
+
 static void open_mods(const std::vector<GameEntry>& games, int index) {
     carry_portable(games[index]);
     g_ui.modsGame = index;
@@ -983,6 +1072,8 @@ static void open_mods(const std::vector<GameEntry>& games, int index) {
 static void close_mods() {
     release_mod_thumbs();
     g_ui.modItems.clear();
+    g_ui.convs.clear();
+    g_ui.convCache.clear();
     g_ui.showMods = false;
 }
 
@@ -996,10 +1087,24 @@ static void install_into_mods(const std::vector<GameEntry>& games, const std::ve
     std::wstring all;
     bool allOk = true;
     for (const auto& src : srcs) {
-        InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title, g.modelProfile);
-        allOk = allOk && r.ok;
+        // aki-roadmap#154: a package (aki-package.json) or a patch-mod ROM hack goes through the shared installer;
+        // everything else (a plain .nrm, .rtz, zip of them, model-pack folder) installs as before.
+        std::wstring ext = src.extension().wstring();
+        bool hack = _wcsicmp(ext.c_str(), L".nrm") == 0 && pkg::is_patch_mod(src);
+        bool ok;
+        std::wstring msg;
+        if (hack || is_package_source(src)) {
+            pkg::PackageInstall r = install_one_package(g, src, hack);
+            ok = r.ok();
+            msg = r.message;
+        } else {
+            InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title, g.modelProfile);
+            ok = r.ok;
+            msg = r.message;
+        }
+        allOk = allOk && ok;
         if (!all.empty()) all += L"   |   ";
-        all += r.message;
+        all += msg;
     }
     refresh_mods(games);
     mods_note(all + (allOk ? L". Start (or restart) the game to use it; turn mods on and off in its Mods menu." : L""),
@@ -1045,15 +1150,42 @@ static std::vector<std::filesystem::path> pick_mod_files() {
 
 static std::filesystem::path pick_folder(const std::wstring& start);
 
-static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
+// The game index to launch (a conversion's Play), else -1.
+static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     ImGuiViewport* vp = ImGui::GetMainViewport();
     float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
     ImGuiIO& io = ImGui::GetIO();
     const GameEntry& g = games[g_ui.modsGame];
     if ((ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) && !io.WantTextInput) {
         close_mods();
-        return;
+        return -1;
     }
+    // A conversion's Play, Remove, or a ROM hack's Move to Conversions from last frame (before any thumbnail is drawn).
+    if (g_ui.convPlay >= 0 && g_ui.convPlay < (int)g_ui.convs.size()) {
+        set_play_as(g, g_ui.convs[g_ui.convPlay].id);
+        int idx = g_ui.modsGame;
+        g_ui.convPlay = -1;
+        close_mods();
+        return idx;
+    }
+    g_ui.convPlay = -1;
+    if (g_ui.convRemove >= 0 && g_ui.convRemove < (int)g_ui.convs.size()) {
+        std::wstring msg;
+        bool running = g_session.active() && g_session.artKey == g.artKey;
+        bool ok = pkg::remove_package(g_ui.convs[g_ui.convRemove].id, game_data_dir(g), running, &msg);
+        mods_note(ok ? msg + L" (in the Recycle Bin)" : L"Not removed: " + msg, ok);
+        refresh_mods(games);
+    }
+    g_ui.convRemove = -1;
+    if (g_ui.convMove >= 0 && g_ui.convMove < (int)g_ui.modItems.size()) {
+        std::filesystem::path from = g_ui.modItems[g_ui.convMove].path;
+        pkg::PackageInstall r = install_one_package(g, from, true);
+        std::wstring err;
+        if (r.ok() && !recycle_path(from, &err)) r.message += L" (the copy in mods\\ is still there: " + err + L")";
+        mods_note(r.message, r.ok());
+        refresh_mods(games);
+    }
+    g_ui.convMove = -1;
     // A Remove from last frame: now, before this frame draws (and so holds) any thumbnail.
     if (g_ui.modsRemove >= 0 && g_ui.modsRemove < (int)g_ui.modItems.size()) {
         std::wstring err;
@@ -1126,7 +1258,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
     float rightW = fmaxf(ImGui::CalcTextSize("comes with").x, ImGui::CalcTextSize("Remove").x + st.FramePadding.x * 2) +
                    st.ScrollbarSize + st.ItemSpacing.x;
     ImGui::PopFont();
-    int removeIndex = -1;
+    int removeIndex = -1, moveIndex = -1;
     for (int i = 0; i < (int)g_ui.modItems.size(); ++i) {
         const ModItem& m = g_ui.modItems[i];
         ImGui::PushID(i);
@@ -1159,6 +1291,10 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
             ImGui::PopTextWrapPos();
         }
         if (!m.problem.empty()) ImGui::TextColored(palette::warn, "%s", narrow(m.problem).c_str());
+        if (i < (int)g_ui.modIsHack.size() && g_ui.modIsHack[i]) {
+            ImGui::TextColored(palette::warn, "A ROM hack: it belongs under Conversions (one at a time, its own saves)");
+            if (ImGui::SmallButton("Move to Conversions")) moveIndex = i;
+        }
         if (!m.manifest.gameId.empty() && !g.modGameId.empty() && m.manifest.gameId != g.modGameId)
             ImGui::TextColored(palette::warn, "made for %s, not this game", narrow(m.manifest.gameId).c_str());
         ImGui::PopFont();
@@ -1174,6 +1310,50 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         ImGui::PopID();
     }
     g_ui.modsRemove = removeIndex;  // the thumbnails drawn above stay alive this frame
+    g_ui.convMove = moveIndex;
+    // Conversions (aki-roadmap#154): one at a time, each with its own saves. Play starts the game as it (and Play as...
+    // on the home page remembers it); Remove takes what it installed, never its saves.
+    {
+        int playConv = -1, removeConv = -1;
+        ImGui::Spacing();
+        ImGui::TextColored(palette::accent, "Conversions");
+        ImGui::PushFont(g_ui.fontSmall);
+        if (g_ui.convs.empty())
+            ImGui::TextColored(palette::dim, "None installed. A conversion package, or a ROM-hack .nrm, installs here through Install files...");
+        std::vector<std::string> rom = rom_sha1_of(g);
+        for (int i = 0; i < (int)g_ui.convs.size(); ++i) {
+            const pkg::ConversionInfo& c = g_ui.convs[i];
+            ImGui::PushID(10000 + i);
+            ImGui::PushFont(g_ui.fontBase);
+            ImGui::TextUnformatted((narrow(c.name) + (c.version.empty() ? "" : "  " + narrow(c.version))).c_str());
+            ImGui::PopFont();
+            std::string line = c.authors.empty() ? std::string() : "by " + narrow(c.authors) + "  -  ";
+            line += c.recorded ? "installed as a package" : "added by hand";
+            line += "  -  saves in saves\\" + c.id + "\\";
+            for (const auto& a : c.addons) line += "  -  with " + a;
+            ImGui::PushTextWrapPos(panelW - ui_px(20));
+            ImGui::TextColored(palette::dim, "%s", line.c_str());
+            ImGui::PopTextWrapPos();
+            bool romOk = pkg::conversion_rom_matches(c, rom);
+            ImGui::TextColored(romOk ? palette::ready : palette::warn, "%s", romOk ? "Your ROM matches" : "Made for another ROM than yours");
+            if (g.launchable() && ImGui::SmallButton("Play")) playConv = i;
+            std::error_code ec;
+            if (std::filesystem::is_directory(c.saves, ec)) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Open saves folder")) ShellExecuteW(nullptr, L"explore", c.saves.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            }
+            if (c.recorded) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Remove")) removeConv = i;
+            }
+            ImGui::Spacing();
+            ImGui::PopID();
+        }
+        ImGui::PopFont();
+        g_ui.convPlay = playConv;
+        g_ui.convRemove = removeConv;
+        ImGui::Spacing();
+    }
     if (!g.modelProfile.empty()) {
         // The model-packs shot: the section scrolled to the top (when the list is long enough to scroll) and outlined,
         // so it isn't the mods shot again.
@@ -1199,6 +1379,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
     text_centered_colored(palette::faint, g_ui.padInput ? "B Back      The game turns mods on and off and sets their order in its own Mods menu"
                                                         : "Esc Back      The game turns mods on and off and sets their order in its own Mods menu");
     ImGui::PopFont();
+    return -1;
 }
 
 // --- Quick match (aki-roadmap#22) --------------------------------------------
@@ -1969,6 +2150,11 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     draw_backdrop(dl, vp, art);
 
+    // A game that ended may have changed its conversions (the in-game list, its drop folder): read them again.
+    static bool s_wasActive = false;
+    if (s_wasActive && !g_session.active()) g_ui.convCache.clear();
+    s_wasActive = g_session.active();
+
     // ------------------------------------------------------------------ game running overlay
     if (g_session.active()) {
         // Keeps pad_pressed's last state current: a button held when the game closes (the quit chord, Back by
@@ -1979,7 +2165,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                                                                               : "Now playing";
         ImGui::PushFont(g_ui.fontTitle);
         ImGui::SetCursorPosY(vh * 0.44f);
-        text_centered(std::string(verb) + "  -  " + narrow(g_session.title));
+        text_centered(std::string(verb) + "  -  " + narrow(g_session.title) +
+                      (g_session.conversionName.empty() ? "" : "  -  " + narrow(g_session.conversionName)));
         ImGui::PopFont();
         ImGui::PushFont(g_ui.fontSmall);
         ImGui::SetCursorPosY(vh * 0.54f);
@@ -2022,9 +2209,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // ------------------------------------------------------------------ mods page
     if (g_ui.showMods) {
-        draw_mods(games, pad);
+        int launch = draw_mods(games, pad);
         ImGui::End();
-        return -1;
+        return launch;
     }
 
     // ------------------------------------------------------------------ settings screen
@@ -2332,6 +2519,32 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
     }
 
+    // Play as... (aki-roadmap#154): the original game or one of its conversions, remembered per game. A launch
+    // choice: nothing in the game's files changes.
+    bool lbPlayAs = false;
+    if ((s.launchable() || !g_shotModsDir.empty()) && !installingSel) {
+        const auto& convs = game_conversions(games, g_ui.selected);
+        if (!convs.empty()) {
+            lbPlayAs = true;
+            const pkg::ConversionInfo* pick = play_as(games, g_ui.selected);
+            if (!inserting && (ImGui::IsKeyPressed(ImGuiKey_C, false) || (pad & XINPUT_GAMEPAD_LEFT_SHOULDER))) {
+                int next = (pick ? (int)(pick - convs.data()) : -1) + 1;  // the original, then each conversion
+                set_play_as(s, next < (int)convs.size() ? convs[next].id : std::string());
+                pick = play_as(games, g_ui.selected);
+                play_nav();
+            }
+            ImGui::PushFont(g_ui.fontSmall);
+            text_centered_colored(palette::accent, std::to_string(convs.size()) +
+                                                       (convs.size() == 1 ? " conversion" : " conversions") +
+                                                       " installed   -   Play as:  " +
+                                                       (pick ? narrow(pick->name) : std::string("the original game")) +
+                                                       "   -   C / LB changes it");
+            if (pick && !pkg::conversion_rom_matches(*pick, rom_sha1_of(s)))
+                text_centered_colored(palette::warn, narrow(pick->name) + " is made for another ROM than yours");
+            ImGui::PopFont();
+        }
+    }
+
     // Update-available line (installed via the launcher, newer tag on GitHub)
     bool updateAvail = s.exeFound && !s.installedTag.empty() && haveRel &&
                        rel.tag != s.installedTag && !installingSel &&
@@ -2353,10 +2566,10 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         std::wstring why = rebuild_unavailable_reason(s, depotRoot);
         ImGui::PushFont(g_ui.fontSmall);
         if (why.empty()) {
-            text_centered_colored(palette::faint, "Dev:  R / LB Rebuilds " + narrow(s.repoDir) +
-                                                      " (AkiTools aki-build)");
+            text_centered_colored(palette::faint, std::string(lbPlayAs ? "Dev:  R Rebuilds " : "Dev:  R / LB Rebuilds ") +
+                                                      narrow(s.repoDir) + " (AkiTools aki-build)");
             if (!inserting &&
-                (ImGui::IsKeyPressed(ImGuiKey_R, false) || (pad & XINPUT_GAMEPAD_LEFT_SHOULDER))) {
+                (ImGui::IsKeyPressed(ImGuiKey_R, false) || (!lbPlayAs && (pad & XINPUT_GAMEPAD_LEFT_SHOULDER)))) {
                 std::wstring err;
                 if (rebuild_start(g_ui.selected, s, depotRoot, &err)) {
                     play_flip();
@@ -2662,6 +2875,9 @@ static bool shot_setup(ShotPage page, std::vector<GameEntry>& games, int gameInd
             }
             break;
         case ShotPage::HistoryTour: open_tour(); break;
+        case ShotPage::Home:
+            if (demo) g_shotModsDir = demoDir;  // its conversions: Play as... (aki-roadmap#154)
+            break;
         default: break;
     }
     if (!g_shotModsDir.empty() && !demoOk) {
@@ -2870,7 +3086,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         GetTempPathW(MAX_PATH, tmpBuf);
         shotDemo = std::filesystem::path(tmpBuf) / (L"akilauncher-shot-demo-" + std::to_wstring(GetCurrentProcessId()));
         std::wstring err;
-        shotDemoOk = make_demo_mods_dir(shotDemo, &err);
+        shotDemoOk = make_demo_mods_dir(shotDemo, &err) &&
+                     make_demo_conversions(std::filesystem::path(shotDemo.wstring() + L"-data"), &err);
         if (!shotDemoOk) logf(L"shot: %s", err.c_str());
     }
 
@@ -3161,6 +3378,16 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                     g_session.statusNote = L"Quick match: " + err;
                 }
             }
+            // Play as... (aki-roadmap#154): a plain Play starts the remembered conversion; quick match and the
+            // History Tour start the original game.
+            g_session.conversion.clear();
+            g_session.conversionName.clear();
+            if (!quick && tourStop < 0) {
+                if (const pkg::ConversionInfo* c = play_as(games, launchIdx)) {
+                    g_session.conversion = widen(c->id);
+                    g_session.conversionName = c->name;
+                }
+            }
             bool launched = ready && g_session.launch(games[launchIdx], &err);
             if (launched) g_ui.tourRunning = tourStop;
             if (ready && !launched) {
@@ -3247,6 +3474,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (g_ui.showMods) close_mods();  // its thumbnails may hold demo files open
         std::error_code ec;
         std::filesystem::remove_all(shotDemo, ec);
+    std::filesystem::remove_all(std::filesystem::path(shotDemo.wstring() + L"-data"), ec);
     }
     if (!smoke && !g_shot && !exitForUpdate && settings().windowed) {
         remember_windowed_placement();

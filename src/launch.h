@@ -34,6 +34,10 @@ struct GameSession {
     std::filesystem::path portLogPath;  // %LOCALAPPDATA%\<exe stem>\<exe stem>.log
     std::vector<std::string> logTail;   // tail of the port's log after a bad exit
     GameLink link;                      // the game's end of the dev IPC (launch_set_ipc), when it connects
+    // aki-roadmap#154: set before launch() to start the game as one of its conversions (AKI_CONVERSION=<id>, for this
+    // start only; "" = the original game). conversionName is for the playing banner.
+    std::wstring conversion;
+    std::wstring conversionName;
 
     bool launch(const GameEntry& g, std::wstring* errorOut);
     void tick(HWND launcherWnd);

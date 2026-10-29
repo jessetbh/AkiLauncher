@@ -175,6 +175,9 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     // Env is inherited by the child; set the autoboot var around CreateProcess
     // only (skips the port's own ROM-select menu).
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", g.romPath.wstring().c_str());
+    // A conversion (aki-roadmap#154): a launch choice, never written to the game's files.
+    SetEnvironmentVariableW(L"AKI_CONVERSION", conversion.empty() ? nullptr : conversion.c_str());
+    if (!conversion.empty()) logf(L"launch: %s as conversion %s", g.title.c_str(), conversion.c_str());
     // Dev IPC (aki-roadmap#21): the pipe is made before the game starts, so it can connect at once.
     link.close();
     if (g_ipc) {
@@ -194,6 +197,7 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     BOOL ok = CreateProcessW(g.exePath.wstring().c_str(), cmdline.data(), nullptr, nullptr,
                              FALSE, 0, nullptr, cwd.c_str(), &si, &newPi);
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", nullptr);
+    SetEnvironmentVariableW(L"AKI_CONVERSION", nullptr);
     SetEnvironmentVariableW(L"AKI_LAUNCHER_PIPE", nullptr);
     SetEnvironmentVariableW(L"AKI_LAUNCHER_TOKEN", nullptr);
 
