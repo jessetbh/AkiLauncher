@@ -59,6 +59,7 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     games.back().githubRepo = L"jessetbh/WCWvsNWOWorldTourRecomp";
     games.back().romSha1 = L"5AD2D8359058C8BB71F08E3D3433B7A50D3BB645";
     games.back().romCode = L"NWNE";
+    games.back().modGameId = L"wcwnwoworldtour";
     games.back().romVersion = 0;
     games.back().romNote = L"North American (NTSC-U) release";
 
@@ -68,6 +69,7 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     games.back().githubRepo = L"jessetbh/VPW64Recomp";
     games.back().romSha1 = L"F9E9FA2ED819C3A39DB5CB6AFECA186F021DB5ED";
     games.back().romCode = L"NVPJ";
+    games.back().modGameId = L"vpw64";
     games.back().romVersion = 0;
     games.back().romNote = L"Japanese release (the game was Japan-only)";
 
@@ -77,6 +79,7 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     games.back().githubRepo = L"jessetbh/WCWnWoRevengeRecomp";
     games.back().romSha1 = L"E1711A2511394B9357B5F1AC8CA5CC17BD674836";
     games.back().romCode = L"NW2E";
+    games.back().modGameId = L"wcwnworevenge";
     games.back().romVersion = 0;
     games.back().romNote = L"North American (NTSC-U) release";
 
@@ -86,6 +89,7 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     games.back().githubRepo = L"jessetbh/WWFWrestleMania2000Recomp";
     games.back().romSha1 = L"D7D1FAD473FEF9B61FE5F8273C975EE7C603A51B";
     games.back().romCode = L"NWXE";
+    games.back().modGameId = L"wwfwm2k";
     games.back().romVersion = 0;
     games.back().romNote = L"North American (NTSC-U) release";
 
@@ -95,6 +99,7 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     games.back().githubRepo = L"jessetbh/VPW2Recomp";
     games.back().romSha1 = L"82DD25A044689EAB57AB362FE10C0DA6388C217A";
     games.back().romCode = L"NA2J";
+    games.back().modGameId = L"vpw2";
     games.back().romVersion = 0;
     games.back().romNote = L"Japanese release (Japan-only; fan-translation patches won't match)";
 
@@ -104,6 +109,7 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     games.back().githubRepo = L"jessetbh/WWFNoMercyRecomp";
     games.back().romSha1 = L"91CEE3D096F4A76644D8B35B9AEAD6448909ABD1";
     games.back().romCode = L"NW4E";
+    games.back().modGameId = L"wwfnomercy";
     games.back().romVersion = 1;  // Rev 1
     games.back().romNote = L"North American (NTSC-U) REV 1 release - the later revision; Rev 0 won't match";
 

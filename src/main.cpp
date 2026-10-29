@@ -1,10 +1,12 @@
 #include <windows.h>
 
 #include <d3d11.h>
+#include <shellapi.h>
 #include <shobjidl.h>
 #include <xinput.h>
 
 #include <cmath>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -19,6 +21,7 @@
 #include "installer.h"
 #include "rebuild.h"
 #include "romscan.h"
+#include "mods.h"
 #include "launch.h"
 #include "settings.h"
 
@@ -133,10 +136,20 @@ struct UiState {
     WORD chordPending = 0;
     bool captureHotkey = false;
     std::vector<std::string> exeEdit, romEdit;  // per-game path field buffers
+    // mods page (aki-roadmap#96)
+    bool showMods = false;
+    int modsGame = -1;
+    std::filesystem::path modsDir;
+    std::vector<ModItem> modItems;
+    std::vector<Texture> modThumbs;  // parallel to modItems (empty srv = none)
+    std::string modsNote;
+    bool modsNoteOk = true;
+    int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
 static DWORD g_attractMs = 60000;  // idle before attract mode (--attract-ms)
+static std::vector<std::filesystem::path> g_dropped;  // files / folders dropped on the window
 
 static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wparam, lparam)) return true;
@@ -153,6 +166,20 @@ static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
     case WM_SYSCOMMAND:
         if ((wparam & 0xfff0) == SC_KEYMENU) return 0;  // no Alt menu beep
         break;
+    case WM_DROPFILES: {
+        HDROP drop = (HDROP)wparam;
+        UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        for (UINT i = 0; i < n; ++i) {
+            UINT len = DragQueryFileW(drop, i, nullptr, 0);
+            std::wstring buf(len + 1, L'\0');
+            if (len && DragQueryFileW(drop, i, buf.data(), len + 1)) {
+                buf.resize(len);
+                g_dropped.emplace_back(buf);
+            }
+        }
+        DragFinish(drop);
+        return 0;
+    }
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -555,6 +582,235 @@ static void close_settings(std::vector<GameEntry>& games) {
     logf(L"settings saved to %s", settings_path().c_str());
 }
 
+// --- Mods page (aki-roadmap#96): a game's mods folder ---------------------------
+
+static void release_mod_thumbs() {
+    for (auto& t : g_ui.modThumbs)
+        if (t.srv) t.srv->Release();
+    g_ui.modThumbs.clear();
+}
+
+static void refresh_mods(const std::vector<GameEntry>& games) {
+    release_mod_thumbs();
+    const GameEntry& g = games[g_ui.modsGame];
+    g_ui.modsDir = game_mods_dir(g);
+    // Bundled mods sit in assets\mods next to the exe (none known without one).
+    std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
+    g_ui.modItems = list_mods(g_ui.modsDir, bundled);
+    // Thumbnails go through a temp file: the texture loader reads files.
+    wchar_t tmpBuf[MAX_PATH]{};
+    GetTempPathW(MAX_PATH, tmpBuf);
+    std::filesystem::path tmp = std::filesystem::path(tmpBuf) / L"akilauncher-thumb.png";
+    for (const auto& m : g_ui.modItems) {
+        Texture t;
+        std::vector<uint8_t> png = read_mod_thumb(m);
+        if (!png.empty()) {
+            {
+                std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+                f.write((const char*)png.data(), (std::streamsize)png.size());
+            }
+            t = load_texture(g_device, tmp);
+        }
+        g_ui.modThumbs.push_back(t);
+    }
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec);
+}
+
+static void open_mods(const std::vector<GameEntry>& games, int index) {
+    g_ui.modsGame = index;
+    g_ui.modsNote.clear();
+    g_ui.modsRemove = -1;
+    refresh_mods(games);
+    g_ui.showMods = true;
+}
+
+static void close_mods() {
+    release_mod_thumbs();
+    g_ui.modItems.clear();
+    g_ui.showMods = false;
+}
+
+static void mods_note(const std::wstring& msg, bool ok) {
+    g_ui.modsNote = narrow(msg);
+    g_ui.modsNoteOk = ok;
+}
+
+static void install_into_mods(const std::vector<GameEntry>& games, const std::vector<std::filesystem::path>& srcs) {
+    const GameEntry& g = games[g_ui.modsGame];
+    std::wstring all;
+    bool allOk = true;
+    for (const auto& src : srcs) {
+        InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title);
+        allOk = allOk && r.ok;
+        if (!all.empty()) all += L"   |   ";
+        all += r.message;
+    }
+    refresh_mods(games);
+    mods_note(all + (allOk ? L". Start (or restart) the game to use it; turn mods on and off in its Mods menu." : L""),
+              allOk);
+    if (allOk) play_flip();
+}
+
+// Multi-select picker for mod files; empty on cancel.
+static std::vector<std::filesystem::path> pick_mod_files() {
+    std::vector<std::filesystem::path> out;
+    IFileOpenDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))))
+        return out;
+    COMDLG_FILTERSPEC types[] = {{L"Mods and texture packs (*.nrm, *.rtz, *.zip)", L"*.nrm;*.rtz;*.zip"},
+                                 {L"All files", L"*.*"}};
+    dlg->SetFileTypes(2, types);
+    DWORD opts = 0;
+    dlg->GetOptions(&opts);
+    dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM);
+    dlg->SetTitle(L"Install mods or texture packs");
+    if (SUCCEEDED(dlg->Show(g_hwnd))) {
+        IShellItemArray* items = nullptr;
+        if (SUCCEEDED(dlg->GetResults(&items))) {
+            DWORD n = 0;
+            items->GetCount(&n);
+            for (DWORD i = 0; i < n; ++i) {
+                IShellItem* it = nullptr;
+                if (SUCCEEDED(items->GetItemAt(i, &it))) {
+                    PWSTR psz = nullptr;
+                    if (SUCCEEDED(it->GetDisplayName(SIGDN_FILESYSPATH, &psz))) {
+                        out.emplace_back(psz);
+                        CoTaskMemFree(psz);
+                    }
+                    it->Release();
+                }
+            }
+            items->Release();
+        }
+    }
+    dlg->Release();
+    return out;
+}
+
+static std::filesystem::path pick_folder(const std::wstring& start);
+
+static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
+    ImGuiIO& io = ImGui::GetIO();
+    const GameEntry& g = games[g_ui.modsGame];
+    if ((ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) && !io.WantTextInput) {
+        close_mods();
+        return;
+    }
+    // A Remove from last frame: now, before this frame draws (and so holds) any thumbnail.
+    if (g_ui.modsRemove >= 0 && g_ui.modsRemove < (int)g_ui.modItems.size()) {
+        std::wstring err;
+        const ModItem& m = g_ui.modItems[g_ui.modsRemove];
+        std::wstring name = m.display_name();
+        if (remove_mod(m, &err)) mods_note(L"Removed " + name + L" (it is in the Recycle Bin)", true);
+        else mods_note(err, false);
+        refresh_mods(games);
+    }
+    g_ui.modsRemove = -1;
+
+    ImGui::PushFont(g_ui.fontHeader);
+    ImGui::SetCursorPosY(vh * 0.055f);
+    text_centered("M O D S");
+    ImGui::PopFont();
+    ImGui::PushFont(g_ui.fontBase);
+    text_centered_colored(palette::dim, narrow(g.title));
+    ImGui::PopFont();
+
+    float panelW = vw * 0.70f;
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
+    ImGui::BeginChild("##mods", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_None);
+    ImGui::PushFont(g_ui.fontBase);
+    if (ImGui::Button("Install files...")) {
+        auto files = pick_mod_files();
+        if (!files.empty()) install_into_mods(games, files);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Install a pack folder...")) {
+        std::filesystem::path dir = pick_folder(L"");
+        if (!dir.empty()) install_into_mods(games, {dir});
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Open mods folder")) {
+        std::error_code ec;
+        std::filesystem::create_directories(g_ui.modsDir, ec);
+        ShellExecuteW(nullptr, L"explore", g_ui.modsDir.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh")) refresh_mods(games);
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::TextColored(palette::faint, "%s   -   or drop .nrm / .rtz / .zip files or pack folders on this window",
+                       narrow(g_ui.modsDir.wstring()).c_str());
+    if (!g_ui.modsNote.empty()) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextColored(g_ui.modsNoteOk ? palette::ready : palette::error, "%s", g_ui.modsNote.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::PopFont();
+    ImGui::Separator();
+
+    if (g_ui.modItems.empty()) {
+        ImGui::TextColored(palette::dim, "No mods or texture packs installed for this game yet.");
+    }
+    float thumb = vh * 0.07f;
+    int removeIndex = -1;
+    for (int i = 0; i < (int)g_ui.modItems.size(); ++i) {
+        const ModItem& m = g_ui.modItems[i];
+        ImGui::PushID(i);
+        ImVec2 top = ImGui::GetCursorPos();
+        if (i < (int)g_ui.modThumbs.size() && g_ui.modThumbs[i].srv)
+            ImGui::Image((ImTextureID)g_ui.modThumbs[i].srv, ImVec2(thumb, thumb));
+        else
+            ImGui::Dummy(ImVec2(thumb, thumb));
+        ImGui::SetCursorPos(ImVec2(top.x + thumb + 14, top.y));
+        ImGui::BeginGroup();
+        std::string head = narrow(m.display_name());
+        if (!m.manifest.version.empty()) head += "  " + narrow(m.manifest.version);
+        ImGui::TextUnformatted(head.c_str());
+        ImGui::PushFont(g_ui.fontSmall);
+        std::string line = narrow(m.kind_text());
+        if (!m.manifest.authors.empty()) {
+            line += "  -  by ";
+            for (size_t a = 0; a < m.manifest.authors.size(); ++a)
+                line += (a ? ", " : "") + narrow(m.manifest.authors[a]);
+        }
+        if (m.manifest.present && m.manifest.gameId.empty() && m.textures) line += "  -  any game";
+        char size[48];
+        snprintf(size, sizeof(size), "  -  %.1f MB", m.bytes / 1048576.0);
+        line += size;
+        line += "  -  " + narrow(m.path.filename().wstring()) + (m.kind == ModKind::Folder ? "\\" : "");
+        ImGui::TextColored(palette::dim, "%s", line.c_str());
+        if (!m.manifest.description.empty()) {
+            ImGui::PushTextWrapPos(panelW - 140);
+            ImGui::TextColored(palette::faint, "%s", narrow(m.manifest.description).c_str());
+            ImGui::PopTextWrapPos();
+        }
+        if (!m.problem.empty()) ImGui::TextColored(palette::warn, "%s", narrow(m.problem).c_str());
+        if (!m.manifest.gameId.empty() && !g.modGameId.empty() && m.manifest.gameId != g.modGameId)
+            ImGui::TextColored(palette::warn, "made for %s, not this game", narrow(m.manifest.gameId).c_str());
+        ImGui::PopFont();
+        ImGui::EndGroup();
+        ImGui::SameLine(panelW - 120);
+        ImGui::PushFont(g_ui.fontSmall);
+        if (m.bundled) ImGui::TextColored(palette::faint, "comes with\nthe game");
+        else if (ImGui::SmallButton("Remove")) removeIndex = i;
+        ImGui::PopFont();
+        float bottom = top.y + thumb;
+        if (ImGui::GetCursorPosY() < bottom) ImGui::SetCursorPosY(bottom);
+        ImGui::Spacing();
+        ImGui::PopID();
+    }
+    g_ui.modsRemove = removeIndex;  // the thumbnails drawn above stay alive this frame
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::SetCursorPosY(vh * 0.92f);
+    text_centered_colored(palette::faint, g_ui.padInput ? "B Back      The game turns mods on and off and sets their order in its own Mods menu"
+                                                        : "Esc Back      The game turns mods on and off and sets their order in its own Mods menu");
+    ImGui::PopFont();
+}
+
 // Settings section: scan a ROM folder (aki-roadmap#26), results grouped by game.
 static void draw_rom_scan(std::vector<GameEntry>& games) {
     ImGui::TextColored(palette::accent, "ROM Folder");
@@ -857,6 +1113,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     if (pad || pad_held_mask()) g_ui.padInput = true;
     else if (keyboard_mouse_activity()) g_ui.padInput = false;
 
+    // ------------------------------------------------------------------ mods page
+    if (g_ui.showMods) {
+        draw_mods(games, pad);
+        ImGui::End();
+        return -1;
+    }
+
     // ------------------------------------------------------------------ settings screen
     if (g_ui.showSettings) {
         draw_settings(games, pad);
@@ -885,6 +1148,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         if (ImGui::IsKeyPressed(ImGuiKey_S) || (pad & XINPUT_GAMEPAD_Y)) {
             play_flip();
             open_settings(games);
+            ImGui::End();
+            return -1;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_M, false) || (pad & XINPUT_GAMEPAD_START)) {
+            play_flip();
+            open_mods(games, g_ui.selected);
             ImGui::End();
             return -1;
         }
@@ -1313,12 +1582,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     if (g_ui.padInput)
         text_centered_colored(palette::faint,
                               "D-Pad Browse      A Play      X Flip Box      "
-                              "Y Settings      In Game:  Hold " +
+                              "Y Settings      Start Mods      In Game:  Hold " +
                                   chord_to_string(settings().chordMask) + "  To Return");
     else
         text_centered_colored(palette::faint,
                               "Left/Right Browse      Enter Play      F Flip Box      "
-                              "S Settings      Esc Quit      In Game:  " +
+                              "S Settings      M Mods      Esc Quit      In Game:  " +
                                   hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
                                   "  To Return");
     ImGui::PopFont();
@@ -1438,6 +1707,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
+    DragAcceptFiles(hwnd, TRUE);  // drop mods / texture packs on the window (aki-roadmap#96)
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -1552,6 +1822,19 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                     g_session.statusNote = L"Install failed - " + st.error;
                 }
                 install_ack();
+            }
+        }
+
+        // --- files dropped on the window: install into the mods page's game (or the selected one) ---
+        if (!g_dropped.empty()) {
+            std::vector<std::filesystem::path> drops;
+            drops.swap(g_dropped);
+            if (g_session.active() || g_ui.showSettings || g_ui.insertIndex >= 0) {
+                logf(L"drop ignored: %zu item(s) while %s", drops.size(),
+                     g_session.active() ? L"a game runs" : g_ui.showSettings ? L"in Settings" : L"a game starts");
+            } else {
+                if (!g_ui.showMods) open_mods(games, g_ui.selected);
+                install_into_mods(games, drops);
             }
         }
 
@@ -1680,7 +1963,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // flows so held buttons don't drive focus mid-capture.
         {
             ImGuiIO& nio = ImGui::GetIO();
-            if (g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey)
+            if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods)
                 nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
             else
                 nio.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
@@ -1689,7 +1972,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (!g_session.active() && !g_ui.showSettings && g_ui.insertIndex < 0 &&
+        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && g_ui.insertIndex < 0 &&
             ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0)
             done = true;
 
@@ -1727,6 +2010,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         logf(L"launcher exiting with game still running; leaving it alone");
     }
     romscan_shutdown();  // a scan thread must not outlive its globals
+    release_mod_thumbs();
     // A build left behind would write into a pipe nobody reads: end it (its
     // build slot frees itself).
     if (rebuild_running()) {

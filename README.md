@@ -54,6 +54,7 @@ timing, and file-backed saves.
 | Enter, A | play / download / select ROM |
 | F, X | flip the box art |
 | U, RB | install an available update |
+| M, Start | the game's Mods page (install / remove mods and texture packs) |
 | S, Y | settings (Return to Launcher binding, per-game paths) |
 | F11, Alt+Enter | windowed / fullscreen |
 | Esc | quit |
@@ -71,6 +72,22 @@ empty `portable.txt` next to `AkiLauncher.exe` (like the game ports) to keep
 launcher hash-checks your pick against the known-good dump for each game and
 keeps a copy with the installed port. Nothing is downloaded from anywhere
 except the ports' own GitHub releases, which contain no game data.
+
+**How do I add mods and texture packs?** Select the game and press `M`
+(`Start` on a controller) for its Mods page. It lists what is in the game's
+mods folder: name, version, authors, type (code mod, texture pack or both)
+and thumbnail. *Install files...* takes `.nrm` mods, `.rtz` texture packs and
+`.zip` files (a texture pack zipped as is becomes an `.rtz`; a mod package
+installs the `.nrm`/`.rtz` files inside it). *Install a pack folder...* copies
+a texture-pack folder. You can also drop any of these on the launcher window.
+- A mod whose `mod.json` names another game is refused.
+- Replacing a file moves the old copy to the Recycle Bin, and *Remove* does
+  the same, so both can be undone.
+- Mods that come with the game can't be removed (the game copies them back on
+  its next start): turn them off in the game's own Mods menu, which is also
+  where you turn mods on and off and set their order.
+- The mods folder is `%LOCALAPPDATA%\<Game>Recompiled\mods\`, or `mods\` next
+  to the game's exe when it runs portable. *Open mods folder* opens it.
 
 **I have a folder full of ROMs. Can it find them?** Yes: Settings → ROM
 Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
