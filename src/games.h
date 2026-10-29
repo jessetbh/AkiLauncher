@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+struct JsonValue;
+
 struct GameEntry {
     std::wstring title;
     std::wstring releaseDate;  // display string, e.g. "December 2, 1997"
@@ -22,6 +24,8 @@ struct GameEntry {
                               // the ROM folder scan finds the game's dumps and hacks by it
     int romVersion = -1;      // the accepted dump's header version byte (0x3F; -1 = unknown)
     std::wstring modGameId;   // the port's mod_game_id: mod.json "game_id" of mods made for it
+    std::wstring baseId;      // a variant (e.g. a mod build) of this game id: its tile follows the base's
+    std::filesystem::path manifestPath;  // the aki-game.json it was discovered from ("" = games.json)
 
     // resolved by build_game_list
     std::filesystem::path repoPath;
@@ -42,8 +46,30 @@ std::filesystem::path detect_depot_root();
 std::filesystem::path app_root();
 // Where in-app installs land: env AKI_GAMES_ROOT, else app_root()\games.
 std::filesystem::path games_root();
-// Entries are ordered by original release date (the launcher shows them as-is).
+// The registry (aki-roadmap#24): assets\games.json next to the launcher if it
+// parses, else the copy built into the exe; then any recomp found through an
+// aki-game.json manifest (in a depot folder or an install folder) whose id is
+// new. Paths resolved for the depot and the in-app install dir. Ordered as the
+// file lists them (original release dates), discovered games after, variants
+// right after their base game.
 std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot);
+
+// The pieces, for tests and logging.
+const char* embedded_games_json();  // assets/games.json as built into the exe
+// Games from a games.json text; empty (with *err) if it isn't a valid registry.
+std::vector<GameEntry> registry_from_json(const std::string& text, std::wstring* err);
+// One game from a games.json entry or an aki-game.json manifest (same keys).
+bool game_from_json(const JsonValue& v, GameEntry* g, std::wstring* err);
+// The registry file's games, or the built-in ones when it is missing or invalid.
+std::vector<GameEntry> load_registry(const std::filesystem::path& file);
+// Adds games from <root>\<folder>\aki-game.json (one level down, each root),
+// skipping ids already present; a depot folder's name becomes its repo_dir.
+void discover_games(std::vector<GameEntry>& games, const std::filesystem::path& depotRoot,
+                    const std::filesystem::path& gamesRoot);
+// Fills repoPath / exePath / romPath / installDir / found flags (the depot
+// build first, else the in-app install).
+void resolve_game_paths(std::vector<GameEntry>& games, const std::filesystem::path& depotRoot,
+                        const std::filesystem::path& gamesRoot);
 
 // Where a game keeps its config, saves, mods and log: its working directory
 // (repoPath, where the launcher starts it) when that has portable.txt, as the

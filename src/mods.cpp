@@ -1,6 +1,7 @@
 #include "mods.h"
 
 #include "games.h"
+#include "json.h"
 #include "launch.h"
 
 #include <windows.h>
@@ -60,142 +61,21 @@ fs::path game_mods_dir(const GameEntry& g) { return game_data_dir(g) / L"mods"; 
 // mod.json
 // ---------------------------------------------------------------------------
 
-namespace {
-struct Json {
-    const std::string& s;
-    size_t i = 0;
-    bool ok = true;
-    int depth = 0;  // nesting cap: a hostile mod.json must not overflow the stack
-
-    void ws() {
-        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
-    }
-    bool eat(char c) {
-        ws();
-        if (i < s.size() && s[i] == c) {
-            ++i;
-            return true;
-        }
-        return false;
-    }
-    static void put_utf8(std::string& o, unsigned cp) {
-        if (cp < 0x80) o += (char)cp;
-        else if (cp < 0x800) { o += (char)(0xC0 | (cp >> 6)); o += (char)(0x80 | (cp & 0x3F)); }
-        else if (cp < 0x10000) {
-            o += (char)(0xE0 | (cp >> 12)); o += (char)(0x80 | ((cp >> 6) & 0x3F)); o += (char)(0x80 | (cp & 0x3F));
-        } else {
-            o += (char)(0xF0 | (cp >> 18)); o += (char)(0x80 | ((cp >> 12) & 0x3F));
-            o += (char)(0x80 | ((cp >> 6) & 0x3F)); o += (char)(0x80 | (cp & 0x3F));
-        }
-    }
-    unsigned hex4() {
-        if (i + 4 > s.size()) { ok = false; return 0; }
-        unsigned v = 0;
-        for (int k = 0; k < 4; ++k) {
-            char c = s[i++];
-            v <<= 4;
-            if (c >= '0' && c <= '9') v |= c - '0';
-            else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
-            else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
-            else ok = false;
-        }
-        return v;
-    }
-    std::string str() {
-        std::string o;
-        if (!eat('"')) { ok = false; return o; }
-        while (i < s.size() && s[i] != '"') {
-            char c = s[i++];
-            if (c != '\\') { o += c; continue; }
-            if (i >= s.size()) { ok = false; break; }
-            char e = s[i++];
-            switch (e) {
-                case 'n': o += '\n'; break;
-                case 't': o += '\t'; break;
-                case 'r': o += '\r'; break;
-                case 'b': o += '\b'; break;
-                case 'f': o += '\f'; break;
-                case 'u': {
-                    unsigned cp = hex4();
-                    if (cp >= 0xD800 && cp < 0xDC00 && i + 1 < s.size() && s[i] == '\\' && s[i + 1] == 'u') {
-                        i += 2;
-                        unsigned lo = hex4();
-                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                    }
-                    put_utf8(o, cp);
-                    break;
-                }
-                default: o += e;  // \" \\ \/
-            }
-        }
-        if (i >= s.size()) ok = false;
-        else ++i;
-        return o;
-    }
-    void skip() {  // any value
-        ws();
-        if (i >= s.size()) { ok = false; return; }
-        char c = s[i];
-        if (c == '"') { str(); return; }
-        if (c == '{' || c == '[') {
-            if (++depth > 64) { ok = false; return; }
-            char close = c == '{' ? '}' : ']';
-            ++i;
-            if (!eat(close)) {
-                do {
-                    if (close == '}') { str(); if (!eat(':')) { ok = false; break; } }
-                    skip();
-                } while (ok && eat(','));
-                if (ok && !eat(close)) ok = false;
-            }
-            --depth;
-            return;
-        }
-        size_t start = i;
-        while (i < s.size() && s[i] != ',' && s[i] != '}' && s[i] != ']' && !isspace((unsigned char)s[i])) ++i;
-        if (i == start) ok = false;
-    }
-};
-}  // namespace
-
 ModManifest parse_mod_manifest(const std::string& raw) {
     ModManifest m;
     m.present = true;
-    std::string text = raw.rfind("\xEF\xBB\xBF", 0) == 0 ? raw.substr(3) : raw;
-    Json j{text};
-    if (!j.eat('{')) return m;
-    if (!j.eat('}')) {
-        do {
-            std::string key = j.str();
-            if (!j.ok || !j.eat(':')) return m;
-            j.ws();
-            bool isStr = j.i < text.size() && text[j.i] == '"';
-            if (isStr && (key == "id" || key == "version" || key == "display_name" || key == "game_id" ||
-                          key == "description" || key == "short_description")) {
-                std::wstring v = u8w(j.str());
-                if (key == "id") m.id = v;
-                else if (key == "version") m.version = v;
-                else if (key == "display_name") m.name = v;
-                else if (key == "game_id") m.gameId = v;
-                else if (key == "short_description" || m.description.empty()) m.description = v;
-            } else if (key == "authors" && j.i < text.size() && text[j.i] == '[') {
-                j.eat('[');
-                if (!j.eat(']')) {
-                    do {
-                        j.ws();
-                        if (j.i < text.size() && text[j.i] == '"') m.authors.push_back(u8w(j.str()));
-                        else j.skip();
-                    } while (j.ok && j.eat(','));
-                    if (!j.eat(']')) return m;
-                }
-            } else {
-                j.skip();
-            }
-            if (!j.ok) return m;
-        } while (j.eat(','));
-        if (!j.eat('}')) return m;
-    }
-    m.valid = j.ok;
+    JsonValue j;
+    if (!json_parse(raw, &j) || !j.is(JsonValue::Type::Object)) return m;
+    m.valid = true;
+    m.id = j.wstr("id");
+    m.version = j.wstr("version");
+    m.name = j.wstr("display_name");
+    m.gameId = j.wstr("game_id");
+    m.description = j.wstr("short_description");
+    if (m.description.empty()) m.description = j.wstr("description");
+    if (const JsonValue* a = j.get("authors"); a && a->is(JsonValue::Type::Array))
+        for (const auto& v : a->items)
+            if (v.is(JsonValue::Type::String)) m.authors.push_back(json_utf8_to_wide(v.s));
     return m;
 }
 

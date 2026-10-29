@@ -6,6 +6,7 @@
 #
 # Layout inside the zip (flat, like the game zips):
 #   AkiLauncher.exe          self-contained (static CRT)
+#   assets\games.json        the game registry (aki-roadmap#24; edit to add or change games)
 #   assets\boxart\           box/cart art (shipped - owner decision 2026-07-16)
 #   assets\sounds\           optional replacement menu sounds
 #   COPYING README.txt
@@ -38,6 +39,7 @@ if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force "$stage\assets\boxart" | Out-Null
 
 Copy-Item $exe $stage
+Copy-Item (Join-Path $repo "assets\games.json") "$stage\assets"  # the game registry (aki-roadmap#24)
 Copy-Item (Join-Path $repo "assets\boxart\README.md") "$stage\assets\boxart"
 Copy-Item (Join-Path $repo "assets\boxart\*.png") "$stage\assets\boxart" -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $repo "assets\boxart\*.jpg") "$stage\assets\boxart" -ErrorAction SilentlyContinue

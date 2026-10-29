@@ -2,7 +2,11 @@
 
 #include <windows.h>
 
+#include <algorithm>
+#include <cwctype>
 #include <fstream>
+
+#include "json.h"
 
 #include "launch.h"  // logf
 
@@ -113,73 +117,178 @@ int make_game_portable(const GameEntry& g, const fs::path& appDataDir) {
     return marker ? copied : -1;
 }
 
-std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
-    // Ordered by original release date. JP-only titles carry their Japanese
-    // release date; the rest are North America dates.
+// assets/games.json, built in: CMake writes its bytes (and a closing 0) to games_json.inc.
+static const char kEmbeddedGamesJson[] = {
+#include "games_json.inc"
+};
+
+const char* embedded_games_json() { return kEmbeddedGamesJson; }
+
+bool game_from_json(const JsonValue& v, GameEntry* g, std::wstring* err) {
+    if (!v.is(JsonValue::Type::Object)) {
+        *err = L"a game entry is not an object";
+        return false;
+    }
+    GameEntry e;
+    e.artKey = v.wstr("id");
+    e.title = v.wstr("title");
+    e.exeRel = v.wstr("exe");
+    if (e.artKey.empty() || e.title.empty() || e.exeRel.empty()) {
+        *err = L"a game needs \"id\", \"title\" and \"exe\" (" + (e.artKey.empty() ? e.title : e.artKey) + L")";
+        return false;
+    }
+    // The id names folders (games\<id>) and art files: it must start with a letter or digit ("." / ".." would
+    // point an install at the launcher's own folder).
+    if (!iswalnum(e.artKey[0])) {
+        *err = L"game id \"" + e.artKey + L"\" must start with a letter or digit";
+        return false;
+    }
+    for (wchar_t c : e.artKey)
+        if (!(iswalnum(c) || c == L'_' || c == L'-' || c == L'.')) {
+            *err = L"game id \"" + e.artKey + L"\" may use letters, digits, '_', '-' and '.' only";
+            return false;
+        }
+    e.releaseDate = v.wstr("release_date");
+    e.region = v.wstr("region");
+    e.repoDir = v.wstr("repo_dir", e.artKey);
+    e.romFile = v.wstr("rom_file", e.artKey + L".z64");
+    e.forceBorderless = v.boolean("force_borderless", true);
+    e.comingSoon = v.boolean("coming_soon", false);
+    e.githubRepo = v.wstr("github_repo");
+    e.romSha1 = v.wstr("rom_sha1");
+    e.romNote = v.wstr("rom_note");
+    e.romCode = v.wstr("rom_code");
+    e.romVersion = v.integer("rom_version", -1);
+    e.modGameId = v.wstr("mod_game_id");
+    e.baseId = v.wstr("base");
+    *g = std::move(e);
+    return true;
+}
+
+std::vector<GameEntry> registry_from_json(const std::string& text, std::wstring* err) {
+    JsonValue root;
+    std::string perr;
+    if (!json_parse(text, &root, &perr)) {
+        *err = L"not valid JSON: " + json_utf8_to_wide(perr);
+        return {};
+    }
+    const JsonValue* list = root.get("games");
+    if (!list || !list->is(JsonValue::Type::Array) || list->items.empty()) {
+        *err = L"no \"games\" list";
+        return {};
+    }
     std::vector<GameEntry> games;
+    for (const auto& item : list->items) {
+        GameEntry g;
+        if (!game_from_json(item, &g, err)) return {};
+        for (const auto& o : games)
+            if (o.artKey == g.artKey) {
+                *err = L"game id \"" + g.artKey + L"\" is listed twice";
+                return {};
+            }
+        games.push_back(std::move(g));
+    }
+    return games;
+}
 
-    games.push_back({ L"WCW vs. nWo World Tour", L"December 2, 1997", L"North America",
-                      L"WcwNwoWorldTour", L"build-msvc\\WCWRecompiled.exe", L"wcw.z64",
-                      L"worldtour", true, false });
-    games.back().githubRepo = L"jessetbh/WCWvsNWOWorldTourRecomp";
-    games.back().romSha1 = L"5AD2D8359058C8BB71F08E3D3433B7A50D3BB645";
-    games.back().romCode = L"NWNE";
-    games.back().modGameId = L"wcwnwoworldtour";
-    games.back().romVersion = 0;
-    games.back().romNote = L"North American (NTSC-U) release";
+static std::string read_file(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
 
-    games.push_back({ L"Virtual Pro Wrestling 64", L"December 19, 1997", L"Japan",
-                      L"Vpw64Recomp", L"build-msvc\\Vpw64Recompiled.exe", L"vpw64.z64",
-                      L"vpw64", true, false });
-    games.back().githubRepo = L"jessetbh/VPW64Recomp";
-    games.back().romSha1 = L"F9E9FA2ED819C3A39DB5CB6AFECA186F021DB5ED";
-    games.back().romCode = L"NVPJ";
-    games.back().modGameId = L"vpw64";
-    games.back().romVersion = 0;
-    games.back().romNote = L"Japanese release (the game was Japan-only)";
-
-    games.push_back({ L"WCW/nWo Revenge", L"October 26, 1998", L"North America",
-                      L"WcwRevengeRecomp", L"build-msvc\\RevengeRecompiled.exe", L"revenge.z64",
-                      L"revenge", true, false });
-    games.back().githubRepo = L"jessetbh/WCWnWoRevengeRecomp";
-    games.back().romSha1 = L"E1711A2511394B9357B5F1AC8CA5CC17BD674836";
-    games.back().romCode = L"NW2E";
-    games.back().modGameId = L"wcwnworevenge";
-    games.back().romVersion = 0;
-    games.back().romNote = L"North American (NTSC-U) release";
-
-    games.push_back({ L"WWF WrestleMania 2000", L"October 31, 1999", L"North America",
-                      L"Wm2kRecomp", L"build-msvc\\Wm2kRecompiled.exe", L"wm2k.z64",
-                      L"wm2k", true, false });
-    games.back().githubRepo = L"jessetbh/WWFWrestleMania2000Recomp";
-    games.back().romSha1 = L"D7D1FAD473FEF9B61FE5F8273C975EE7C603A51B";
-    games.back().romCode = L"NWXE";
-    games.back().modGameId = L"wwfwm2k";
-    games.back().romVersion = 0;
-    games.back().romNote = L"North American (NTSC-U) release";
-
-    games.push_back({ L"Virtual Pro Wrestling 2", L"January 28, 2000", L"Japan",
-                      L"Vpw2Recomp", L"build-msvc\\Vpw2Recompiled.exe", L"vpw2.z64",
-                      L"vpw2", true, false });
-    games.back().githubRepo = L"jessetbh/VPW2Recomp";
-    games.back().romSha1 = L"82DD25A044689EAB57AB362FE10C0DA6388C217A";
-    games.back().romCode = L"NA2J";
-    games.back().modGameId = L"vpw2";
-    games.back().romVersion = 0;
-    games.back().romNote = L"Japanese release (Japan-only; fan-translation patches won't match)";
-
-    games.push_back({ L"WWF No Mercy", L"November 17, 2000", L"North America",
-                      L"NoMercyRecomp", L"build-msvc\\NoMercyRecompiled.exe", L"nomercy.z64",
-                      L"nomercy", true, false });
-    games.back().githubRepo = L"jessetbh/WWFNoMercyRecomp";
-    games.back().romSha1 = L"91CEE3D096F4A76644D8B35B9AEAD6448909ABD1";
-    games.back().romCode = L"NW4E";
-    games.back().modGameId = L"wwfnomercy";
-    games.back().romVersion = 1;  // Rev 1
-    games.back().romNote = L"North American (NTSC-U) REV 1 release - the later revision; Rev 0 won't match";
-
+std::vector<GameEntry> load_registry(const fs::path& file) {
     std::error_code ec;
-    fs::path gamesDir = games_root();
+    if (!file.empty() && fs::is_regular_file(file, ec)) {
+        std::wstring err;
+        std::vector<GameEntry> games = registry_from_json(read_file(file), &err);
+        if (!games.empty()) return games;
+        logf(L"games registry %s ignored (%s): using the built-in list", file.c_str(), err.c_str());
+    }
+    std::wstring err;
+    std::vector<GameEntry> games = registry_from_json(kEmbeddedGamesJson, &err);
+    if (games.empty()) logf(L"built-in games registry is broken: %s", err.c_str());
+    return games;
+}
+
+// Puts each variant right after its base game (and that base's earlier
+// variants); a variant of a variant follows that one.
+static void place_with_variants(const std::vector<GameEntry>& games, size_t i, std::vector<bool>& placed,
+                                std::vector<GameEntry>& out) {
+    out.push_back(games[i]);
+    placed[i] = true;
+    for (size_t k = 0; k < games.size(); ++k)
+        if (!placed[k] && games[k].baseId == games[i].artKey) place_with_variants(games, k, placed, out);
+}
+
+static void order_variants(std::vector<GameEntry>& games) {
+    std::vector<GameEntry> out;
+    std::vector<bool> placed(games.size(), false);
+    for (size_t i = 0; i < games.size(); ++i)
+        if (!placed[i] && games[i].baseId.empty()) place_with_variants(games, i, placed, out);
+    for (size_t i = 0; i < games.size(); ++i)  // variants whose base isn't listed (or a cycle)
+        if (!placed[i]) place_with_variants(games, i, placed, out);
+    games.swap(out);
+}
+
+void discover_games(std::vector<GameEntry>& games, const fs::path& depotRoot, const fs::path& gamesRoot) {
+    std::error_code ec;
+    std::vector<std::pair<fs::path, bool>> roots;  // (root, is the depot)
+    if (!depotRoot.empty()) roots.push_back({depotRoot, true});
+    if (!gamesRoot.empty() && gamesRoot != depotRoot) roots.push_back({gamesRoot, false});
+    std::vector<GameEntry> found;
+    for (const auto& [root, isDepot] : roots) {
+        std::vector<fs::path> dirs;
+        for (fs::directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code fec;
+            if (it->is_directory(fec) && fs::is_regular_file(it->path() / L"aki-game.json", fec))
+                dirs.push_back(it->path());
+        }
+        ec.clear();
+        std::sort(dirs.begin(), dirs.end());
+        for (const auto& d : dirs) {
+            fs::path manifest = d / L"aki-game.json";
+            JsonValue v;
+            std::string perr;
+            std::wstring err;
+            GameEntry g;
+            if (!json_parse(read_file(manifest), &v, &perr)) {
+                logf(L"discovery: %s is not valid JSON (%S)", manifest.c_str(), perr.c_str());
+                continue;
+            }
+            if (!game_from_json(v, &g, &err)) {
+                logf(L"discovery: %s skipped: %s", manifest.c_str(), err.c_str());
+                continue;
+            }
+            bool known = false;
+            for (const auto& o : games) known = known || o.artKey == g.artKey;
+            for (const auto& o : found) known = known || o.artKey == g.artKey;
+            if (known) continue;  // additive: the registry (or an earlier folder) has it
+            if (isDepot) {
+                g.repoDir = d.filename().wstring();  // a clone or worktree under any name
+            } else if (d.filename().wstring() != g.artKey) {
+                logf(L"discovery: %s skipped: an install folder must be named after its id (%s)", manifest.c_str(),
+                     g.artKey.c_str());
+                continue;
+            }
+            g.manifestPath = manifest;
+            logf(L"discovery: %s (%s) from %s", g.title.c_str(), g.artKey.c_str(), manifest.c_str());
+            found.push_back(std::move(g));
+        }
+    }
+    for (auto& g : found) games.push_back(std::move(g));
+    order_variants(games);
+}
+
+std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
+    std::vector<GameEntry> games = load_registry(app_root() / L"assets" / L"games.json");
+    discover_games(games, depotRoot, games_root());
+    resolve_game_paths(games, depotRoot, games_root());
+    return games;
+}
+
+void resolve_game_paths(std::vector<GameEntry>& games, const fs::path& depotRoot, const fs::path& gamesDir) {
+    std::error_code ec;
     for (auto& g : games) {
         g.installDir = gamesDir / g.artKey;
         g.repoPath = depotRoot / g.repoDir;
@@ -216,5 +325,4 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
             g.installedTag = w;
         }
     }
-    return games;
 }
