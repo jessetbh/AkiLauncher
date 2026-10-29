@@ -34,6 +34,7 @@ struct Settings {
     int winX = 0, winY = 0, winW = 0, winH = 0;  // last windowed placement (0x0 = unset)
     bool devMode = false;  // dev_mode=1: developer actions (Rebuild game); not in the settings UI
     std::wstring romScanDir;  // last folder the ROM scan looked in
+    bool portableGames = true;  // portable_games=0: a portable launcher leaves its games' data in AppData
     std::map<std::wstring, GameOverride> overrides;
     std::map<std::wstring, GameStats> stats;
 };
@@ -44,6 +45,8 @@ Settings& settings();
 void settings_load();
 void settings_save();
 std::filesystem::path settings_path();
+// The launcher itself runs portable (portable.txt in the cwd or next to the exe).
+bool launcher_portable();
 
 std::string chord_to_string(WORD mask);
 std::string hotkey_to_string(UINT mods, UINT vk);

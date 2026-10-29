@@ -54,15 +54,7 @@ static std::wstring lower(std::wstring s) {
 // Where the mods are
 // ---------------------------------------------------------------------------
 
-fs::path game_mods_dir(const GameEntry& g) {
-    std::error_code ec;
-    fs::path exeDir = g.exePath.parent_path();
-    if (!exeDir.empty() && fs::exists(exeDir / L"portable.txt", ec)) return exeDir / L"mods";
-    wchar_t lad[MAX_PATH]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
-    std::wstring stem = fs::path(g.exeRel).stem().wstring();
-    return fs::path(lad) / stem / L"mods";
-}
+fs::path game_mods_dir(const GameEntry& g) { return game_data_dir(g) / L"mods"; }
 
 // ---------------------------------------------------------------------------
 // mod.json

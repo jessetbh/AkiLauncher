@@ -44,3 +44,21 @@ std::filesystem::path app_root();
 std::filesystem::path games_root();
 // Entries are ordered by original release date (the launcher shows them as-is).
 std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot);
+
+// Where a game keeps its config, saves, mods and log: its working directory
+// (repoPath, where the launcher starts it) when that has portable.txt, as the
+// ports check it (recompui get_app_folder_path); else %LOCALAPPDATA%\<exe stem>.
+std::filesystem::path game_data_dir(const GameEntry& g);
+bool game_is_portable(const GameEntry& g);
+
+// aki-roadmap#14: a portable launcher starts the games it installed itself
+// (installDir, under games_root()) portable too, so everything stays in the
+// launcher's folder. Depot checkouts are never changed (their portable.txt is
+// the developer's call). True when g qualifies and isn't portable yet.
+bool wants_portable_game(const GameEntry& g, bool launcherPortable, bool portableGames);
+// Writes portable.txt in g's working directory and copies, once, what the game
+// kept under appDataDir (config, saves, mods; not logs or texture dumps) into
+// it where nothing of that name exists yet; portable.txt is written last, only
+// when every copy worked. Returns how many files it copied, or -1 (not made
+// portable: the next start tries again).
+int make_game_portable(const GameEntry& g, const std::filesystem::path& appDataDir);
