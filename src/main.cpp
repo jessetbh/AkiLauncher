@@ -1283,6 +1283,7 @@ static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
 
 // --- History Tour (aki-roadmap#23) -------------------------------------------
 
+// The page on the tour's next stop (the last one once it's complete).
 static void open_tour() {
     std::wstring source, err;
     g_ui.tourOk = load_tour(app_root(), &g_ui.tour, &source, &err);
@@ -1343,6 +1344,7 @@ static int draw_tour(std::vector<GameEntry>& games, WORD pad) {
         ImGui::PushID(i);
         if (ImGui::Selectable(line.c_str(), i == g_ui.tourSel)) g_ui.tourSel = i;
         if (i == g_ui.tourSel && ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
+        else if (ImGui::IsItemFocused()) g_ui.tourSel = i;  // the D-pad moves the selection, so Start plays what's shown
         ImGui::PopID();
     }
     ImGui::Separator();
@@ -1366,10 +1368,13 @@ static int draw_tour(std::vector<GameEntry>& games, WORD pad) {
         QuickMatchMod mod;
         std::map<std::string, std::string> values;
         static std::mt19937 rng{std::random_device{}()};
-        if (gameIndex < 0) why = widen(s.game) + L" isn't one of this launcher's games";
+        if (g_ui.tourSel > next)
+            why = L"the tour goes in order: play stop " + std::to_wstring(next + 1) + L" first (done stops can be replayed)";
+        else if (gameIndex < 0) why = widen(s.game) + L" isn't one of this launcher's games";
         else if (!games[gameIndex].launchable()) why = games[gameIndex].title + L" isn't set up yet (it needs its exe and ROM)";
         else if (game_busy(gameIndex)) why = L"wait for the install or rebuild to finish";
-        else if (game_quickmatch(games[gameIndex], &mod, &why) &&
+        else if (carry_portable(games[gameIndex]);  // first: the mods folder the mod lookup reads
+                 game_quickmatch(games[gameIndex], &mod, &why) &&
                  resolve_quickmatch(mod, tour_stop_picks(s), rng, &values, &why)) {
             logf(L"history tour: stop %d (%s) in %s", g_ui.tourSel + 1, widen(s.title).c_str(), games[gameIndex].title.c_str());
             g_ui.qm = mod;
@@ -2908,15 +2913,16 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             }
         }
         // A History Tour stop's game closed: the tour moves on and its page comes back.
+        // Only a stop that ran and ended normally counts: a crash (its panel stays in front), a forced close or a
+        // game whose window never came up leaves the tour where it was. Replaying a done stop doesn't move it.
         if (g_ui.tourRunning >= 0 && !g_session.active()) {
-            if (settings().tourStop < g_ui.tourRunning + 1) {
+            bool played = g_session.runningTick != 0 && !g_session.wasTerminated && g_session.logTail.empty();
+            if (played && g_ui.tourRunning == settings().tourStop) {
                 settings().tourStop = g_ui.tourRunning + 1;
                 settings_save();
             }
-            int done = g_ui.tourRunning;
             g_ui.tourRunning = -1;
-            open_tour();
-            if (g_ui.tourOk) g_ui.tourSel = done + 1 < (int)g_ui.tour.stops.size() ? done + 1 : done;
+            if (played) open_tour();  // on the next stop
         }
         // A quick match's run is over (or never started): the player's mod settings come back.
         if (!g_qmRunDir.empty() && !g_session.active()) {

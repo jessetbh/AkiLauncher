@@ -70,7 +70,8 @@ static void test_parse() {
     CHECK(t.stops[0].blurb.size() == 1 && tour_stop_picks(t.stops[0]).at("match") == "m");
 
     const char* bad[] = {
-        R"({"stops":[]})",                                                           // no name
+        R"({"stops":[{"year":2000,"title":"T","game":"g","venue":"v","blurb":["x"]}]})",  // no name
+        R"({"name":"","stops":[{"year":2000,"title":"T","game":"g","venue":"v","blurb":["x"]}]})",
         R"({"name":"N","stops":[]})",                                                // no stops
         R"({"name":"N"})",
         "[1]",

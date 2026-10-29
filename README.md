@@ -72,7 +72,8 @@ timing, and file-backed saves.
 **What is the History Tour?** A list of stops, walked in order. Each stop has a year, a title, a two-line blurb, and a
 game with a Quick match venue and match set. **Play this stop** launches it through Quick match, with the same
 one-run-only mod settings. When the game closes, the tour marks the stop done (`tour_stop` in the launcher's settings),
-and its page comes back on the next stop. **Start the tour over** resets it. The built-in tour (`assets/tour.json`) has
+and its page comes back on the next stop. A crash or a forced close doesn't count. Stops go in order: the next one
+plays, done ones can be replayed, later ones wait. **Start the tour over** resets it. The built-in tour (`assets/tour.json`) has
 five No Mercy stops from WWF's 2000 pay-per-views. The matches are the game's own CPU-vs-CPU demo matches in that venue,
 so the wrestlers aren't the real card's yet. To write your own, put a `tour.json` next to the launcher; it replaces the
 built-in one:
