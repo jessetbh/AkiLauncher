@@ -44,7 +44,7 @@ static void test_args() {
     CHECK(!parse_shot_args({L"--game", L"nomercy"}, &r, &err));  // --game without a shot
     CHECK(!parse_shot_args({L"--demo"}, &r, &err));
     CHECK(!parse_shot_args({L"--shot", L"home", L"a.png", L"--game"}, &r, &err));
-    CHECK(r.width == 1600 && r.height == 900);  // the default frame
+    CHECK(parse_shot_args({L"--shot-all", L"d"}, &r, &err) && r.width == 1600 && r.height == 900);  // the default frame
     CHECK(parse_shot_args({L"--shot-all", L"d", L"--size", L"3840x2160"}, &r, &err) && r.width == 3840 && r.height == 2160);
     CHECK(!parse_shot_args({L"--shot-all", L"d", L"--size", L"3840"}, &r, &err));
     CHECK(!parse_shot_args({L"--shot-all", L"d", L"--size", L"3840x2160x2"}, &r, &err));

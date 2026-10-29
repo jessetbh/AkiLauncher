@@ -443,6 +443,9 @@ static void set_launcher_windowed(bool windowed) {
     logf(L"window mode -> %s", windowed ? L"windowed" : L"fullscreen");
 }
 
+// Sizes given in pixels for a 900-pixel-high UI, at the current one (fonts and style follow the same scale).
+static float ui_px(float px) { return px * (g_fontsH > 0 ? g_fontsH / 900.0f : 1.0f); }
+
 // A page's content column width: a share of the window, but no wider than maxAspect x its height, so forms stay
 // a readable width on wide and ultrawide screens. Pages centre it.
 static float page_column(float vw, float vh, float share, float maxAspect) {
@@ -795,7 +798,7 @@ static void draw_model_packs(const GameEntry& g, float panelW, float thumb) {
         } else {
             ImGui::Dummy(ImVec2(thumb, thumb));
         }
-        ImGui::SetCursorPos(ImVec2(top.x + thumb * 2 + 14, top.y));
+        ImGui::SetCursorPos(ImVec2(top.x + thumb * 2 + ui_px(14), top.y));
         ImGui::BeginGroup();
         ImGui::TextUnformatted((p.name.empty() ? p.id : p.name).c_str());
         ImGui::PushFont(g_ui.fontSmall);
@@ -1117,6 +1120,12 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         ImGui::TextColored(palette::dim, "No mods or texture packs installed for this game yet.");
     }
     float thumb = vh * 0.07f;
+    // The right-hand column (Remove, or "comes with the game"): as wide as its text at this size, plus the scrollbar.
+    ImGui::PushFont(g_ui.fontSmall);
+    const ImGuiStyle& st = ImGui::GetStyle();
+    float rightW = fmaxf(ImGui::CalcTextSize("comes with").x, ImGui::CalcTextSize("Remove").x + st.FramePadding.x * 2) +
+                   st.ScrollbarSize + st.ItemSpacing.x;
+    ImGui::PopFont();
     int removeIndex = -1;
     for (int i = 0; i < (int)g_ui.modItems.size(); ++i) {
         const ModItem& m = g_ui.modItems[i];
@@ -1126,7 +1135,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
             ImGui::Image((ImTextureID)g_ui.modThumbs[i].srv, ImVec2(thumb, thumb));
         else
             ImGui::Dummy(ImVec2(thumb, thumb));
-        ImGui::SetCursorPos(ImVec2(top.x + thumb + 14, top.y));
+        ImGui::SetCursorPos(ImVec2(top.x + thumb + ui_px(14), top.y));
         ImGui::BeginGroup();
         std::string head = narrow(m.display_name());
         if (!m.manifest.version.empty()) head += "  " + narrow(m.manifest.version);
@@ -1145,7 +1154,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         line += "  -  " + narrow(m.path.filename().wstring()) + (m.kind == ModKind::Folder ? "\\" : "");
         ImGui::TextColored(palette::dim, "%s", line.c_str());
         if (!m.manifest.description.empty()) {
-            ImGui::PushTextWrapPos(panelW - 140);
+            ImGui::PushTextWrapPos(panelW - rightW - ui_px(20));
             ImGui::TextColored(palette::faint, "%s", narrow(m.manifest.description).c_str());
             ImGui::PopTextWrapPos();
         }
@@ -1154,7 +1163,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
             ImGui::TextColored(palette::warn, "made for %s, not this game", narrow(m.manifest.gameId).c_str());
         ImGui::PopFont();
         ImGui::EndGroup();
-        ImGui::SameLine(panelW - 120);
+        ImGui::SameLine(panelW - rightW);
         ImGui::PushFont(g_ui.fontSmall);
         if (m.bundled) ImGui::TextColored(palette::faint, "comes with\nthe game");
         else if (ImGui::SmallButton("Remove")) removeIndex = i;
@@ -2163,7 +2172,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             ImVec2 rsz = f->CalcTextSizeA(f->FontSize, FLT_MAX, 0, ribbon);
             ImVec2 rp(p0.x + (drawW - rsz.x) * 0.5f, p1.y - h * 0.5f - rsz.y * 0.5f);
             dl->AddRectFilled(ImVec2(rp.x - 10, rp.y - 4), ImVec2(rp.x + rsz.x + 10, rp.y + rsz.y + 4),
-                              IM_COL32(10, 10, 14, 215), 4.0f);
+                              IM_COL32(10, 10, 14, 215), ui_px(4));
             dl->AddText(f, f->FontSize, rp, IM_COL32(235, 200, 120, 235), ribbon);
         }
 
@@ -2421,8 +2430,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         float py0 = vh * 0.615f, py1 = vh * 0.935f;
         ImVec2 p0(vp->WorkPos.x + px0, vp->WorkPos.y + py0);
         ImVec2 p1(vp->WorkPos.x + px1, vp->WorkPos.y + py1);
-        dl->AddRectFilled(p0, p1, IM_COL32(16, 12, 14, 246), 10.0f);
-        dl->AddRect(p0, p1, IM_COL32(180, 80, 70, 200), 10.0f, 0, 2.0f);
+        dl->AddRectFilled(p0, p1, IM_COL32(16, 12, 14, 246), ui_px(10));
+        dl->AddRect(p0, p1, IM_COL32(180, 80, 70, 200), ui_px(10), 0, ui_px(2));
         ImGui::SetCursorPos(ImVec2(px0 + 24, py0 + 16));
         ImGui::PushFont(g_ui.fontBase);
         ImGui::TextColored(palette::error, "%s", narrow(g_session.statusNote).c_str());
@@ -2431,7 +2440,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::SetCursorPosX(px0 + 24);
         ImGui::TextColored(palette::faint, "%s",
                            narrow(g_session.portLogPath.wstring()).c_str());
-        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::Dummy(ImVec2(0, ui_px(6)));
         for (const auto& line : g_session.logTail) {
             ImGui::SetCursorPosX(px0 + 24);
             ImGui::TextColored(palette::dim, "%s", line.c_str());
@@ -2448,7 +2457,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImVec2 p1(vp->WorkPos.x + px1, vp->WorkPos.y + py1);
         bool running = rb.phase == RebuildPhase::Running;
         bool good = rb.phase == RebuildPhase::Done;
-        dl->AddRectFilled(p0, p1, IM_COL32(12, 14, 18, 246), 10.0f);
+        dl->AddRectFilled(p0, p1, IM_COL32(12, 14, 18, 246), ui_px(10));
         dl->AddRect(p0, p1, running ? IM_COL32(250, 199, 72, 160)
                             : good  ? IM_COL32(110, 200, 120, 200)
                                     : IM_COL32(180, 80, 70, 200),
@@ -2475,7 +2484,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::TextColored(running ? palette::accent : good ? palette::ready : palette::error, "%s", head);
         ImGui::PopFont();
         ImGui::PushFont(g_ui.fontSmall);
-        ImGui::Dummy(ImVec2(0, 6));
+        ImGui::Dummy(ImVec2(0, ui_px(6)));
         // As many of the last lines as fit above the hint line.
         float lineH = ImGui::GetTextLineHeightWithSpacing();
         float room = (py1 - ImGui::GetFontSize() * 2.4f) - ImGui::GetCursorPosY();
