@@ -3,6 +3,7 @@
 #include <d3d11.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <tlhelp32.h>
 #include <xinput.h>
 
 #include <cmath>
@@ -175,6 +176,8 @@ struct UiState {
     std::string qmWhy;        // why there is no quick match for this game
     std::vector<int> qmPick;  // per qm.options: the choice (randomOk options: 0 = Random, then the choices)
     std::string quickNote;
+    bool qmLaunch = false;    // the launch draw_ui returns is a quick match, with these values
+    std::map<std::string, std::string> qmValues;
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
@@ -1101,6 +1104,33 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
 
 // --- Quick match (aki-roadmap#22) --------------------------------------------
 
+// A process running this exe (any instance, e.g. one an earlier launcher started).
+static bool exe_running(const std::filesystem::path& exe) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    bool found = false;
+    std::wstring name = exe.filename().wstring();
+    for (BOOL more = Process32FirstW(snap, &pe); more && !found; more = Process32NextW(snap, &pe)) {
+        if (_wcsicmp(pe.szExeFile, name.c_str()) != 0) continue;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!h) {
+            found = true;  // same name, can't look closer: assume it's the game
+            continue;
+        }
+        wchar_t path[MAX_PATH * 2]{};
+        DWORD n = MAX_PATH * 2;
+        if (QueryFullProcessImageNameW(h, 0, path, &n)) {
+            std::error_code ec;
+            found = std::filesystem::equivalent(std::filesystem::path(path), exe, ec);
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    return found;
+}
+
 static void open_quick(const std::vector<GameEntry>& games, int index) {
     const GameEntry& g = games[index];
     carry_portable(g);  // the data folder the run's settings go into
@@ -1121,15 +1151,20 @@ static void open_quick(const std::vector<GameEntry>& games, int index) {
     g_ui.showQuick = true;
 }
 
-// The launch index once Start is chosen (the run's mod settings are written then), else -1.
+// The launch index once Start is chosen (with g_ui.qmLaunch and qmValues set), else -1.
 static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
     ImGuiViewport* vp = ImGui::GetMainViewport();
     float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
     const GameEntry& g = games[g_ui.quickGame];
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) {
+    // B / Esc in an open list closes the list (ImGui), not the page.
+    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+        (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || (pad & XINPUT_GAMEPAD_B))) {
         g_ui.showQuick = false;
         return -1;
     }
+    InstallStatus inst = install_status();
+    bool busy = rebuild_running() || ((inst.phase == InstallPhase::Downloading || inst.phase == InstallPhase::Extracting) &&
+                                      inst.gameIndex == g_ui.quickGame);
     ImGui::PushFont(g_ui.fontHeader);
     ImGui::SetCursorPosY(vh * 0.055f);
     text_centered("Q U I C K   M A T C H");
@@ -1179,6 +1214,8 @@ static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
         ImGui::Spacing();
         if (!g.launchable()) {
             ImGui::TextColored(palette::warn, "Set the game up first (it needs its exe and ROM, like Play)");
+        } else if (busy) {
+            ImGui::TextColored(palette::warn, "Wait for the install or rebuild to finish");
         } else if (ImGui::Button("Start match") || (pad & XINPUT_GAMEPAD_START)) {
             std::map<std::string, std::string> picks, values;
             for (size_t i = 0; i < g_ui.qm.options.size(); ++i) {
@@ -1189,12 +1226,13 @@ static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
             }
             static std::mt19937 rng{std::random_device{}()};
             std::wstring err;
-            std::filesystem::path data = game_data_dir(g);
-            if (resolve_quickmatch(g_ui.qm, picks, rng, &values, &err) && quickmatch_apply(data, g_ui.qm, values, &err)) {
+            if (resolve_quickmatch(g_ui.qm, picks, rng, &values, &err)) {
                 std::wstring summary;
                 for (const auto& o : g_ui.qm.options) summary += L" " + widen(o.id) + L"=" + widen(values[o.id]);
                 logf(L"quick match: %s%s", g.title.c_str(), summary.c_str());
-                g_qmRunDir = data;
+                // Written by the launch, after carry_portable: into the data folder the game will use.
+                g_ui.qmValues = values;
+                g_ui.qmLaunch = true;
                 g_ui.showQuick = false;
                 play_launch();
                 launch = g_ui.quickGame;
@@ -1687,6 +1725,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // ------------------------------------------------------------------ game running overlay
     if (g_session.active()) {
+        // Keeps pad_pressed's last state current: a button held when the game closes (the quit chord, Back by
+        // default) is not a new press on the launcher.
+        (void)pad_pressed();
         const char* verb = g_session.state == SessionState::WaitingForWindow ? "Starting"
                            : g_session.state == SessionState::Closing        ? "Closing"
                                                                               : "Now playing";
@@ -1777,7 +1818,10 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             ImGui::End();
             return -1;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Q, false) || (pad & XINPUT_GAMEPAD_BACK)) {
+        if ((ImGui::IsKeyPressed(ImGuiKey_Q, false) || (pad & XINPUT_GAMEPAD_BACK)) &&
+            !(rebuild_running() || ((install_status().phase == InstallPhase::Downloading ||
+                                     install_status().phase == InstallPhase::Extracting) &&
+                                    install_status().gameIndex == g_ui.selected))) {
             play_flip();
             open_quick(games, g_ui.selected);
             ImGui::End();
@@ -2393,10 +2437,16 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     std::vector<GameEntry> games = build_game_list(depotRoot);
     apply_overrides(games);
     if (g_ui.selected < 0 || g_ui.selected >= (int)games.size()) g_ui.selected = 0;
-    // A quick match whose launcher stopped before the game did: its settings are undone now.
+    // A quick match whose launcher stopped before the game did: its settings are undone now, unless that game is
+    // still running (it could still save them; then the game's next launch does it).
     for (const auto& g : games) {
         std::filesystem::path data = g.exeFound ? game_data_dir(g) : std::filesystem::path();
         if (data.empty() || !quickmatch_pending(data)) continue;
+        if (exe_running(g.exePath)) {
+            logf(L"quick match: %s is still running; its run settings in %s are undone at its next launch",
+                 g.title.c_str(), data.c_str());
+            continue;
+        }
         std::wstring err;
         bool ok = quickmatch_restore(data, &err);
         logf(L"quick match: left-over run settings in %s %s%s", data.c_str(), ok ? L"restored" : L"NOT restored: ",
@@ -2670,7 +2720,23 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             // play_launch() already fired when the cart-insert animation began.
             std::wstring err;
             carry_portable(games[launchIdx]);
-            if (!g_session.launch(games[launchIdx], &err)) {
+            // Quick match settings go into the data folder the game uses (after carry_portable). An earlier run's
+            // left over (its undo failed) are undone first, or a plain Play would start a quick match.
+            std::filesystem::path data = game_data_dir(games[launchIdx]);
+            bool quick = g_ui.qmLaunch, ready = true;
+            g_ui.qmLaunch = false;
+            if (quickmatch_pending(data) && !quickmatch_restore(data, &err)) {
+                ready = false;
+                g_session.statusNote = games[launchIdx].title + L": an earlier quick match's mod settings couldn't be "
+                                       L"put back (" + err + L")";
+            } else if (quick) {
+                if (quickmatch_apply(data, g_ui.qm, g_ui.qmValues, &err)) g_qmRunDir = data;
+                else {
+                    ready = false;
+                    g_session.statusNote = L"Quick match: " + err;
+                }
+            }
+            if (ready && !g_session.launch(games[launchIdx], &err)) {
                 g_session.statusNote = games[launchIdx].title + L": " + err;
                 if (testLaunch >= 0) {
                     logf(L"test-launch: launch failed: %s", err.c_str());
@@ -2684,8 +2750,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             std::wstring err;
             if (quickmatch_restore(g_qmRunDir, &err)) logf(L"quick match: mod settings restored in %s", g_qmRunDir.c_str());
             else {
+                // The undo record stays: the next launch of this game (or launcher start) tries again first.
                 logf(L"quick match: restore FAILED in %s: %s", g_qmRunDir.c_str(), err.c_str());
-                g_session.statusNote = L"Quick match: " + err;
+                g_session.statusNote = L"Quick match: your mod settings couldn't be put back yet (" + err +
+                                       L"); the next launch tries again";
             }
             g_qmRunDir.clear();
         }

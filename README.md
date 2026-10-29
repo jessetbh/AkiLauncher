@@ -75,7 +75,9 @@ in the AkiMods `quickmatch` README. **Start match** turns the mod on for that ru
 - First, it notes what it changed in `aki-launcher-quickmatch.json` in the game's data folder.
 - When the game closes, the mod leaves `mods.json` again, unless it was already on. Other mods turned on or off in the
   game meanwhile stay that way. The mod's config file goes back to exactly what it was, or away if there was none.
-- If the launcher closes first, the next launcher start does the undo.
+- If the launcher closes first, the next launcher start does the undo, or the game's next launch does it if the game is
+  still running then. An undo that fails (a file locked by another program) is tried again before the game's next
+  launch, which waits for it.
 
 **Where do downloaded games go?** `games\` next to `AkiLauncher.exe` (or
 `%AKI_GAMES_ROOT%` if set) — the launcher is portable by default. Settings

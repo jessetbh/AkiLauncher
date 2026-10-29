@@ -5,6 +5,8 @@
 #include "../src/quickmatch.h"
 #include "check.h"
 
+#include <windows.h>
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -203,6 +205,33 @@ static void test_apply_restore(const fs::path& tmp) {
     CHECK(!fs::exists(bad / L"mod_config"));
     put(bad / L"mods.json", R"({"enabled_mods":"aki_cheats"})");
     CHECK(!quickmatch_apply(bad, m, values, &err) && !quickmatch_pending(bad));
+
+    // A restore that can't finish now keeps its record, and the retry finishes it: mods.json locked by another
+    // program, then the config's path taken by a folder.
+    fs::path retry = tmp / L"retry";
+    put(retry / L"mods.json", mods);
+    put(retry / L"mod_config" / L"aki_quickmatch.json", cfg);
+    CHECK(quickmatch_apply(retry, m, values, &err));
+    HANDLE lock = CreateFileW((retry / L"mods.json").c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(lock != INVALID_HANDLE_VALUE);
+    CHECK(!quickmatch_restore(retry, &err) && quickmatch_pending(retry));
+    CHECK(err.find(L"mods.json") != std::wstring::npos);
+    CloseHandle(lock);
+    fs::remove(retry / L"mod_config" / L"aki_quickmatch.json");
+    fs::create_directories(retry / L"mod_config" / L"aki_quickmatch.json");
+    CHECK(!quickmatch_restore(retry, &err) && quickmatch_pending(retry));
+    fs::remove_all(retry / L"mod_config" / L"aki_quickmatch.json");
+    CHECK(quickmatch_restore(retry, &err) && !quickmatch_pending(retry));
+    CHECK(get(retry / L"mod_config" / L"aki_quickmatch.json") == cfg);
+    CHECK(!lists(parse(get(retry / L"mods.json")), "enabled_mods", "aki_quickmatch"));
+    // ... and a locked mods.json at apply time is refused before anything is written.
+    lock = CreateFileW((retry / L"mods.json").c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(!quickmatch_apply(retry, m, values, &err) && !quickmatch_pending(retry));
+    CloseHandle(lock);
+    // A mods.json deleted meanwhile: nothing lists the mod, so the undo is complete.
+    CHECK(quickmatch_apply(retry, m, values, &err));
+    fs::remove(retry / L"mods.json");
+    CHECK(quickmatch_restore(retry, &err) && !quickmatch_pending(retry));
 
     // An unreadable undo record is dropped (with a message), so it can't block later runs.
     fs::path junk = tmp / L"junk";

@@ -26,28 +26,40 @@ const QmOption* QuickMatchMod::option(const std::string& id) const {
 // Files
 // ---------------------------------------------------------------------------
 
-static bool read_file(const fs::path& p, std::string* out) {
+enum class Read { Absent, Ok, Failed };
+
+// Absent only when there is no such file: one that is there but can't be read (locked, a folder) is Failed.
+static Read read_file(const fs::path& p, std::string* out) {
+    std::error_code ec;
+    if (!fs::exists(p, ec) && !ec) return Read::Absent;
     std::ifstream f(p, std::ios::binary);
-    if (!f) return false;
+    if (!f || !fs::is_regular_file(p, ec)) return Read::Failed;
     std::ostringstream ss;
     ss << f.rdbuf();
+    if (f.bad()) return Read::Failed;
     *out = ss.str();
-    return true;
+    return Read::Ok;
 }
 
-// Through a temp file and a rename, so a crash never leaves half a file.
+// Through a temp file (flushed to disk) and a rename, so neither a crash nor a power cut leaves half a file.
 static bool write_file(const fs::path& p, const std::string& text, std::wstring* err) {
     std::error_code ec;
     fs::create_directories(p.parent_path(), ec);
     fs::path tmp = p;
     tmp += L".aki-tmp";
-    {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        f << text;
-        if (!f.flush()) {
-            if (err) *err = L"can't write " + tmp.wstring();
-            return false;
-        }
+    HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) {
+        if (err) *err = L"can't write " + tmp.wstring() + L" (error " + std::to_wstring(GetLastError()) + L")";
+        return false;
+    }
+    DWORD wrote = 0;
+    bool ok = WriteFile(h, text.data(), (DWORD)text.size(), &wrote, nullptr) && wrote == text.size() &&
+              FlushFileBuffers(h);
+    CloseHandle(h);
+    if (!ok) {
+        if (err) *err = L"can't write " + tmp.wstring();
+        fs::remove(tmp, ec);
+        return false;
     }
     if (!MoveFileExW(tmp.c_str(), p.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         if (err) *err = L"can't replace " + p.wstring() + L" (error " + std::to_wstring(GetLastError()) + L")";
@@ -234,8 +246,12 @@ bool quickmatch_apply(const fs::path& dataDir, const QuickMatchMod& mod, const s
     fs::path modsJson = dataDir / L"mods.json";
     std::string text;
     JsonValue mj;
-    bool hadMods = read_file(modsJson, &text);
-    if (hadMods) {
+    Read modsRead = read_file(modsJson, &text);
+    if (modsRead == Read::Failed) {
+        if (err) *err = L"can't read " + modsJson.wstring();
+        return false;
+    }
+    if (modsRead == Read::Ok) {
         std::string perr;
         if (!json_parse(text, &mj, &perr) || !mj.is(JsonValue::Type::Object)) {
             if (err) *err = modsJson.wstring() + L" isn't valid JSON (" + w(perr) + L"); left as it is";
@@ -258,7 +274,12 @@ bool quickmatch_apply(const fs::path& dataDir, const QuickMatchMod& mod, const s
     // The mod's config: the old one's other keys kept, ours on top.
     fs::path cfgPath = config_path(dataDir);
     std::string oldCfg;
-    bool hadCfg = read_file(cfgPath, &oldCfg);
+    Read cfgRead = read_file(cfgPath, &oldCfg);
+    if (cfgRead == Read::Failed) {
+        if (err) *err = L"can't read " + cfgPath.wstring();
+        return false;
+    }
+    bool hadCfg = cfgRead == Read::Ok;
     JsonValue old;
     if (hadCfg && (!json_parse(oldCfg, &old) || !old.is(JsonValue::Type::Object))) old = JsonValue{};
     JsonValue storage;
@@ -295,7 +316,12 @@ bool quickmatch_apply(const fs::path& dataDir, const QuickMatchMod& mod, const s
 bool quickmatch_restore(const fs::path& dataDir, std::wstring* err) {
     fs::path statePath = dataDir / kStateFile;
     std::string text;
-    if (!read_file(statePath, &text)) return true;
+    Read stateRead = read_file(statePath, &text);
+    if (stateRead == Read::Absent) return true;
+    if (stateRead == Read::Failed) {
+        if (err) *err = L"can't read " + statePath.wstring();
+        return false;
+    }
     std::error_code ec;
     JsonValue state;
     if (!json_parse(text, &state) || !state.is(JsonValue::Type::Object)) {
@@ -309,7 +335,13 @@ bool quickmatch_restore(const fs::path& dataDir, std::wstring* err) {
     fs::path modsJson = dataDir / L"mods.json";
     std::string mtext;
     JsonValue mj;
-    if (read_file(modsJson, &mtext) && json_parse(mtext, &mj) && mj.is(JsonValue::Type::Object)) {
+    // Gone: nothing lists the mod. Unreadable now (locked): kept for a retry. Not JSON any more: the game can't
+    // read it either, and the record can't fix it, so that step is over.
+    Read modsRead = read_file(modsJson, &mtext);
+    if (modsRead == Read::Failed) {
+        ok = false;
+        firstErr = L"can't read " + modsJson.wstring();
+    } else if (modsRead == Read::Ok && json_parse(mtext, &mj) && mj.is(JsonValue::Type::Object)) {
         bool changed = false;
         if (state.boolean("added_enabled", false)) changed = remove_from_list(mj, "enabled_mods") || changed;
         if (state.boolean("added_order", false)) changed = remove_from_list(mj, "mod_order") || changed;
