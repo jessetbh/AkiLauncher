@@ -11,6 +11,13 @@
 static Settings g_settings;
 Settings& settings() { return g_settings; }
 
+bool launcher_portable() {
+    wchar_t buf[MAX_PATH]{};
+    GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+    std::filesystem::path appData = std::filesystem::path(buf) / L"AkiLauncher";
+    return settings_path().parent_path() != appData;
+}
+
 std::filesystem::path settings_path() {
     // Resolved once per session so adding/removing portable.txt mid-run
     // doesn't split the config across two locations.
@@ -88,6 +95,7 @@ void settings_load() {
             else if (key == "win_h") g_settings.winH = atoi(val.c_str());
             else if (key == "dev_mode") g_settings.devMode = atoi(val.c_str()) != 0;
             else if (key == "rom_scan_dir") g_settings.romScanDir = u8_to_w(val);
+            else if (key == "portable_games") g_settings.portableGames = atoi(val.c_str()) != 0;
         } else if (section.rfind("game:", 0) == 0) {
             GameOverride& o = g_settings.overrides[u8_to_w(section.substr(5))];
             if (key == "exe") o.exePath = u8_to_w(val);
@@ -122,6 +130,7 @@ void settings_save() {
         f << "win_h=" << g_settings.winH << "\n";
     }
     if (g_settings.devMode) f << "dev_mode=1\n";
+    if (!g_settings.portableGames) f << "portable_games=0\n";
     if (!g_settings.romScanDir.empty()) f << "rom_scan_dir=" << w_to_u8(g_settings.romScanDir) << "\n";
     for (auto& [key, o] : g_settings.overrides) {
         if (!o.any()) continue;

@@ -617,7 +617,21 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
     std::filesystem::remove(tmp, ec);
 }
 
+// aki-roadmap#14: a portable launcher makes the games it installed portable
+// (once: portable.txt + a copy of their AppData data) before they start or
+// their mods folder is shown.
+static void carry_portable(const GameEntry& g) {
+    if (!wants_portable_game(g, launcher_portable(), settings().portableGames)) return;
+    wchar_t lad[MAX_PATH]{};
+    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+    std::filesystem::path appData = std::filesystem::path(lad) / std::filesystem::path(g.exeRel).stem();
+    int n = make_game_portable(g, appData);
+    logf(L"portable: %s now keeps its data in %s (%d file(s) copied from %s)", g.title.c_str(),
+         g.repoPath.c_str(), n, appData.c_str());
+}
+
 static void open_mods(const std::vector<GameEntry>& games, int index) {
+    carry_portable(games[index]);
     g_ui.modsGame = index;
     g_ui.modsNote.clear();
     g_ui.modsRemove = -1;
@@ -1985,6 +1999,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (launchIdx >= 0) {
             // play_launch() already fired when the cart-insert animation began.
             std::wstring err;
+            carry_portable(games[launchIdx]);
             if (!g_session.launch(games[launchIdx], &err)) {
                 g_session.statusNote = games[launchIdx].title + L": " + err;
                 if (testLaunch >= 0) {

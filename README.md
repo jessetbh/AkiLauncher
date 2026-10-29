@@ -68,6 +68,16 @@ and play stats live in `%LOCALAPPDATA%\AkiLauncher\settings.ini`; create an
 empty `portable.txt` next to `AkiLauncher.exe` (like the game ports) to keep
 `settings.ini` in the launcher folder instead.
 
+**Does portable mode cover the games too?** Yes, for the games the launcher
+installed (in its `games\` folder). When the launcher runs portable, it puts a
+`portable.txt` in such a game's folder before the game first starts (or its
+Mods page opens). The game then keeps its config, saves, mods and log there
+instead of in `%LOCALAPPDATA%\<Game>Recompiled\`. That first time, the launcher
+copies what the game had in AppData (not logs or texture dumps), never over a
+file already in the game folder; the AppData copy stays as it was. Games built
+in a depot checkout are left as they are. `portable_games=0` in `settings.ini`
+turns this off.
+
 **What about ROMs?** You provide your own dumps (`.z64`, big-endian). The
 launcher hash-checks your pick against the known-good dump for each game and
 keeps a copy with the installed port. Nothing is downloaded from anywhere
@@ -86,8 +96,8 @@ a texture-pack folder. You can also drop any of these on the launcher window.
 - Mods that come with the game can't be removed (the game copies them back on
   its next start): turn them off in the game's own Mods menu, which is also
   where you turn mods on and off and set their order.
-- The mods folder is `%LOCALAPPDATA%\<Game>Recompiled\mods\`, or `mods\` next
-  to the game's exe when it runs portable. *Open mods folder* opens it.
+- The mods folder is `%LOCALAPPDATA%\<Game>Recompiled\mods\`, or `mods\` in
+  the game's folder when it runs portable. *Open mods folder* opens it.
 
 **I have a folder full of ROMs. Can it find them?** Yes: Settings → ROM
 Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also

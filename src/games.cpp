@@ -48,6 +48,53 @@ std::filesystem::path games_root() {
     return app_root() / L"games";
 }
 
+fs::path game_data_dir(const GameEntry& g) {
+    if (game_is_portable(g)) return g.repoPath;
+    wchar_t lad[MAX_PATH]{};
+    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+    return fs::path(lad) / fs::path(g.exeRel).stem();
+}
+
+bool game_is_portable(const GameEntry& g) {
+    std::error_code ec;
+    return !g.repoPath.empty() && fs::exists(g.repoPath / L"portable.txt", ec);
+}
+
+bool wants_portable_game(const GameEntry& g, bool launcherPortable, bool portableGames) {
+    std::error_code ec;
+    return launcherPortable && portableGames && !g.installDir.empty() && g.repoPath == g.installDir &&
+           fs::is_directory(g.installDir, ec) && !game_is_portable(g);
+}
+
+int make_game_portable(const GameEntry& g, const fs::path& appDataDir) {
+    std::error_code ec;
+    {
+        std::ofstream marker(g.repoPath / L"portable.txt", std::ios::binary | std::ios::app);
+        if (!marker) return -1;
+    }
+    int copied = 0;
+    if (!fs::is_directory(appDataDir, ec)) return 0;
+    fs::recursive_directory_iterator it(appDataDir, fs::directory_options::skip_permission_denied, ec), end;
+    for (; !ec && it != end; it.increment(ec)) {
+        fs::path rel = fs::relative(it->path(), appDataDir, ec);
+        if (ec) break;
+        std::wstring first = rel.begin()->wstring();
+        std::error_code fec;
+        // Texture dumps can be huge and are made again on demand; logs are per run.
+        if (it->is_directory(fec)) {
+            if (_wcsicmp(first.c_str(), L"texture_dump") == 0) it.disable_recursion_pending();
+            continue;
+        }
+        if (!it->is_regular_file(fec) || _wcsicmp(it->path().extension().c_str(), L".log") == 0) continue;
+        fs::path dest = g.repoPath / rel;
+        if (fs::exists(dest, fec)) continue;  // never over anything the install already has
+        fs::create_directories(dest.parent_path(), fec);
+        fs::copy_file(it->path(), dest, fs::copy_options::skip_existing, fec);
+        if (!fec) ++copied;
+    }
+    return copied;
+}
+
 std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
     // Ordered by original release date. JP-only titles carry their Japanese
     // release date; the rest are North America dates.

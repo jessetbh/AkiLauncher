@@ -11,8 +11,8 @@ struct GameEntry;
 // The game's runtime does the loading, ordering and enabling (its Mods menu);
 // the launcher only manages files.
 
-// %LOCALAPPDATA%\<exe stem>\mods, or mods\ next to the exe when the game runs
-// portable (portable.txt next to the exe), as the ports resolve it.
+// game_data_dir(g)\mods: %LOCALAPPDATA%\<exe stem>\mods, or mods\ in the
+// game's working directory when it runs portable, as the ports resolve it.
 std::filesystem::path game_mods_dir(const GameEntry& g);
 
 // The fields of mod.json the launcher shows (the runtime's manifest keys).

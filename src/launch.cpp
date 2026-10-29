@@ -181,13 +181,12 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     wasTerminated = false;
     statusNote.clear();
     logTail.clear();
-    // The ports route stdout/stderr (incl. crash backtraces) to
-    // %LOCALAPPDATA%\<exe stem>\<exe stem>.log when launched without a console.
+    // The ports route stdout/stderr (incl. crash backtraces) to <exe stem>.log
+    // in their data folder (%LOCALAPPDATA%\<exe stem>, or the working directory
+    // when portable) when launched without a console.
     {
-        wchar_t lad[MAX_PATH]{};
-        GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
         std::wstring stem = g.exePath.stem().wstring();
-        portLogPath = std::filesystem::path(lad) / stem / (stem + L".log");
+        portLogPath = game_data_dir(g) / (stem + L".log");
     }
     launchTick = GetTickCount64();
     runningTick = 0;

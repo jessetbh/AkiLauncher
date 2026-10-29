@@ -73,8 +73,10 @@ void run_mods_tests(const fs::path& dir) {
     GameEntry g;
     g.title = L"WWF No Mercy";
     g.exeRel = L"build-msvc\\NoMercyRecompiled.exe";
-    // Portable: mods\ next to the exe; otherwise %LOCALAPPDATA%\<exe stem>\mods.
+    // Portable: mods\ in the working directory the launcher starts the game in (repoPath); otherwise
+    // %LOCALAPPDATA%\<exe stem>\mods.
     g.exePath = dir / L"game" / L"NoMercyRecompiled.exe";
+    g.repoPath = dir / L"game";
     write_text(g.exePath, "");
     std::wstring appdata = game_mods_dir(g).wstring();
     CHECK(has(appdata, L"NoMercyRecompiled\\mods") && !has(appdata, (dir / L"game").c_str()));
