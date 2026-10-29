@@ -22,6 +22,7 @@
 #include "rebuild.h"
 #include "romscan.h"
 #include "mods.h"
+#include "modelpacks.h"
 #include "selfupdate.h"
 #include "launch.h"
 #include "settings.h"
@@ -146,6 +147,15 @@ struct UiState {
     std::string modsNote;
     bool modsNoteOk = true;
     int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
+    // Model packs (aki-roadmap#130): <mods>\models\ and its models.txt, for games with model import
+    std::vector<ModelPack> packs;
+    std::vector<Texture> packThumbs;  // parallel to packs
+    ModelsTxt modelsTxt;
+    Roster roster;
+    bool haveRoster = false;
+    std::filesystem::path rosterFile;
+    std::string packsNote;
+    bool packsNoteOk = true;
     // launcher self-update (aki-roadmap#117)
     bool showUpdate = false;
     bool updateRequested = false;  // "Update now": install as soon as the download is verified
@@ -593,6 +603,176 @@ static void release_mod_thumbs() {
     for (auto& t : g_ui.modThumbs)
         if (t.srv) t.srv->Release();
     g_ui.modThumbs.clear();
+    for (auto& t : g_ui.packThumbs)
+        if (t.srv) t.srv->Release();
+    g_ui.packThumbs.clear();
+}
+
+// Model packs: the packs, models.txt and (for picking wrestlers by name) the game's roster.
+static void refresh_model_packs(const GameEntry& g) {
+    g_ui.packs.clear();
+    g_ui.modelsTxt = ModelsTxt{};
+    g_ui.haveRoster = false;
+    if (g.modelProfile.empty()) return;
+    std::filesystem::path models = g_ui.modsDir / L"models";
+    g_ui.packs = list_model_packs(models);
+    for (const auto& p : g_ui.packs)
+        g_ui.packThumbs.push_back(p.preview.empty() ? Texture{} : load_texture(g_device, p.preview));
+    std::wstring err;
+    if (!read_models_txt(models / L"models.txt", &g_ui.modelsTxt, &err)) {
+        g_ui.packsNote = narrow(err);
+        g_ui.packsNoteOk = false;
+    }
+    g_ui.rosterFile = find_roster(g.modelProfile, app_root(), detect_depot_root());
+    if (!g_ui.rosterFile.empty()) g_ui.haveRoster = load_roster_file(g_ui.rosterFile, &g_ui.roster, &err);
+}
+
+static void save_models_txt() {
+    std::wstring err;
+    if (write_models_txt(g_ui.modsDir / L"models" / L"models.txt", g_ui.modelsTxt, &err)) {
+        g_ui.packsNote = "Saved models.txt: the game picks it up at the next match (or flip Reload in its Mods menu).";
+        g_ui.packsNoteOk = true;
+    } else {
+        g_ui.packsNote = narrow(err);
+        g_ui.packsNoteOk = false;
+    }
+}
+
+static std::string assignment_text(const ModelsTxtLine* a) {
+    if (!a) return "nobody (not assigned)";
+    if (a->kind == ModelsTxtLine::Kind::Slot) return "slot " + std::to_string(a->slot);
+    char buf[48];
+    snprintf(buf, sizeof(buf), "wrestler 0x%04x", a->wrestler);
+    std::string s = buf;
+    if (g_ui.haveRoster)
+        if (const RosterEntry* e = g_ui.roster.find(a->wrestler)) s = e->name + " (" + s.substr(9) + ")";
+    if (a->costume >= 0) s += ", costume " + std::to_string(a->costume);
+    return s;
+}
+
+static void draw_model_packs(const GameEntry& g, float panelW, float thumb) {
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextColored(palette::accent, "Model packs");
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::TextColored(palette::faint, "%s   -   who each pack replaces is in models.txt; the aki_modelimport mod reads it every match",
+                       narrow((g_ui.modsDir / L"models").wstring()).c_str());
+    if (ImGui::SmallButton("Open models.txt")) {
+        std::filesystem::path mt = g_ui.modsDir / L"models" / L"models.txt";
+        std::error_code ec;
+        if (!std::filesystem::exists(mt, ec)) save_models_txt();
+        ShellExecuteW(nullptr, L"open", mt.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    ImGui::SameLine();
+    ImGui::TextColored(palette::faint, "%s", g_ui.haveRoster ? ("wrestler names: " + narrow(g_ui.rosterFile.filename().wstring())).c_str()
+                                                             : "no wrestler roster for this game yet: wrestler lines are read-only here");
+    if (!g_ui.packsNote.empty())
+        ImGui::TextColored(g_ui.packsNoteOk ? palette::ready : palette::error, "%s", g_ui.packsNote.c_str());
+    ImGui::PopFont();
+    if (g_ui.packs.empty())
+        ImGui::TextColored(palette::dim, "No model packs yet: AkiTools `aki-model.py quick` builds and installs one.");
+    bool changed = false;
+    for (int i = 0; i < (int)g_ui.packs.size(); ++i) {
+        const ModelPack& p = g_ui.packs[i];
+        ImGui::PushID(1000 + i);
+        ImVec2 top = ImGui::GetCursorPos();
+        if (i < (int)g_ui.packThumbs.size() && g_ui.packThumbs[i].srv) {
+            const Texture& tx = g_ui.packThumbs[i];
+            float w = thumb * (float)tx.w / (float)(tx.h ? tx.h : 1);
+            ImGui::Image((ImTextureID)tx.srv, ImVec2(w > thumb * 2 ? thumb * 2 : w, thumb));
+        } else {
+            ImGui::Dummy(ImVec2(thumb, thumb));
+        }
+        ImGui::SetCursorPos(ImVec2(top.x + thumb * 2 + 14, top.y));
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted((p.name.empty() ? p.id : p.name).c_str());
+        ImGui::PushFont(g_ui.fontSmall);
+        std::string line = p.id;
+        if (!p.author.empty()) line += "  -  by " + p.author;
+        if (p.triangles) line += "  -  " + std::to_string(p.triangles) + " triangles";
+        ImGui::TextColored(palette::dim, "%s", line.c_str());
+        if (p.license.empty()) ImGui::TextColored(palette::warn, "no license in pack.json: don't share it as it is");
+        else ImGui::TextColored(palette::faint, "license: %s", p.license.c_str());
+        // On / off: the "off <pack>" line.
+        bool on = !g_ui.modelsTxt.is_off(p.id);
+        if (ImGui::Checkbox("On", &on)) {
+            g_ui.modelsTxt.set_off(p.id, !on);
+            changed = true;
+        }
+        ImGui::SameLine();
+        // Who it replaces.
+        const ModelsTxtLine* a = g_ui.modelsTxt.assignment(p.id);
+        bool wrestlerLocked = a && a->kind == ModelsTxtLine::Kind::Wrestler && !g_ui.haveRoster;
+        ImGui::SetNextItemWidth(panelW * 0.32f);
+        if (wrestlerLocked) {
+            ImGui::TextColored(palette::dim, "replaces %s (edit models.txt to change it)", assignment_text(a).c_str());
+        } else if (ImGui::BeginCombo("##who", ("replaces " + assignment_text(a)).c_str())) {
+            if (ImGui::Selectable("nobody (not assigned)", !a)) {
+                g_ui.modelsTxt.set_assignment(p.id, ModelsTxtLine::Kind::Blank, 0, 0, 0);
+                changed = true;
+            }
+            for (int s = 1; s <= 4; ++s) {
+                bool sel = a && a->kind == ModelsTxtLine::Kind::Slot && a->slot == s;
+                if (ImGui::Selectable(("slot " + std::to_string(s) + " of the match").c_str(), sel)) {
+                    g_ui.modelsTxt.set_assignment(p.id, ModelsTxtLine::Kind::Slot, s, -1, -1);
+                    changed = true;
+                }
+            }
+            if (g_ui.haveRoster) {
+                for (const auto& w : g_ui.roster.wrestlers) {
+                    bool sel = a && a->kind == ModelsTxtLine::Kind::Wrestler && a->wrestler == w.id;
+                    char lbl[160];
+                    snprintf(lbl, sizeof(lbl), "%s (0x%04x)", w.name.c_str(), w.id);
+                    if (ImGui::Selectable(lbl, sel)) {
+                        g_ui.modelsTxt.set_assignment(p.id, ModelsTxtLine::Kind::Wrestler, 0, w.id, -1, w.name);
+                        changed = true;
+                    }
+                }
+            }
+            ImGui::EndCombo();
+        }
+        // A wrestler's costume, when the roster names them.
+        a = g_ui.modelsTxt.assignment(p.id);
+        const RosterEntry* re = a && a->kind == ModelsTxtLine::Kind::Wrestler && g_ui.haveRoster ? g_ui.roster.find(a->wrestler) : nullptr;
+        if (re && !re->costumes.empty()) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(panelW * 0.18f);
+            std::string cur = a->costume < 0 ? "any costume" : "costume " + std::to_string(a->costume);
+            for (const auto& c : re->costumes)
+                if (c.first == a->costume && !c.second.empty()) cur = c.second;
+            if (ImGui::BeginCombo("##costume", cur.c_str())) {
+                if (ImGui::Selectable("any costume", a->costume < 0)) {
+                    g_ui.modelsTxt.set_assignment(p.id, ModelsTxtLine::Kind::Wrestler, 0, a->wrestler, -1, re->name);
+                    changed = true;
+                }
+                for (const auto& c : re->costumes) {
+                    std::string lbl = std::to_string(c.first) + (c.second.empty() ? "" : "  " + c.second);
+                    if (ImGui::Selectable(lbl.c_str(), a->costume == c.first)) {
+                        g_ui.modelsTxt.set_assignment(p.id, ModelsTxtLine::Kind::Wrestler, 0, a->wrestler, c.first, re->name);
+                        changed = true;
+                        break;  // the line was replaced: a is stale now
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::PopFont();
+        ImGui::EndGroup();
+        float bottom = top.y + thumb;
+        if (ImGui::GetCursorPosY() < bottom) ImGui::SetCursorPosY(bottom);
+        ImGui::Spacing();
+        ImGui::PopID();
+        if (changed) break;  // the lines moved: draw the rest next frame
+    }
+    if (changed) save_models_txt();
+    std::vector<std::string> missing = g_ui.modelsTxt.missing_packs(g_ui.packs);
+    if (!missing.empty()) {
+        std::string m;
+        for (const auto& x : missing) m += (m.empty() ? "" : ", ") + x;
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::TextColored(palette::faint, "models.txt also names %s (not installed here)", m.c_str());
+        ImGui::PopFont();
+    }
 }
 
 static void refresh_mods(const std::vector<GameEntry>& games) {
@@ -620,6 +800,7 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
     }
     std::error_code ec;
     std::filesystem::remove(tmp, ec);
+    refresh_model_packs(g);
 }
 
 // aki-roadmap#14: a portable launcher makes the games it installed portable
@@ -645,6 +826,7 @@ static void open_mods(const std::vector<GameEntry>& games, int index) {
     carry_portable(games[index]);
     g_ui.modsGame = index;
     g_ui.modsNote.clear();
+    g_ui.packsNote.clear();
     g_ui.modsRemove = -1;
     refresh_mods(games);
     g_ui.showMods = true;
@@ -827,6 +1009,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         ImGui::PopID();
     }
     g_ui.modsRemove = removeIndex;  // the thumbnails drawn above stay alive this frame
+    if (!g.modelProfile.empty()) draw_model_packs(g, panelW, thumb);
     ImGui::PopFont();
     ImGui::EndChild();
     ImGui::PushFont(g_ui.fontSmall);

@@ -161,6 +161,7 @@ bool game_from_json(const JsonValue& v, GameEntry* g, std::wstring* err) {
     e.romVersion = v.integer("rom_version", -1);
     e.modGameId = v.wstr("mod_game_id");
     e.baseId = v.wstr("base");
+    if (const JsonValue* mp = v.get("model_profile"); mp && mp->is(JsonValue::Type::String)) e.modelProfile = mp->s;
     *g = std::move(e);
     return true;
 }

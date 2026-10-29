@@ -72,6 +72,7 @@
     },
     {
       "id": "vpw2",
+      "model_profile": "vpw2",
       "title": "Virtual Pro Wrestling 2",
       "release_date": "January 28, 2000",
       "region": "Japan",
@@ -89,6 +90,7 @@
     },
     {
       "id": "nomercy",
+      "model_profile": "nomercy",
       "title": "WWF No Mercy",
       "release_date": "November 17, 2000",
       "region": "North America",

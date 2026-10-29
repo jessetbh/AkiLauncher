@@ -40,6 +40,12 @@ std::vector<std::wstring> ids(const std::vector<GameEntry>& games) {
 }
 }  // namespace
 
+static std::string narrow_key(const std::wstring& w) {  // ids are ASCII
+    std::string s;
+    for (wchar_t c : w) s += (char)c;
+    return s;
+}
+
 static void test_json() {
     JsonValue v;
     CHECK(json_parse("\xEF\xBB\xBF{\"a\": [1, 2.5, -3e2, true, false, null, \"x\\u00e9\\ud83d\\ude00\"], \"a\": 7}", &v));
@@ -70,6 +76,8 @@ void run_registry_tests(const fs::path& dir) {
         CHECK(g.romSha1 == e.sha1 && g.romCode == e.code && g.modGameId == e.modId && g.romNote == e.note);
         CHECK(g.romVersion == e.romVersion && g.forceBorderless == e.borderless && !g.comingSoon);
         CHECK(g.baseId.empty() && g.manifestPath.empty());
+        // Model packs (aki_modelimport) on the Mods page: No Mercy and VPW2 only.
+        CHECK(g.modelProfile == ((g.artKey == L"nomercy" || g.artKey == L"vpw2") ? std::string(narrow_key(g.artKey)) : std::string()));
     }
 
     // A registry file wins when it is valid; a broken one falls back to the built-in list.

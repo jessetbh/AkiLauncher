@@ -101,6 +101,19 @@ a texture-pack folder. You can also drop any of these on the launcher window.
 - The mods folder is `%LOCALAPPDATA%\<Game>Recompiled\mods\`, or `mods\` in
   the game's folder when it runs portable. *Open mods folder* opens it.
 
+**And model packs (imported 3D models)?** For No Mercy and VPW2, the Mods page has a **Model packs** section. It lists
+the packs in the game's `mods\models\` with their preview, name, author and license, plus a warning when a pack has no
+license. Each pack has two controls, saved to `models\models.txt` straight away:
+- **On:** unticked writes the `off <pack>` line.
+- **Replaces:** nobody, a slot 1-4 of the match, or a wrestler by name (with a costume when the roster names them).
+  The pack's line goes first among the rules, so it wins.
+
+Everything else in `models.txt` (comments, other packs' lines, lines the launcher doesn't know) stays as it was, and the
+file is replaced in one step, so the game never reads half of it. Wrestler names come from the game's roster:
+`assets\rosters\<game>-roster.json` next to the launcher, or AkiTools' `model-templates\profiles\` in a depot. Without
+one, a wrestler line is shown but can only be changed in `models.txt` (**Open models.txt**). Packs come from AkiTools
+`aki-model.py quick` or a modder's zip; the aki_modelimport mod (on in the Mods menu) draws them.
+
 **I have a folder full of ROMs. Can it find them?** Yes: Settings → ROM
 Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
 `.rom`/`.bin`, three folders deep) and sorts them under their games:
