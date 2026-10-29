@@ -125,6 +125,7 @@ void run_selfupdate_tests(const fs::path& dir) {
     auto zip = make_zip({{"AkiLauncher.exe", "NEW EXE"},
                          {"assets/games.json", "{\"new\":1}"},
                          {"assets/boxart/new_front.png", "png"},
+                         {"assets/boxart/nomercy_front.png", "release art"},
                          {"settings.ini", "hijack=1"},
                          {"games/nomercy/evil.exe", "x"},
                          {"../outside.txt", "x"}});
@@ -158,12 +159,14 @@ void run_selfupdate_tests(const fs::path& dir) {
     CHECK(fs::exists(app / L"assets" / L"boxart" / L"new_front.png"));
     CHECK(get(previous / L"AkiLauncher.exe") == "OLD EXE" && get(previous / L"assets" / L"games.json") == "{\"old\":1}");
     CHECK(get(app / L"settings.ini") == "mine=1" && get(app / L"games" / L"nomercy" / L"save.bin") == "save");
-    CHECK(get(app / L"assets" / L"boxart" / L"nomercy_front.png") == "old art");  // not in the update: kept
+    CHECK(get(app / L"assets" / L"boxart" / L"nomercy_front.png") == "old art");  // the player's art is never replaced
+    CHECK(!fs::exists(app / L"AkiLauncher.exe.aki-new") && !fs::exists(app / L"assets" / L"games.json.aki-new"));
 
     // Rollback (the new version didn't come up): exactly the old files again.
     CHECK(restore_previous(app, staging, previous, &err));
     CHECK(get(app / L"AkiLauncher.exe") == "OLD EXE" && get(app / L"assets" / L"games.json") == "{\"old\":1}");
     CHECK(!fs::exists(app / L"assets" / L"boxart" / L"new_front.png"));  // added by the update: gone
+    CHECK(get(app / L"assets" / L"boxart" / L"nomercy_front.png") == "old art");  // untouched, so not removed
     CHECK(get(app / L"settings.ini") == "mine=1" && get(app / L"games" / L"nomercy" / L"save.bin") == "save");
 
     // A swap that can't move a file aside puts everything back and says so.
@@ -176,5 +179,7 @@ void run_selfupdate_tests(const fs::path& dir) {
         CloseHandle(h);
         CHECK(get(app / L"AkiLauncher.exe") == "OLD EXE" && get(app / L"assets" / L"games.json") == "{\"old\":1}");
         CHECK(!fs::exists(app / L"assets" / L"boxart" / L"new_front.png"));
+        CHECK(!fs::exists(app / L"AkiLauncher.exe.aki-new") && !fs::exists(app / L"assets" / L"games.json.aki-new"));
+        CHECK(get(app / L"assets" / L"boxart" / L"nomercy_front.png") == "old art");
     }
 }

@@ -34,6 +34,14 @@ if (-not $SkipBuild) {
 
 $exe = Join-Path $build "AkiLauncher.exe"
 if (-not (Test-Path $exe)) { throw "missing $exe" }
+# Self-update (aki-roadmap#117) compares the exe's own ProductVersion with the release tag: a release whose exe
+# still reports the old version would offer itself as an update forever.
+if ($Version -ne "dev") {
+    $exeVersion = (Get-Item $exe).VersionInfo.ProductVersion
+    if ($exeVersion -ne $Version.TrimStart('v')) {
+        throw "AkiLauncher.exe says $exeVersion but the release is ${Version}: bump icons\app.rc (FILEVERSION, PRODUCTVERSION, FileVersion, ProductVersion) and rebuild"
+    }
+}
 
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force "$stage\assets\boxart" | Out-Null

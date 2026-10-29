@@ -46,12 +46,14 @@ bool update_entry_allowed(const std::string& zipPath);
 // SHA256SUMS: both required) and unpacks the allowed entries into stagingDir.
 bool stage_update(const std::vector<uint8_t>& zip, long long expectedSize, const std::string& sums,
                   const std::wstring& zipName, const std::filesystem::path& stagingDir, std::wstring* err);
-// Moves every app file the staged update replaces into previousDir (the
-// running exe too: Windows allows renaming it), then copies the staged files
-// in. On any failure it puts everything back before returning false.
+// Copies the staged files next to their targets (<name>.aki-new) first, then
+// swaps each with two quick renames (current -> previousDir, new -> current;
+// the running exe too, last), noting every step in previousDir\applied.txt.
+// Existing art in assets\boxart\ is never replaced (only missing art added).
+// On any failure it puts everything back before returning false.
 bool apply_staged_update(const std::filesystem::path& appDir, const std::filesystem::path& stagingDir,
                          const std::filesystem::path& previousDir, std::wstring* err);
-// Undoes apply_staged_update: the files it added go, the previous ones come back.
+// Undoes apply_staged_update from its journal: added files go, replaced ones come back.
 bool restore_previous(const std::filesystem::path& appDir, const std::filesystem::path& stagingDir,
                       const std::filesystem::path& previousDir, std::wstring* err);
 
@@ -73,4 +75,5 @@ void update_tick();
 UpdateStatus update_status();
 bool update_download_start();  // the Available release, into <app>\.update\staged
 void update_dismiss();         // Later: hide the notice until the next check finds something newer
+void update_mark_failed(const std::wstring& why);  // an install that didn't happen: "Try again" is offered
 void update_skip_version();    // Skip this version (remembered in settings.ini)

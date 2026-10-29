@@ -875,7 +875,9 @@ static void draw_update_page(WORD pad) {
     bool busy = u.phase == UpdatePhase::Downloading || u.phase == UpdatePhase::Staged;
     bool blocked = g_session.active() || rebuild_running() || install_status().phase == InstallPhase::Downloading ||
                    install_status().phase == InstallPhase::Extracting;
-    if (u.phase == UpdatePhase::Available || u.phase == UpdatePhase::Failed) {
+    if (u.phase == UpdatePhase::Failed && u.release.zipUrl.empty()) {
+        if (ImGui::Button("Check again")) update_check_start();  // the check failed: nothing to download yet
+    } else if (u.phase == UpdatePhase::Available || u.phase == UpdatePhase::Failed) {
         if (blocked) {
             ImGui::TextColored(palette::warn, "Finish the running game, build or install first.");
         } else if (ImGui::Button(u.phase == UpdatePhase::Failed ? "Try again" : "Update now")) {
@@ -967,27 +969,41 @@ static bool apply_update_and_restart(HWND hwnd) {
     std::filesystem::path exe(exeBuf), appDir = exe.parent_path();
     std::filesystem::path staging = appDir / L".update" / L"staged", previous = appDir / L".update" / L"previous";
     if (g_session.active() || rebuild_running()) {
-        g_ui.updateNote = "a game or build is running: try again when it is done";
+        update_mark_failed(L"a game or build was running: try again when it is done");
         return false;
     }
     settings_save();  // before the new launcher reads it
     std::wstring err;
     if (!apply_staged_update(appDir, staging, previous, &err)) {
-        g_ui.updateNote = "Update not installed: " + narrow(err);
+        update_mark_failed(L"Update not installed: " + err);
         logf(L"update: %s", err.c_str());
         return false;
     }
+    // The release's exe is AkiLauncher.exe, whatever this copy is called.
+    std::filesystem::path newExe = appDir / L"AkiLauncher.exe";
     std::wstring evName = L"Local\\AkiLauncherUpdate-" + std::to_wstring(GetCurrentProcessId());
     HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, evName.c_str());
     UnregisterHotKey(hwnd, HOTKEY_QUICKBACK);  // the new launcher registers it
-    std::wstring cmd = L"\"" + exe.wstring() + L"\" --update-confirm " + evName + L" --updated-from " +
+    std::wstring cmd = L"\"" + newExe.wstring() + L"\" --update-confirm " + evName + L" --updated-from " +
                        version_text(u.current);
     STARTUPINFOW si{sizeof(si)};
     PROCESS_INFORMATION pi{};
     bool up = false;
-    if (ev && CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+    if (ev && CreateProcessW(newExe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        // Wait for its "up" event (or its exit), pumping messages so this window stays responsive.
         HANDLE waits[2] = {ev, pi.hProcess};
-        DWORD r = WaitForMultipleObjects(2, waits, FALSE, 30000);
+        ULONGLONG deadline = GetTickCount64() + 30000;
+        DWORD r = WAIT_TIMEOUT;
+        while (GetTickCount64() < deadline) {
+            r = MsgWaitForMultipleObjects(2, waits, FALSE, (DWORD)(deadline - GetTickCount64()), QS_ALLINPUT);
+            if (r != WAIT_OBJECT_0 + 2) break;
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            r = WAIT_TIMEOUT;
+        }
         up = r == WAIT_OBJECT_0;
         if (!up && r == WAIT_TIMEOUT) TerminateProcess(pi.hProcess, 1);
         if (!up) WaitForSingleObject(pi.hProcess, 5000);
@@ -1002,8 +1018,8 @@ static bool apply_update_and_restart(HWND hwnd) {
     std::wstring rerr;
     restore_previous(appDir, staging, previous, &rerr);
     reregister_hotkey();
-    g_ui.updateNote = "The new version didn't start, so " + narrow(version_text(u.current)) +
-                      " was put back" + (rerr.empty() ? "" : " (" + narrow(rerr) + ")");
+    update_mark_failed(L"The new version didn't start, so " + version_text(u.current) + L" was put back" +
+                       (rerr.empty() ? L"" : L" (" + rerr + L")"));
     logf(L"update: %s did not come up; rolled back", u.release.tag.c_str());
     return false;
 }

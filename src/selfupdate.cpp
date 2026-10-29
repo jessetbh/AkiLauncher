@@ -109,6 +109,17 @@ bool current_launcher_version(Version* out) {
     if (!size) return false;
     std::vector<uint8_t> buf(size);
     if (!GetFileVersionInfoW(exe, 0, size, buf.data())) return false;
+    // The ProductVersion string first ("0.3.0-beta.1" keeps its pre-release part), else the fixed numbers.
+    struct LangCp { WORD lang, cp; }* tr = nullptr;
+    UINT trLen = 0;
+    if (VerQueryValueW(buf.data(), L"\\VarFileInfo\\Translation", (void**)&tr, &trLen) && tr && trLen >= sizeof(LangCp)) {
+        wchar_t key[64];
+        swprintf_s(key, L"\\StringFileInfo\\%04x%04x\\ProductVersion", tr->lang, tr->cp);
+        wchar_t* text = nullptr;
+        UINT tlen = 0;
+        if (VerQueryValueW(buf.data(), key, (void**)&text, &tlen) && text && tlen && parse_version(text, out))
+            return true;
+    }
     VS_FIXEDFILEINFO* fi = nullptr;
     UINT len = 0;
     if (!VerQueryValueW(buf.data(), L"\\", (void**)&fi, &len) || !fi) return false;
@@ -259,78 +270,116 @@ bool stage_update(const std::vector<uint8_t>& zip, long long expectedSize, const
     return ok;
 }
 
+static const wchar_t* kJournal = L"applied.txt";  // in previousDir: what the swap did, line by line
+
+static bool is_user_art(const fs::path& rel) {
+    // assets\boxart\ is the player's to change (README): an update adds missing art, never replaces theirs.
+    auto it = rel.begin();
+    if (it == rel.end() || _wcsicmp(it->c_str(), L"assets") != 0) return false;
+    ++it;
+    return it != rel.end() && _wcsicmp(it->c_str(), L"boxart") == 0;
+}
+
+static std::vector<std::pair<wchar_t, fs::path>> read_journal(const fs::path& previousDir) {
+    std::vector<std::pair<wchar_t, fs::path>> out;
+    std::ifstream f(previousDir / kJournal, std::ios::binary);
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.size() > 2 && (line[0] == 'R' || line[0] == 'A') && line[1] == ' ')
+            out.push_back({(wchar_t)line[0], fs::path(json_utf8_to_wide(line.substr(2)))});
+    }
+    return out;
+}
+
 bool restore_previous(const fs::path& appDir, const fs::path& stagingDir, const fs::path& previousDir,
                       std::wstring* err) {
+    (void)stagingDir;
+    // Undo exactly what the journal says: R (replaced) -> the old file back, A (added) -> removed.
     std::error_code ec;
     bool ok = true;
-    std::vector<fs::path> added;
-    list_files(stagingDir, added);
-    for (const auto& rel : added) {
-        // A file the update brought: back to the old copy if there was one, else gone.
-        fs::path dst = appDir / rel, old = previousDir / rel;
-        if (fs::exists(old, ec)) {
+    for (const auto& [kind, rel] : read_journal(previousDir)) {
+        fs::path dst = appDir / rel;
+        if (kind == L'A') {
             fs::remove(dst, ec);
-            fs::rename(old, dst, ec);
-            if (ec) {
-                ok = false;
-                if (err) *err = L"can't put back " + dst.wstring();
-            }
-        } else {
-            fs::remove(dst, ec);
+            continue;
+        }
+        fs::path old = previousDir / rel;
+        if (!fs::exists(old, ec)) continue;
+        fs::remove(dst, ec);
+        fs::rename(old, dst, ec);
+        if (ec) {
+            ok = false;
+            if (err) *err = L"can't put back " + dst.wstring();
         }
     }
+    fs::remove(previousDir / kJournal, ec);
     return ok;
 }
 
 bool apply_staged_update(const fs::path& appDir, const fs::path& stagingDir, const fs::path& previousDir,
                          std::wstring* err) {
     std::error_code ec;
-    fs::remove_all(previousDir, ec);  // the version before last goes; the current one becomes "previous"
-    fs::create_directories(previousDir, ec);
     std::vector<fs::path> files;
     list_files(stagingDir, files);
     if (files.empty()) {
         *err = L"nothing staged";
         return false;
     }
-    // On failure, undo exactly what was done: files moved aside come back,
-    // files created go; nothing else is touched.
-    std::vector<fs::path> movedAside, created;
-    auto undo = [&]() {
-        std::error_code uec;
-        for (const auto& rel : created) fs::remove(appDir / rel, uec);
-        for (const auto& rel : movedAside) {
-            fs::remove(appDir / rel, uec);
-            fs::rename(previousDir / rel, appDir / rel, uec);
-        }
-    };
-    // 1. Every file the update replaces moves aside (renaming works for the running exe).
-    for (const auto& rel : files) {
-        fs::path cur = appDir / rel;
-        if (!fs::exists(cur, ec)) continue;
-        fs::create_directories((previousDir / rel).parent_path(), ec);
-        fs::rename(cur, previousDir / rel, ec);
-        if (ec) {
-            *err = L"can't move " + cur.wstring() + L" aside (" + json_utf8_to_wide(ec.message()) +
-                   L"); is the folder writable, and nothing else using it?";
-            undo();
-            return false;
-        }
-        movedAside.push_back(rel);
-    }
-    // 2. The new files go in.
+    // 1. Copy every new file next to its target as <name>.aki-new: the slow part, and the app is still whole.
+    std::vector<fs::path> todo;
     for (const auto& rel : files) {
         fs::path dst = appDir / rel;
+        if (is_user_art(rel) && fs::exists(dst, ec)) continue;  // the player's art stays
+        fs::path tmp = dst;
+        tmp += L".aki-new";
         fs::create_directories(dst.parent_path(), ec);
-        fs::copy_file(stagingDir / rel, dst, fs::copy_options::overwrite_existing, ec);
+        fs::copy_file(stagingDir / rel, tmp, fs::copy_options::overwrite_existing, ec);
         if (ec) {
-            *err = L"can't write " + dst.wstring() + L" (" + json_utf8_to_wide(ec.message()) + L")";
-            undo();
+            *err = L"can't write " + tmp.wstring() + L" (" + json_utf8_to_wide(ec.message()) +
+                   L"); is the folder writable?";
+            for (const auto& r : todo) fs::remove(appDir / r += L".aki-new", ec);
+            fs::remove(tmp, ec);
             return false;
         }
-        bool wasThere = false;
-        for (const auto& m : movedAside) wasThere = wasThere || m == rel;
-        if (!wasThere) created.push_back(rel);
+        todo.push_back(rel);
+    }
+    // 2. Quick rename pairs (current -> previous, .aki-new -> current), the exe last, each step in the journal.
+    std::stable_partition(todo.begin(), todo.end(),
+                          [](const fs::path& r) { return _wcsicmp(r.c_str(), L"AkiLauncher.exe") != 0; });
+    fs::remove_all(previousDir, ec);  // the version before last goes; the current one becomes "previous"
+    fs::create_directories(previousDir, ec);
+    std::ofstream journal(previousDir / kJournal, std::ios::binary | std::ios::trunc);
+    auto fail_and_undo = [&](const std::wstring& why, size_t from) {
+        *err = why;
+        journal.close();
+        std::wstring ignored;
+        restore_previous(appDir, stagingDir, previousDir, &ignored);
+        for (size_t k = from; k < todo.size(); ++k) {
+            std::error_code e2;
+            fs::path tmp = appDir / todo[k];
+            tmp += L".aki-new";
+            fs::remove(tmp, e2);
+        }
+        return false;
+    };
+    for (size_t i = 0; i < todo.size(); ++i) {
+        const fs::path& rel = todo[i];
+        fs::path dst = appDir / rel, tmp = dst;
+        tmp += L".aki-new";
+        bool existed = fs::exists(dst, ec);
+        if (existed) {
+            fs::create_directories((previousDir / rel).parent_path(), ec);
+            fs::rename(dst, previousDir / rel, ec);
+            if (ec)
+                return fail_and_undo(L"can't move " + dst.wstring() + L" aside (" + json_utf8_to_wide(ec.message()) +
+                                         L"); is anything else using it?",
+                                     i);
+            journal << "R " << w_to_u8(rel.wstring()) << "\n" << std::flush;
+        }
+        fs::rename(tmp, dst, ec);
+        if (ec) return fail_and_undo(L"can't put " + dst.wstring() + L" in place", i);
+        if (!existed) journal << "A " << w_to_u8(rel.wstring()) << "\n" << std::flush;
     }
     return true;
 }
@@ -382,6 +431,7 @@ static void decide(const std::vector<LauncherRelease>& rels, bool prerelease, co
     std::lock_guard lk(g_mu);
     g_releases = rels;
     g_st.checkedAt = now_text();
+    if (g_st.phase == UpdatePhase::Downloading || g_st.phase == UpdatePhase::Staged) return;  // keep the one in hand
     const LauncherRelease* r = pick_launcher_update(g_releases, g_st.current, prerelease, skip);
     if (r && r->tag != g_dismissedTag) {
         g_st.release = *r;
@@ -396,6 +446,14 @@ void update_check_start() {
     init_once();
     {
         std::lock_guard lk(g_mu);
+        // The setting is live: off stops checks now; back on resumes them.
+        if (!settings().updateChecks) {
+            if (g_st.phase != UpdatePhase::DevBuild && g_st.phase != UpdatePhase::Downloading &&
+                g_st.phase != UpdatePhase::Staged)
+                g_st.phase = UpdatePhase::Off;
+            return;
+        }
+        if (g_st.phase == UpdatePhase::Off) g_st.phase = UpdatePhase::Idle;
         if (g_st.phase == UpdatePhase::Off || g_st.phase == UpdatePhase::DevBuild ||
             g_st.phase == UpdatePhase::Downloading || g_st.phase == UpdatePhase::Staged)
             return;
@@ -424,7 +482,7 @@ void update_check_start() {
             unsigned long status = 0;
             // Only reuse the ETag when the cached body is there to go with it.
             std::error_code ec;
-            std::wstring useEtag = fs::exists(cache, ec) ? etag : L"";
+            std::wstring useEtag = fs::exists(cache, ec) && fs::file_size(cache, ec) > 0 && !ec ? etag : L"";
             if (http_get_ex(L"https://api.github.com/repos/jessetbh/AkiLauncher/releases?per_page=10", data, nullptr,
                             nullptr, &err, useEtag, &status, &newEtag)) {
                 if (status == 304) {
@@ -434,6 +492,8 @@ void update_check_start() {
                     body.assign((const char*)data.data(), data.size());
                     std::ofstream f(cache, std::ios::binary | std::ios::trunc);
                     f << body;
+                    f.close();
+                    if (f.fail()) newEtag.clear();  // no cached body to go with it: don't keep the ETag
                 }
             }
         }
@@ -474,6 +534,12 @@ void update_tick() {
 UpdateStatus update_status() {
     std::lock_guard lk(g_mu);
     return g_st;
+}
+
+void update_mark_failed(const std::wstring& why) {
+    std::lock_guard lk(g_mu);
+    g_st.phase = UpdatePhase::Failed;
+    g_st.error = why;
 }
 
 void update_dismiss() {
