@@ -61,6 +61,10 @@ static void test_manifest() {
     CHECK(!parse_mod_manifest("{\"id\": \"x\",").valid);
     CHECK(!parse_mod_manifest("[]").valid);
     CHECK(parse_mod_manifest("{}").valid);
+    std::string deep = "{\"x\":" + std::string(100000, '[') + std::string(100000, ']') + "}";
+    CHECK(!parse_mod_manifest(deep).valid);  // capped, no stack overflow
+    std::string ok = "{\"x\":" + std::string(30, '[') + std::string(30, ']') + ",\"id\":\"d\"}";
+    CHECK(parse_mod_manifest(ok).valid && parse_mod_manifest(ok).id == L"d");
 }
 
 void run_mods_tests(const fs::path& dir) {
@@ -105,6 +109,17 @@ void run_mods_tests(const fs::path& dir) {
                                          {"plugins/../../Tex.rtz", slurp(b)}});
     }
     write_zip(src / L"Nothing.zip", {{"readme.txt", "no mod here"}});
+    {
+        auto slurp = [](const fs::path& p) {
+            std::ifstream f(p, std::ios::binary);
+            return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        };
+        fs::path bad = dir / L"tmp" / L"Bad.nrm";
+        write_zip(bad, {{"mod_binary.bin", "c"}});  // no mod.json
+        write_zip(src / L"BadPackage.zip", {{"plugins/Good.rtz", slurp(dir / L"tmp" / L"Tex.rtz")}, {"Bad.nrm", slurp(bad)}});
+        write_zip(src / L"DupPackage.zip", {{"a/Tex.rtz", slurp(dir / L"tmp" / L"Tex.rtz")},
+                                            {"b/Tex.rtz", slurp(dir / L"tmp" / L"Tex.rtz")}});
+    }
     write_text(src / L"Folder Pack" / L"rt64.json", kDb);
     write_text(src / L"Folder Pack" / L"hud" / L"0011223344556677.png", "x");
     write_text(src / L"Dump Pack" / L"8899aabbccddeeff.png", "x");  // hash-named only: loads without rt64.json
@@ -143,6 +158,15 @@ void run_mods_tests(const fs::path& dir) {
     CHECK(!fs::exists(dir / L"game" / L"Tex.rtz") && !fs::exists(mods / L".aki-install"));  // no paths from the zip
     ir = install_mod(src / L"Nothing.zip", mods, gid, g.title);
     CHECK(!ir.ok && has(ir.message, L"not a mod package"));
+    // A package member that wouldn't load stops the whole package; so do two files of one name.
+    ir = install_mod(src / L"BadPackage.zip", mods, gid, g.title);
+    CHECK(!ir.ok && has(ir.message, L"no mod.json") && !fs::exists(mods / L"Good.rtz") && !fs::exists(mods / L"Bad.nrm"));
+    ir = install_mod(src / L"DupPackage.zip", mods, gid, g.title);
+    CHECK(!ir.ok && has(ir.message, L"two files named"));
+    CHECK(!fs::exists(mods / L".aki-install"));
+    // The mods folder (or a folder holding it) is not a pack folder.
+    ir = install_mod(dir / L"game", mods, gid, g.title);
+    CHECK(!ir.ok && has(ir.message, L"holds the mods folder"));
     ir = install_mod(src / L"Folder Pack", mods, gid, g.title);
     CHECK(ir.ok && fs::exists(mods / L"Folder Pack" / L"hud" / L"0011223344556677.png"));
     ir = install_mod(src / L"Folder Pack", mods, gid, g.title);
@@ -158,7 +182,7 @@ void run_mods_tests(const fs::path& dir) {
     ir = install_mod(src / L"Ropes.rtz", mods, gid, g.title);
     CHECK(ir.ok && has(ir.message, L"Recycle Bin"));
     CHECK(inspect_mod(mods / L"Ropes.rtz").manifest.id == L"ropes2");
-    CHECK(!fs::exists(mods / L"Ropes.rtz.new"));
+    CHECK(!fs::exists(mods / L"Ropes.rtz.new") && !fs::exists(mods / L"Ropes.rtz.old"));
 
     // List: mods only (models\, the runtime's json and dot folders left out), bundled marked.
     write_text(mods / L"mods.json", "{}");

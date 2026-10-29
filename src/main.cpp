@@ -144,6 +144,7 @@ struct UiState {
     std::vector<Texture> modThumbs;  // parallel to modItems (empty srv = none)
     std::string modsNote;
     bool modsNoteOk = true;
+    int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
@@ -169,8 +170,12 @@ static LRESULT WINAPI wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam
         HDROP drop = (HDROP)wparam;
         UINT n = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
         for (UINT i = 0; i < n; ++i) {
-            wchar_t buf[MAX_PATH * 4]{};
-            if (DragQueryFileW(drop, i, buf, (UINT)std::size(buf))) g_dropped.emplace_back(buf);
+            UINT len = DragQueryFileW(drop, i, nullptr, 0);
+            std::wstring buf(len + 1, L'\0');
+            if (len && DragQueryFileW(drop, i, buf.data(), len + 1)) {
+                buf.resize(len);
+                g_dropped.emplace_back(buf);
+            }
         }
         DragFinish(drop);
         return 0;
@@ -589,7 +594,9 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
     release_mod_thumbs();
     const GameEntry& g = games[g_ui.modsGame];
     g_ui.modsDir = game_mods_dir(g);
-    g_ui.modItems = list_mods(g_ui.modsDir, g.exePath.parent_path() / L"assets" / L"mods");
+    // Bundled mods sit in assets\mods next to the exe (none known without one).
+    std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
+    g_ui.modItems = list_mods(g_ui.modsDir, bundled);
     // Thumbnails go through a temp file: the texture loader reads files.
     wchar_t tmpBuf[MAX_PATH]{};
     GetTempPathW(MAX_PATH, tmpBuf);
@@ -613,6 +620,7 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
 static void open_mods(const std::vector<GameEntry>& games, int index) {
     g_ui.modsGame = index;
     g_ui.modsNote.clear();
+    g_ui.modsRemove = -1;
     refresh_mods(games);
     g_ui.showMods = true;
 }
@@ -691,6 +699,16 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         close_mods();
         return;
     }
+    // A Remove from last frame: now, before this frame draws (and so holds) any thumbnail.
+    if (g_ui.modsRemove >= 0 && g_ui.modsRemove < (int)g_ui.modItems.size()) {
+        std::wstring err;
+        const ModItem& m = g_ui.modItems[g_ui.modsRemove];
+        std::wstring name = m.display_name();
+        if (remove_mod(m, &err)) mods_note(L"Removed " + name + L" (it is in the Recycle Bin)", true);
+        else mods_note(err, false);
+        refresh_mods(games);
+    }
+    g_ui.modsRemove = -1;
 
     ImGui::PushFont(g_ui.fontHeader);
     ImGui::SetCursorPosY(vh * 0.055f);
@@ -783,13 +801,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         ImGui::Spacing();
         ImGui::PopID();
     }
-    if (removeIndex >= 0) {
-        std::wstring err;
-        std::wstring name = g_ui.modItems[removeIndex].display_name();
-        if (remove_mod(g_ui.modItems[removeIndex], &err)) mods_note(L"Removed " + name + L" (it is in the Recycle Bin)", true);
-        else mods_note(err, false);
-        refresh_mods(games);
-    }
+    g_ui.modsRemove = removeIndex;  // the thumbnails drawn above stay alive this frame
     ImGui::PopFont();
     ImGui::EndChild();
     ImGui::PushFont(g_ui.fontSmall);
@@ -1817,9 +1829,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (!g_dropped.empty()) {
             std::vector<std::filesystem::path> drops;
             drops.swap(g_dropped);
-            if (g_session.active() || g_ui.showSettings) {
+            if (g_session.active() || g_ui.showSettings || g_ui.insertIndex >= 0) {
                 logf(L"drop ignored: %zu item(s) while %s", drops.size(),
-                     g_session.active() ? L"a game runs" : L"in Settings");
+                     g_session.active() ? L"a game runs" : g_ui.showSettings ? L"in Settings" : L"a game starts");
             } else {
                 if (!g_ui.showMods) open_mods(games, g_ui.selected);
                 install_into_mods(games, drops);
@@ -1951,7 +1963,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // flows so held buttons don't drive focus mid-capture.
         {
             ImGuiIO& nio = ImGui::GetIO();
-            if (g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey)
+            if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods)
                 nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
             else
                 nio.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
@@ -1960,7 +1972,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (!g_session.active() && !g_ui.showSettings && g_ui.insertIndex < 0 &&
+        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && g_ui.insertIndex < 0 &&
             ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0)
             done = true;
 

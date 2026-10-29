@@ -73,6 +73,7 @@ struct Json {
     const std::string& s;
     size_t i = 0;
     bool ok = true;
+    int depth = 0;  // nesting cap: a hostile mod.json must not overflow the stack
 
     void ws() {
         while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
@@ -145,14 +146,17 @@ struct Json {
         char c = s[i];
         if (c == '"') { str(); return; }
         if (c == '{' || c == '[') {
+            if (++depth > 64) { ok = false; return; }
             char close = c == '{' ? '}' : ']';
             ++i;
-            if (eat(close)) return;
-            do {
-                if (close == '}') { str(); if (!eat(':')) { ok = false; return; } }
-                skip();
-            } while (ok && eat(','));
-            if (!eat(close)) ok = false;
+            if (!eat(close)) {
+                do {
+                    if (close == '}') { str(); if (!eat(':')) { ok = false; break; } }
+                    skip();
+                } while (ok && eat(','));
+                if (ok && !eat(close)) ok = false;
+            }
+            --depth;
             return;
         }
         size_t start = i;
@@ -365,7 +369,8 @@ bool recycle_path(const fs::path& p, std::wstring* errorOut) {
     SHFILEOPSTRUCTW op{};
     op.wFunc = FO_DELETE;
     op.pFrom = from.c_str();
-    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    // FOF_WANTNUKEWARNING: on a drive without a Recycle Bin, ask before deleting for good.
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI | FOF_WANTNUKEWARNING;
     int r = SHFileOperationW(&op);
     std::error_code ec;
     if (r != 0 || op.fAnyOperationsAborted || fs::exists(p, ec)) {
@@ -395,42 +400,53 @@ static bool wrong_game(const ModManifest& man, const std::wstring& gameId, const
     return false;
 }
 
-// Writes bytes (or copies a file) to dest through dest.new; an existing dest
-// goes to the Recycle Bin first.
-static bool place_file(const fs::path& dest, const std::string* bytes, const fs::path* srcFile, std::wstring* msg,
-                       bool* replaced) {
+// Copies srcFile to dest through dest.new. An existing dest is set aside
+// (dest.old) until the new copy is in place, then goes to the Recycle Bin; if
+// anything fails, the old copy is put back.
+static bool place_file(const fs::path& dest, const fs::path& srcFile, std::wstring* msg, bool* replaced) {
     std::error_code ec;
-    fs::path tmp = dest;
+    fs::path tmp = dest, old = dest;
     tmp += L".new";
-    if (bytes) {
-        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-        f.write(bytes->data(), (std::streamsize)bytes->size());
-        f.close();
-        if (f.fail()) {
-            fs::remove(tmp, ec);
-            *msg = L"can't write " + tmp.wstring();
-            return false;
-        }
-    } else {
-        fs::copy_file(*srcFile, tmp, fs::copy_options::overwrite_existing, ec);
-        if (ec) {
-            fs::remove(tmp, ec);
-            *msg = L"can't copy to " + tmp.wstring();
-            return false;
-        }
+    old += L".old";
+    fs::copy_file(srcFile, tmp, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        fs::remove(tmp, ec);
+        *msg = L"can't copy to " + tmp.wstring();
+        return false;
     }
     *replaced = fs::exists(dest, ec);
-    if (*replaced && !recycle_path(dest, msg)) {
-        fs::remove(tmp, ec);
-        return false;
+    if (*replaced) {
+        fs::remove(old, ec);
+        fs::rename(dest, old, ec);
+        if (ec) {
+            fs::remove(tmp, ec);
+            *msg = L"can't replace " + dest.filename().wstring() + L" (in use? close the game)";
+            return false;
+        }
     }
     fs::rename(tmp, dest, ec);
     if (ec) {
-        fs::remove(tmp, ec);
+        std::error_code ec2;
+        fs::remove(tmp, ec2);
+        if (*replaced) fs::rename(old, dest, ec2);
         *msg = L"can't write " + dest.wstring();
         return false;
     }
+    if (*replaced) {
+        std::wstring ignored;
+        if (!recycle_path(old, &ignored)) fs::remove(old, ec);
+    }
     return true;
+}
+
+// The pack folder's mods folder must not be inside it (dropping the mods
+// folder, or a parent, would copy into the tree being read).
+static bool contains_path(const fs::path& outer, const fs::path& inner) {
+    std::error_code ec;
+    fs::path a = fs::weakly_canonical(outer, ec), b = fs::weakly_canonical(inner, ec);
+    std::wstring as = lower(a.wstring()), bs = lower(b.wstring());
+    if (!as.empty() && as.back() != L'\\') as += L'\\';
+    return bs.size() >= as.size() && bs.compare(0, as.size(), as) == 0;
 }
 
 static bool copy_tree(const fs::path& src, const fs::path& dst, std::wstring* msg) {
@@ -473,6 +489,10 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
 
     // A pack folder: copied as it is (its name is the pack's name in the Mods menu).
     if (fs::is_directory(src, ec)) {
+        if (name.empty() || contains_path(src, modsDir)) {
+            r.message = src.wstring() + L" holds the mods folder itself: pick the pack's own folder";
+            return r;
+        }
         ModItem m = inspect_mod(src);
         if (!m.problem.empty()) {
             r.message = name + L": " + m.problem;
@@ -504,7 +524,7 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
         }
         if (wrong_game(m.manifest, gameId, gameTitle, name, &r.message)) return r;
         fs::path dest = modsDir / name;
-        if (!place_file(dest, nullptr, &src, &r.message, &replaced)) return r;
+        if (!place_file(dest, src, &r.message, &replaced)) return r;
         r.ok = true;
         r.installed.push_back(dest);
         r.message = L"Installed " + m.display_name() + (replaced ? L" (the older copy is in the Recycle Bin)" : L"");
@@ -535,7 +555,7 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
         zf.reset();  // closed before the copy
         if (wrong_game(man, gameId, gameTitle, name, &r.message)) return r;
         fs::path dest = modsDir / (src.stem().wstring() + L".rtz");
-        if (!place_file(dest, nullptr, &src, &r.message, &replaced)) return r;
+        if (!place_file(dest, src, &r.message, &replaced)) return r;
         r.ok = true;
         r.installed.push_back(dest);
         r.message = L"Installed " + dest.filename().wstring() + L" (a texture pack zip, saved as .rtz)" +
@@ -543,47 +563,66 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
         logf(L"mods: installed %s -> %s", src.c_str(), dest.c_str());
         return r;
     }
-    std::vector<std::pair<std::wstring, std::string>> members;
+    // A package: its .nrm / .rtz files, extracted (to files, not memory: packs
+    // can be big) into a work folder and checked like direct installs before
+    // any goes in.
+    fs::path tmpDir = modsDir / L".aki-install";
+    fs::remove_all(tmpDir, ec);
+    fs::create_directories(tmpDir, ec);
+    struct Cleanup {
+        fs::path d;
+        ~Cleanup() { std::error_code e; fs::remove_all(d, e); }
+    } cleanup{tmpDir};
+    std::vector<fs::path> members;
     int n = (int)mz_zip_reader_get_num_files(&za);
     for (int i = 0; i < n; ++i) {
         mz_zip_archive_file_stat st;
         if (!mz_zip_reader_file_stat(&za, i, &st) || mz_zip_reader_is_file_a_directory(&za, i)) continue;
-        std::wstring member = u8w(st.m_filename);
-        std::wstring leaf = fs::path(member).filename().wstring();  // flat: no paths from the zip
+        std::wstring leaf = fs::path(u8w(st.m_filename)).filename().wstring();  // flat: no paths from the zip
         std::wstring mext = lower(fs::path(leaf).extension().wstring());
         if (mext != L".nrm" && mext != L".rtz") continue;
-        size_t sz = 0;
-        void* p = mz_zip_reader_extract_to_heap(&za, i, &sz, 0);
-        if (!p) continue;
-        members.emplace_back(leaf, std::string((const char*)p, sz));
-        mz_free(p);
+        fs::path out = tmpDir / leaf;
+        if (fs::exists(out, ec)) {
+            r.message = name + L" has two files named " + leaf + L": install them one at a time";
+            return r;
+        }
+        FILE* f = nullptr;
+        if (_wfopen_s(&f, out.c_str(), L"wb") != 0 || !f) {
+            r.message = L"can't write " + out.wstring();
+            return r;
+        }
+        bool okx = mz_zip_reader_extract_to_cfile(&za, i, f, 0);
+        if (fclose(f) != 0) okx = false;
+        if (!okx) {
+            r.message = name + L": can't unpack " + leaf;
+            return r;
+        }
+        members.push_back(out);
     }
     zf.reset();
     if (members.empty()) {
         r.message = name + L": no rt64.json at its root and no .nrm or .rtz inside: not a mod package";
         return r;
     }
-    // Check every member before writing any.
-    fs::path tmpDir = modsDir / L".aki-install";
-    fs::create_directories(tmpDir, ec);
-    for (auto& [leaf, bytes] : members) {
-        fs::path probe = tmpDir / leaf;
-        {
-            std::ofstream f(probe, std::ios::binary | std::ios::trunc);
-            f.write(bytes.data(), (std::streamsize)bytes.size());
-        }
+    for (const auto& probe : members) {
         ModItem m = inspect_mod(probe);
-        fs::remove(probe, ec);
-        if (wrong_game(m.manifest, gameId, gameTitle, leaf, &r.message)) {
-            fs::remove_all(tmpDir, ec);
+        std::wstring leaf = probe.filename().wstring();
+        if (!m.problem.empty()) {
+            r.message = name + L": " + leaf + L": " + m.problem + L" (nothing installed)";
             return r;
         }
+        if (wrong_game(m.manifest, gameId, gameTitle, leaf, &r.message)) return r;
     }
-    fs::remove_all(tmpDir, ec);
     int replacedCount = 0;
-    for (auto& [leaf, bytes] : members) {
-        fs::path dest = modsDir / leaf;
-        if (!place_file(dest, &bytes, nullptr, &r.message, &replaced)) return r;
+    for (const auto& probe : members) {
+        fs::path dest = modsDir / probe.filename();
+        std::wstring err;
+        if (!place_file(dest, probe, &err, &replaced)) {
+            std::wstring done;
+            for (const auto& p : r.installed) done += (done.empty() ? L"" : L", ") + p.filename().wstring();
+            r.message = err + (done.empty() ? L"" : L" (already installed from " + name + L": " + done + L")");
+            return r;
+        }
         replacedCount += replaced;
         r.installed.push_back(dest);
     }
