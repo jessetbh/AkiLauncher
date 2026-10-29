@@ -59,7 +59,8 @@ timing, and file-backed saves.
 | Enter, A | play / download / select ROM |
 | F, X | flip the box art |
 | U, RB | install an available update |
-| M, Start | the game's Mods page (install / remove mods and texture packs) |
+| M, Start | the game's Mods page (install / remove mods, texture packs, model packs and conversions) |
+| C, LB | Play as...: the original game or one of its installed conversions (shown when it has some) |
 | Q, Back | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
 | H (or History Tour... on the Quick match page) | the History Tour: stops through wrestling history, played in order |
 | S, Y | settings (Return to Launcher binding, per-game paths) |
@@ -166,6 +167,28 @@ model pack too. It accepts an `<id>.akimodel` folder, a folder of them, or a zip
 - A pack built for another game is refused.
 - A pack of the same id is replaced, and the old copy goes to the Recycle Bin.
 - Nothing is assigned: pick who it replaces under Model packs.
+
+**What is a package?** One file for every kind of mod (aki-roadmap#154): a zip, or a folder, with an
+`aki-package.json` next to what it installs (AkiTools `aki-package.py package` makes one). The Mods page's install
+takes it like any other file, and checks it first; a refused package changes nothing:
+- **The game and the ROM:** a package for another game is refused. A conversion made for another ROM than yours is
+  refused and names the ROM it needs; for other kinds that is only a note.
+- **Upgrades:** a newer version replaces what the older one installed. A file you changed since is kept, renamed
+  `<name>.edited-YYYYMMDD`. The same version asks before installing again, an older one asks before going back.
+- **Not while the game runs:** close it first.
+- **The record:** what each package installed, with a content hash per file, is in `packages.json` in the game's data
+  folder, the list the game reads too. Removing a package takes exactly those files (to the Recycle Bin).
+
+Files without a package (`.nrm`, `.rtz`, model packs, zips of them) install as before.
+
+**What are conversions, and how do I play one?** A conversion is a whole ROM hack (No Mercy Plus, AEW 64, ...): one at
+a time, with its own saves in `saves\<id>\`. Install its package on the Mods page; a ROM-hack `.nrm` (a patch, no code)
+becomes a conversion too, and one already in the mods folder has a **Move to Conversions** button. The Mods page's
+**Conversions** section lists them (including ones put in `conversions\` by hand) with **Play**, **Open saves folder**
+and **Remove** (its saves always stay). On the home page, a game with conversions shows **Play as...**: `C` (`LB`)
+switches between the original game and each conversion, the launcher remembers the pick per game (`play_as` in
+`settings.ini`), and Play starts the game as it (`AKI_CONVERSION=<id>`, for that start only; nothing in the game's
+files changes). Quick match and the History Tour always start the original game.
 - **Remove** on a pack moves it and its HD textures to the Recycle Bin. Its `models.txt` lines stay, listed as
   naming a pack that isn't installed.
 

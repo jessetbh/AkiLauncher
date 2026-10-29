@@ -227,6 +227,26 @@ static bool put_pack(const fs::path& models, const char* id, const char* name, c
            put_preview(d / L"preview.png", r, g, b);
 }
 
+bool make_demo_conversions(const fs::path& data, std::wstring* err) {
+    std::error_code ec;
+    fs::remove_all(data, ec);
+    bool ok = put(data / L"conversions" / L"demo_plus" / L"aki.json",
+                  R"({"format":"aki-conversion","id":"demo_plus","name":"Demo Mercy Plus","version":"1.2.0",)"
+                  R"("authors":["demo data"]})") &&
+              put(data / L"conversions" / L"demo_plus" / L"codes.txt", "# demo data\n") &&
+              put(data / L"saves" / L"demo_plus" / L"demo.sav", "demo") &&
+              put_zip(data / L"mods" / L"demo_plus_textures.rtz", {{"rt64.json", "{}"}}) &&
+              put(data / L"packages.json",
+                  R"({"format":1,"packages":[{"id":"demo_plus","kind":"conversion","version":"1.2.0","source":"launcher",)"
+                  R"("installed":"2026-10-29T00:00:00Z","files":[{"path":"conversions/demo_plus","hash":""},)"
+                  R"({"path":"mods/demo_plus_textures.rtz","hash":""}]}]})") &&
+              put(data / L"conversions" / L"demo_hack" / L"aki.json",
+                  R"({"format":"aki-conversion","id":"demo_hack","name":"Demo Hack for another ROM","version":"0.9.0",)"
+                  R"("authors":["demo data"],"base_rom":{"sha1":"0000000000000000000000000000000000000000"}})");
+    if (!ok) *err = L"can't make the demo conversions in " + data.wstring();
+    return ok;
+}
+
 bool make_demo_mods_dir(const fs::path& dir, std::wstring* err) {
     std::error_code ec;
     fs::remove_all(dir, ec);

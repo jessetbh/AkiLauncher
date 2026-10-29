@@ -106,6 +106,7 @@ void settings_load() {
             if (key == "exe") o.exePath = u8_to_w(val);
             else if (key == "rom") o.romPath = u8_to_w(val);
             else if (key == "borderless") o.forceBorderless = atoi(val.c_str());
+            else if (key == "play_as") o.playAs = u8_to_w(val);
         } else if (section.rfind("stats:", 0) == 0) {
             GameStats& st = g_settings.stats[u8_to_w(section.substr(6))];
             if (key == "last_played") st.lastPlayedUnix = _atoi64(val.c_str());
@@ -153,6 +154,7 @@ void settings_save() {
         if (!o.exePath.empty()) f << "exe=" << w_to_u8(o.exePath) << "\n";
         if (!o.romPath.empty()) f << "rom=" << w_to_u8(o.romPath) << "\n";
         if (o.forceBorderless != -1) f << "borderless=" << o.forceBorderless << "\n";
+        if (!o.playAs.empty()) f << "play_as=" << w_to_u8(o.playAs) << "\n";
     }
     for (auto& [key, st] : g_settings.stats) {
         if (st.lastPlayedUnix == 0 && st.playSeconds == 0 && st.playCount == 0) continue;

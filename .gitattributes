@@ -1,0 +1,2 @@
+# AkiTools' shared package fixtures (aki-roadmap#154) are kept byte for byte, as AkiTools has them.
+tests/fixtures/packages/** -text

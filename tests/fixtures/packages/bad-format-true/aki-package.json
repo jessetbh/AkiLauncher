@@ -1,0 +1,16 @@
+{
+  "format": true,
+  "kind": "addon",
+  "id": "fixture-addon",
+  "version": "1.0.0",
+  "game_id": "wwfnomercy",
+  "display_name": "Fixture addon",
+  "authors": [
+    "Fixture"
+  ],
+  "license": "CC0-1.0",
+  "thumb": "thumb.png",
+  "payload": {
+    "nrm": "fixture.nrm"
+  }
+}
