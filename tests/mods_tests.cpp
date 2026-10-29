@@ -3,6 +3,7 @@
 // packages, folders, replacing) and removing. Synthetic files only.
 #include "../src/games.h"
 #include "../src/mods.h"
+#include "../src/modelpacks.h"
 #include "check.h"
 
 #include <windows.h>
@@ -65,6 +66,120 @@ static void test_manifest() {
     CHECK(!parse_mod_manifest(deep).valid);  // capped, no stack overflow
     std::string ok = "{\"x\":" + std::string(30, '[') + std::string(30, ']') + ",\"id\":\"d\"}";
     CHECK(parse_mod_manifest(ok).valid && parse_mod_manifest(ok).id == L"d");
+}
+
+// A synthetic model pack folder (no real model: model.bin is a placeholder; install doesn't read it).
+static void fake_pack(const fs::path& d, const char* id, const char* profile, bool hd = false) {
+    write_text(d / L"model.bin", "AKP1 placeholder");
+    write_text(d / L"pack.json", std::string(R"({"schema":1,"id":")") + id + R"(","game":")" + profile +
+                                     R"(","name":"Fake","license":"CC0-1.0"})");
+    write_text(d / L"manifest.json", std::string(R"({"schema_version":2,"profile":")") + profile + R"("})");
+    if (hd) write_text(d / (std::wstring(id, id + strlen(id)) + L"-hd.rtz"), "rtz");
+}
+
+static std::string slurp(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+// Model packs through the Mods page's Install (aki-roadmap#130): folders, folders of packs, zips; the game check;
+// replacing; removing with the HD textures.
+static void test_model_pack_installs(const fs::path& dir) {
+    fs::path src = dir / L"src", mods = dir / L"game" / L"mods", models = mods / L"models";
+    fs::create_directories(mods);
+    // One pack folder, with its HD textures inside (as aki-model builds it).
+    fake_pack(src / L"snake.akimodel", "snake", "nomercy", true);
+    InstallResult r = install_mod(src / L"snake.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(models / L"snake.akimodel" / L"model.bin") && fs::exists(mods / L"snake-hd.rtz"));
+    CHECK(has(r.message, L"Installed model pack snake") && has(r.message, L"Model packs"));
+    CHECK(!fs::exists(models / L"models.txt"));  // who it replaces is picked in the Model packs section
+    // A folder holding packs (an unzipped share), with the .rtz next to the pack.
+    fake_pack(src / L"share" / L"Banjo v2" / L"banjo.akimodel", "banjo", "nomercy");
+    write_text(src / L"share" / L"Banjo v2" / L"banjo-hd.rtz", "rtz");
+    fake_pack(src / L"share" / L"robot.akimodel", "robot", "nomercy");
+    r = install_mod(src / L"share", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(models / L"banjo.akimodel") && fs::exists(models / L"robot.akimodel"));
+    CHECK(fs::exists(mods / L"banjo-hd.rtz"));
+    // A zip of a pack folder (paths kept, nothing outside the work folder, the work folder gone after).
+    fs::path z = src / L"cesium.zip";
+    write_zip(z, {{"cesium.akimodel/model.bin", "x"}, {"cesium.akimodel/pack.json", R"({"id":"cesium","game":"nomercy"})"},
+                  {"cesium.akimodel/manifest.json", R"({"profile":"nomercy"})"}, {"cesium.akimodel/cesium-hd.rtz", "rtz"},
+                  {"../escape.txt", "x"}});
+    r = install_mod(z, mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(models / L"cesium.akimodel" / L"pack.json") && fs::exists(mods / L"cesium-hd.rtz"));
+    CHECK(!fs::exists(dir / L"game" / L"escape.txt") && !fs::exists(mods / L"escape.txt"));
+    CHECK(!fs::exists(mods / L".aki-install-packs"));
+    // A zip with the pack's files at its root: the id comes from pack.json.
+    fs::path flat = src / L"Flat Pack.zip";
+    write_zip(flat, {{"model.bin", "x"}, {"pack.json", R"({"id":"flat","game":"nomercy"})"}});
+    r = install_mod(flat, mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(models / L"flat.akimodel" / L"model.bin"));
+    // ... and with no id in pack.json, the zip's name; backslash paths are paths.
+    fs::path noid = src / L"zipname.zip";
+    write_zip(noid, {{"model.bin", "x"}, {"manifest.json", R"({"profile":"nomercy"})"}});
+    r = install_mod(noid, mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(models / L"zipname.akimodel"));
+    fs::path bs = src / L"bs.zip";
+    write_zip(bs, {{"bs.akimodel\\model.bin", "x"}, {"bs.akimodel\\manifest.json", R"({"game":"nomercy"})"}});
+    r = install_mod(bs, mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(models / L"bs.akimodel" / L"model.bin"));
+    fs::remove_all(models / L"zipname.akimodel");
+    fs::remove_all(models / L"bs.akimodel");
+    // An upper-case folder installs under the runtime's lower-case id; a manifest "game" is checked too.
+    fake_pack(src / L"Snake2.akimodel", "snake2", "nomercy");
+    r = install_mod(src / L"Snake2.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(models / L"snake2.akimodel"));
+    fs::remove_all(models / L"snake2.akimodel");
+    write_text(src / L"g.akimodel" / L"model.bin", "x");
+    write_text(src / L"g.akimodel" / L"manifest.json", R"({"game":"vpw2"})");
+    r = install_mod(src / L"g.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(!r.ok && has(r.message, L"built for vpw2"));
+    // Three levels down is still found.
+    fake_pack(src / L"deep" / L"a" / L"b" / L"deep3.akimodel", "deep3", "nomercy");
+    CHECK(find_model_packs(src / L"deep").size() == 1);
+    // The wrong game, a bad id, and a game without model packs.
+    fake_pack(src / L"vpw.akimodel", "vpw", "vpw2");
+    r = install_mod(src / L"vpw.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(!r.ok && has(r.message, L"built for vpw2") && !fs::exists(models / L"vpw.akimodel"));
+    fake_pack(src / L"Bad Name.akimodel", "bad", "nomercy");
+    r = install_mod(src / L"Bad Name.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(!r.ok && has(r.message, L"isn't a pack id"));
+    r = install_mod(src / L"snake.akimodel", dir / L"wt" / L"mods", L"wcwnwoworldtour", L"World Tour", "");
+    CHECK(!r.ok && has(r.message, L"doesn't take model packs"));
+    // Replacing: the new copy in place, the old one gone (to the Recycle Bin; tests delete).
+    write_text(src / L"snake.akimodel" / L"model.bin", "AKP1 v2");
+    r = install_mod(src / L"snake.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && has(r.message, L"Recycle Bin") && slurp(models / L"snake.akimodel" / L"model.bin") == "AKP1 v2");
+    CHECK(!fs::exists(models / L"snake.akimodel.new") && !fs::exists(models / L"snake.akimodel.old"));
+    // In use (the game has model.bin open): refused before anything moves, the installed copy untouched.
+    {
+        HANDLE h = CreateFileW((models / L"snake.akimodel" / L"model.bin").c_str(), GENERIC_READ, FILE_SHARE_READ,
+                               nullptr, OPEN_EXISTING, 0, nullptr);
+        write_text(src / L"snake.akimodel" / L"model.bin", "AKP1 v3");
+        r = install_mod(src / L"snake.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+        CloseHandle(h);
+        CHECK(!r.ok && slurp(models / L"snake.akimodel" / L"model.bin") == "AKP1 v2");
+        CHECK(!fs::exists(models / L"snake.akimodel.new") && !fs::exists(models / L"snake.akimodel.old"));
+    }
+    // The installed pack itself (or the mods folder) is not a source.
+    r = install_mod(models / L"snake.akimodel", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(!r.ok);
+    // A texture-pack folder still goes the texture-pack way.
+    write_text(src / L"Tex" / L"rt64.json", R"({"configuration":{"autoPath":"rt64"},"textures":[]})");
+    r = install_mod(src / L"Tex", mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && fs::exists(mods / L"Tex" / L"rt64.json"));
+    // The Model packs section lists them; Remove takes the pack and its HD textures.
+    auto packs = list_model_packs(models);
+    CHECK(packs.size() == 5);  // banjo, cesium, flat, robot, snake
+    // A flat zip doesn't copy an installed HD pack onto itself (its work folder's parent is the mods folder).
+    write_text(mods / L"flat-hd.rtz", "installed hd");
+    r = install_mod(flat, mods, L"wwfnomercy", L"WWF No Mercy", "nomercy");
+    CHECK(r.ok && !has(r.message, L"HD textures") && slurp(mods / L"flat-hd.rtz") == "installed hd");
+    std::wstring err;
+    CHECK(remove_model_pack(models / L"snake.akimodel", mods, &err));
+    CHECK(!fs::exists(models / L"snake.akimodel") && !fs::exists(mods / L"snake-hd.rtz"));
+    CHECK(model_pack_profile(models / L"banjo.akimodel") == "nomercy");
+    CHECK(find_model_packs(src / L"share").size() == 2 && find_model_packs(src / L"Tex").empty());
 }
 
 void run_mods_tests(const fs::path& dir) {
@@ -209,4 +324,6 @@ void run_mods_tests(const fs::path& dir) {
     CHECK(fs::exists(mods / L"Cheats.nrm"));
     CHECK(folder && remove_mod(*folder, &err) && !fs::exists(mods / L"Folder Pack"));
     CHECK(list_mods(mods, dir / L"game" / L"assets" / L"mods").size() == 6);
+
+    test_model_pack_installs(dir / L"packs");
 }

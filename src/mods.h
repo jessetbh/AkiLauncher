@@ -60,8 +60,21 @@ struct InstallResult {
 // Refuses a mod whose mod.json names another game. A file replaces an older
 // copy of the same name (that one goes to the Recycle Bin); a folder never
 // replaces one.
+//
+// Model packs (aki-roadmap#130): an <id>.akimodel folder (model.bin + pack.json / manifest.json), a folder holding
+// such folders, or a zip of either, goes into modsDir\models\<id>.akimodel, its <id>-hd.rtz into modsDir\. Only for
+// a game with modelProfile (refused when the pack is built for another profile). models.txt is not touched: the Model
+// packs section picks who it replaces. A pack of the same id is replaced (the old one to the Recycle Bin).
 InstallResult install_mod(const std::filesystem::path& src, const std::filesystem::path& modsDir,
-                          const std::wstring& gameId, const std::wstring& gameTitle);
+                          const std::wstring& gameId, const std::wstring& gameTitle,
+                          const std::string& modelProfile = "");
+// The model packs found in a folder: the folder itself when it is one, else its subfolders (two levels down).
+std::vector<std::filesystem::path> find_model_packs(const std::filesystem::path& dir);
+// The profile a pack is built for (manifest.json "profile", else pack.json "profile" / "game"); "" if neither says.
+std::string model_pack_profile(const std::filesystem::path& packDir);
+// Moves an installed model pack and its <id>-hd.rtz in modsDir to the Recycle Bin. models.txt keeps its lines (the
+// Model packs section then lists them as naming a pack that isn't installed).
+bool remove_model_pack(const std::filesystem::path& packDir, const std::filesystem::path& modsDir, std::wstring* errorOut);
 // Moves a mod to the Recycle Bin (undoable). Bundled mods are refused.
 bool remove_mod(const ModItem& m, std::wstring* errorOut);
 // Recycle Bin move for any file or folder (also used for replaced copies).
