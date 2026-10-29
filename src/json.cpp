@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 std::wstring json_utf8_to_wide(const std::string& s) {
@@ -186,6 +187,89 @@ struct Parser {
     }
 };
 }  // namespace
+
+static void write_string(std::string& o, const std::string& s) {
+    o += '"';
+    for (unsigned char c : s) {
+        switch (c) {
+            case '"': o += "\\\""; break;
+            case '\\': o += "\\\\"; break;
+            case '\n': o += "\\n"; break;
+            case '\r': o += "\\r"; break;
+            case '\t': o += "\\t"; break;
+            default:
+                if (c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    o += buf;
+                } else {
+                    o += (char)c;  // UTF-8 passes through
+                }
+        }
+    }
+    o += '"';
+}
+
+static void write_value(std::string& o, const JsonValue& v, int indent) {
+    std::string pad((size_t)indent + 4, ' ');
+    switch (v.type) {
+        case JsonValue::Type::Null: o += "null"; break;
+        case JsonValue::Type::Bool: o += v.b ? "true" : "false"; break;
+        case JsonValue::Type::Number: {
+            char buf[40];
+            if (std::isfinite(v.n) && std::floor(v.n) == v.n && std::fabs(v.n) < 9007199254740992.0)
+                snprintf(buf, sizeof(buf), "%.0f", v.n);
+            else if (std::isfinite(v.n))
+                snprintf(buf, sizeof(buf), "%.17g", v.n);
+            else
+                snprintf(buf, sizeof(buf), "null");
+            o += buf;
+            break;
+        }
+        case JsonValue::Type::String: write_string(o, v.s); break;
+        case JsonValue::Type::Array:
+        case JsonValue::Type::Object: {
+            bool obj = v.type == JsonValue::Type::Object;
+            if (v.items.empty()) {
+                o += obj ? "{}" : "[]";
+                break;
+            }
+            o += obj ? "{\n" : "[\n";
+            for (size_t i = 0; i < v.items.size(); ++i) {
+                o += pad;
+                if (obj) {
+                    write_string(o, i < v.keys.size() ? v.keys[i] : std::string());
+                    o += ": ";
+                }
+                write_value(o, v.items[i], indent + 4);
+                o += i + 1 < v.items.size() ? ",\n" : "\n";
+            }
+            o += std::string((size_t)indent, ' ');
+            o += obj ? '}' : ']';
+            break;
+        }
+    }
+}
+
+std::string json_write(const JsonValue& v) {
+    std::string o;
+    write_value(o, v, 0);
+    return o;
+}
+
+JsonValue json_string(const std::string& s) {
+    JsonValue v;
+    v.type = JsonValue::Type::String;
+    v.s = s;
+    return v;
+}
+
+JsonValue json_bool(bool b) {
+    JsonValue v;
+    v.type = JsonValue::Type::Bool;
+    v.b = b;
+    return v;
+}
 
 bool json_parse(const std::string& text, JsonValue* out, std::string* err) {
     bool bom = text.rfind("\xEF\xBB\xBF", 0) == 0;

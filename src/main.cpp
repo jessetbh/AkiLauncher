@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,7 @@
 #include "romscan.h"
 #include "mods.h"
 #include "modelpacks.h"
+#include "quickmatch.h"
 #include "selfupdate.h"
 #include "launch.h"
 #include "settings.h"
@@ -104,6 +106,9 @@ static void destroy_device() {
 // ---------------------------------------------------------------------------
 
 static GameSession g_session;
+// Quick match (aki-roadmap#22): the data folder whose mod settings the running game's quick match changed, put back
+// once the session ends (empty = none).
+static std::filesystem::path g_qmRunDir;
 static bool g_quickBackRequested = false;
 static constexpr int HOTKEY_QUICKBACK = 1;
 
@@ -162,6 +167,14 @@ struct UiState {
     bool showUpdate = false;
     bool updateRequested = false;  // "Update now": install as soon as the download is verified
     std::string updateNote;        // the last apply's outcome
+    // quick match (aki-roadmap#22)
+    bool showQuick = false;
+    int quickGame = -1;
+    bool qmFound = false;
+    QuickMatchMod qm;
+    std::string qmWhy;        // why there is no quick match for this game
+    std::vector<int> qmPick;  // per qm.options: the choice (randomOk options: 0 = Random, then the choices)
+    std::string quickNote;
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
@@ -1086,6 +1099,124 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
     ImGui::PopFont();
 }
 
+// --- Quick match (aki-roadmap#22) --------------------------------------------
+
+static void open_quick(const std::vector<GameEntry>& games, int index) {
+    const GameEntry& g = games[index];
+    carry_portable(g);  // the data folder the run's settings go into
+    g_ui.quickGame = index;
+    g_ui.quickNote.clear();
+    std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
+    std::wstring why;
+    g_ui.qmFound = find_quickmatch(bundled, game_mods_dir(g), &g_ui.qm, &why);
+    g_ui.qmWhy = narrow(why);
+    g_ui.qmPick.assign(g_ui.qm.options.size(), 0);
+    for (size_t i = 0; g_ui.qmFound && i < g_ui.qm.options.size(); ++i) {
+        const QmOption& o = g_ui.qm.options[i];
+        if (o.randomOk && o.id == "venue") continue;  // Random venue by default
+        int base = o.randomOk ? 1 : 0;
+        for (size_t c = 0; c < o.choices.size(); ++c)
+            if (o.choices[c] == o.def) g_ui.qmPick[i] = base + (int)c;
+    }
+    g_ui.showQuick = true;
+}
+
+// The launch index once Start is chosen (the run's mod settings are written then), else -1.
+static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
+    const GameEntry& g = games[g_ui.quickGame];
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) {
+        g_ui.showQuick = false;
+        return -1;
+    }
+    ImGui::PushFont(g_ui.fontHeader);
+    ImGui::SetCursorPosY(vh * 0.055f);
+    text_centered("Q U I C K   M A T C H");
+    ImGui::PopFont();
+    ImGui::PushFont(g_ui.fontBase);
+    text_centered_colored(palette::dim, narrow(g.title));
+    ImGui::PopFont();
+
+    float panelW = vw * 0.56f;
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.18f));
+    ImGui::BeginChild("##quick", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_None);
+    ImGui::PushFont(g_ui.fontBase);
+    int launch = -1;
+    if (!g_ui.qmFound) {
+        ImGui::TextColored(palette::warn, "No quick match for this game");
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::TextWrapped("%s", g_ui.qmWhy.c_str());
+        ImGui::TextColored(palette::faint, "Quick match uses the Quick Match mod that the game releases bundle.");
+        ImGui::PopFont();
+    } else {
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::TextWrapped("The game starts straight into a CPU-vs-CPU match through its Quick Match mod. These settings "
+                           "are for this run only: your own mod settings come back when the game closes.");
+        ImGui::PopFont();
+        ImGui::Spacing();
+        float labelW = panelW * 0.28f;
+        for (size_t i = 0; i < g_ui.qm.options.size(); ++i) {
+            const QmOption& o = g_ui.qm.options[i];
+            ImGui::PushID((int)i);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(o.name.c_str());
+            ImGui::SameLine(labelW);
+            ImGui::SetNextItemWidth(panelW - labelW - ImGui::GetStyle().ScrollbarSize);
+            int base = o.randomOk ? 1 : 0;
+            int& pick = g_ui.qmPick[i];
+            auto label = [&](int k) { return k < base ? std::string(kQmRandom) : o.choices[(size_t)(k - base)]; };
+            if (ImGui::BeginCombo("##opt", label(pick).c_str())) {
+                for (int k = 0; k < base + (int)o.choices.size(); ++k) {
+                    if (ImGui::Selectable(label(k).c_str(), k == pick)) pick = k;
+                    if (k == pick) ImGui::SetItemDefaultFocus();
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopID();
+        }
+        ImGui::Spacing();
+        ImGui::Spacing();
+        if (!g.launchable()) {
+            ImGui::TextColored(palette::warn, "Set the game up first (it needs its exe and ROM, like Play)");
+        } else if (ImGui::Button("Start match") || (pad & XINPUT_GAMEPAD_START)) {
+            std::map<std::string, std::string> picks, values;
+            for (size_t i = 0; i < g_ui.qm.options.size(); ++i) {
+                const QmOption& o = g_ui.qm.options[i];
+                int base = o.randomOk ? 1 : 0;
+                int k = g_ui.qmPick[i];
+                picks[o.id] = k < base ? std::string(kQmRandom) : o.choices[(size_t)(k - base)];
+            }
+            static std::mt19937 rng{std::random_device{}()};
+            std::wstring err;
+            std::filesystem::path data = game_data_dir(g);
+            if (resolve_quickmatch(g_ui.qm, picks, rng, &values, &err) && quickmatch_apply(data, g_ui.qm, values, &err)) {
+                std::wstring summary;
+                for (const auto& o : g_ui.qm.options) summary += L" " + widen(o.id) + L"=" + widen(values[o.id]);
+                logf(L"quick match: %s%s", g.title.c_str(), summary.c_str());
+                g_qmRunDir = data;
+                g_ui.showQuick = false;
+                play_launch();
+                launch = g_ui.quickGame;
+            } else {
+                g_ui.quickNote = narrow(err);
+            }
+        }
+        if (!g_ui.quickNote.empty()) {
+            ImGui::PushFont(g_ui.fontSmall);
+            ImGui::TextColored(palette::error, "%s", g_ui.quickNote.c_str());
+            ImGui::PopFont();
+        }
+    }
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::SetCursorPosY(vh * 0.92f);
+    text_centered_colored(palette::faint, g_ui.padInput ? "Start  Start Match      B Back" : "Esc Back");
+    ImGui::PopFont();
+    return launch;
+}
+
 // --- Launcher self-update (aki-roadmap#117) -----------------------------------
 
 static std::string update_line(const UpdateStatus& u) {
@@ -1588,6 +1719,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         return -1;
     }
 
+    // ------------------------------------------------------------------ quick match page
+    if (g_ui.showQuick) {
+        int launch = draw_quick(games, pad);
+        ImGui::End();
+        return launch;
+    }
+
     // ------------------------------------------------------------------ mods page
     if (g_ui.showMods) {
         draw_mods(games, pad);
@@ -1636,6 +1774,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         if (ImGui::IsKeyPressed(ImGuiKey_M, false) || (pad & XINPUT_GAMEPAD_START)) {
             play_flip();
             open_mods(games, g_ui.selected);
+            ImGui::End();
+            return -1;
+        }
+        if (ImGui::IsKeyPressed(ImGuiKey_Q, false) || (pad & XINPUT_GAMEPAD_BACK)) {
+            play_flip();
+            open_quick(games, g_ui.selected);
             ImGui::End();
             return -1;
         }
@@ -2078,12 +2222,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     if (g_ui.padInput)
         text_centered_colored(palette::faint,
                               "D-Pad Browse      A Play      X Flip Box      "
-                              "Y Settings      Start Mods      In Game:  Hold " +
+                              "Y Settings      Start Mods      Back Quick Match      In Game:  Hold " +
                                   chord_to_string(settings().chordMask) + "  To Return");
     else
         text_centered_colored(palette::faint,
                               "Left/Right Browse      Enter Play      F Flip Box      "
-                              "S Settings      M Mods      Esc Quit      In Game:  " +
+                              "S Settings      M Mods      Q Quick Match      Esc Quit      In Game:  " +
                                   hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
                                   "  To Return");
     ImGui::PopFont();
@@ -2249,6 +2393,15 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     std::vector<GameEntry> games = build_game_list(depotRoot);
     apply_overrides(games);
     if (g_ui.selected < 0 || g_ui.selected >= (int)games.size()) g_ui.selected = 0;
+    // A quick match whose launcher stopped before the game did: its settings are undone now.
+    for (const auto& g : games) {
+        std::filesystem::path data = g.exeFound ? game_data_dir(g) : std::filesystem::path();
+        if (data.empty() || !quickmatch_pending(data)) continue;
+        std::wstring err;
+        bool ok = quickmatch_restore(data, &err);
+        logf(L"quick match: left-over run settings in %s %s%s", data.c_str(), ok ? L"restored" : L"NOT restored: ",
+             err.c_str());
+    }
     if (wantSettings) open_settings(games);
     logf(L"depot root: %s", depotRoot.empty() ? L"(NOT FOUND)" : depotRoot.c_str());
 
@@ -2492,7 +2645,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // flows so held buttons don't drive focus mid-capture.
         {
             ImGuiIO& nio = ImGui::GetIO();
-            if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods || g_ui.showUpdate)
+            if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods || g_ui.showUpdate ||
+                g_ui.showQuick)
                 nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
             else
                 nio.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
@@ -2501,7 +2655,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && !g_ui.showUpdate && g_ui.insertIndex < 0 &&
+        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && !g_ui.showUpdate && !g_ui.showQuick &&
+            g_ui.insertIndex < 0 &&
             ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0)
             done = true;
 
@@ -2523,6 +2678,16 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                     break;
                 }
             }
+        }
+        // A quick match's run is over (or never started): the player's mod settings come back.
+        if (!g_qmRunDir.empty() && !g_session.active()) {
+            std::wstring err;
+            if (quickmatch_restore(g_qmRunDir, &err)) logf(L"quick match: mod settings restored in %s", g_qmRunDir.c_str());
+            else {
+                logf(L"quick match: restore FAILED in %s: %s", g_qmRunDir.c_str(), err.c_str());
+                g_session.statusNote = L"Quick match: " + err;
+            }
+            g_qmRunDir.clear();
         }
 
         ImGui::Render();
