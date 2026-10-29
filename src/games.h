@@ -25,6 +25,7 @@ struct GameEntry {
     int romVersion = -1;      // the accepted dump's header version byte (0x3F; -1 = unknown)
     std::wstring modGameId;   // the port's mod_game_id: mod.json "game_id" of mods made for it
     std::wstring baseId;      // a variant (e.g. a mod build) of this game id: its tile follows the base's
+    std::string modelProfile; // aki_modelimport's profile (nomercy, vpw2): the Mods page shows Model packs ("" = none)
     std::filesystem::path manifestPath;  // the aki-game.json it was discovered from ("" = games.json)
 
     // resolved by build_game_list
