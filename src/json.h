@@ -27,7 +27,9 @@ struct JsonValue {
 bool json_parse(const std::string& text, JsonValue* out, std::string* err = nullptr);
 std::wstring json_utf8_to_wide(const std::string& s);
 // The value as JSON text, indented by 4 (keys in their order; whole numbers without a fraction).
-std::string json_write(const JsonValue& v);
+// compact: on one line with no spaces (strings keep their newlines escaped), e.g. one message per line.
+std::string json_write(const JsonValue& v, bool compact = false);
 // Builders for json_write.
 JsonValue json_string(const std::string& s);
 JsonValue json_bool(bool b);
+JsonValue json_number(double n);

@@ -2710,9 +2710,15 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         else if (a == L"--settings") wantSettings = true;
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
         else if (a == L"--dev") set_dev_mode_from_args(true);
+        else if (a == L"--dev-ipc") launch_set_ipc(true);  // aki-roadmap#21: offer games the launcher link (gameipc.h)
         else if (a == L"--test-rebuild" && i + 1 < __argc) testRebuild = _wtoi(__wargv[++i]);
         else if (a == L"--update-confirm" && i + 1 < __argc) updateConfirm = __wargv[++i];
         else if (a == L"--updated-from" && i + 1 < __argc) updatedFrom = __wargv[++i];
+    }
+
+    {
+        wchar_t ipcEnv[4]{};
+        if (!g_shot && GetEnvironmentVariableW(L"AKI_DEV_IPC", ipcEnv, 4) && ipcEnv[0] == L'1') launch_set_ipc(true);
     }
 
     ImGui_ImplWin32_EnableDpiAwareness();
