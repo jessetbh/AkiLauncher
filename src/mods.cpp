@@ -366,7 +366,7 @@ std::vector<fs::path> find_model_packs(const fs::path& dir) {
             std::error_code fec;
             if (!it->is_directory(fec) || it->is_symlink(fec)) continue;
             if (looks_like_model_pack(it->path())) out.push_back(it->path());
-            else if (depth < 2) walk(it->path(), depth + 1);
+            else if (depth < 3) walk(it->path(), depth + 1);
         }
     };
     walk(dir, 1);
@@ -382,10 +382,12 @@ static std::string json_field(const fs::path& file, const char* key) {
 }
 
 std::string model_pack_profile(const fs::path& packDir) {
-    std::string p = json_field(packDir / L"manifest.json", "profile");
-    if (p.empty()) p = json_field(packDir / L"pack.json", "profile");
-    if (p.empty()) p = json_field(packDir / L"pack.json", "game");
-    return p;
+    for (const auto& [file, key] : {std::pair<const wchar_t*, const char*>{L"manifest.json", "profile"},
+                                    {L"manifest.json", "game"}, {L"pack.json", "profile"}, {L"pack.json", "game"}}) {
+        std::string p = json_field(packDir / file, key);
+        if (!p.empty()) return p;
+    }
+    return {};
 }
 
 static std::string w2u8(const std::wstring& w) {
@@ -398,18 +400,23 @@ static std::string w2u8(const std::wstring& w) {
 
 // The pack's id: its folder name without .akimodel, else pack.json "id" (a zip with the pack's files at its root),
 // else the folder name. valid_pack_id decides whether it can be used.
-static std::string model_pack_id(const fs::path& packDir) {
+static std::string model_pack_id(const fs::path& packDir, const std::wstring& fallback) {
     std::wstring leaf = packDir.filename().wstring();
-    if (leaf.size() > 9 && _wcsicmp(leaf.c_str() + leaf.size() - 9, L".akimodel") == 0)
-        return w2u8(leaf.substr(0, leaf.size() - 9));
-    std::string id = json_field(packDir / L"pack.json", "id");
-    return id.empty() ? w2u8(leaf) : id;
+    std::string id;
+    if (leaf.size() > 9 && _wcsicmp(leaf.c_str() + leaf.size() - 9, L".akimodel") == 0) id = w2u8(leaf.substr(0, leaf.size() - 9));
+    if (id.empty()) id = json_field(packDir / L"pack.json", "id");
+    if (id.empty()) id = w2u8(fallback.empty() ? leaf : fallback);  // a zip with the pack at its root: the zip's name
+    // The runtime's ids are lower case: Snake.akimodel installs as snake.
+    std::string low = id;
+    for (auto& c : low) c = (char)tolower((unsigned char)c);
+    return valid_pack_id(low) ? low : id;
 }
 
 static bool install_one_model_pack(const fs::path& pack, const fs::path& modsDir, const std::string& profile,
-                                   const std::wstring& gameTitle, InstallResult* r, std::wstring* line) {
+                                   const std::wstring& gameTitle, InstallResult* r, std::wstring* line,
+                                   const std::wstring& fallbackId, bool fromWork) {
     std::error_code ec;
-    std::string id = model_pack_id(pack);
+    std::string id = model_pack_id(pack, fromWork && pack.filename().wstring().rfind(L".", 0) == 0 ? fallbackId : L"");
     std::wstring wid = u8w(id);
     if (!valid_pack_id(id)) {
         *line = L"\"" + wid + L"\" isn't a pack id (lower case a-z 0-9 _ -, at most 31): rename its folder";
@@ -434,21 +441,38 @@ static bool install_one_model_pack(const fs::path& pack, const fs::path& modsDir
         fs::remove_all(tmp, ec);
         return false;
     }
+    // The old copy is set aside until the new one is in place, then goes to the Recycle Bin; any failure puts it back.
     bool replaced = fs::exists(dest, ec);
-    if (replaced && !recycle_path(dest, line)) {
-        fs::remove_all(tmp, ec);
-        return false;
+    fs::path old = dest;
+    old += L".old";
+    if (replaced) {
+        fs::remove_all(old, ec);
+        fs::rename(dest, old, ec);
+        if (ec) {
+            fs::remove_all(tmp, ec);
+            *line = L"can't replace " + wid + L" (in use? close the game first)";
+            return false;
+        }
     }
     fs::rename(tmp, dest, ec);
     if (ec) {
-        fs::remove_all(tmp, ec);
+        std::error_code e2;
+        fs::remove_all(tmp, e2);
+        if (replaced) fs::rename(old, dest, e2);
         *line = L"can't write " + dest.wstring();
         return false;
+    }
+    if (replaced) {
+        std::wstring ignored;
+        if (!recycle_path(old, &ignored)) fs::remove_all(old, ec);
     }
     r->installed.push_back(dest);
     // Its full-resolution textures: <id>-hd.rtz inside the pack (as aki-model builds it) or next to it.
     fs::path hd;
-    for (const fs::path& c : {pack / (wid + L"-hd.rtz"), pack.parent_path() / (wid + L"-hd.rtz")})
+    std::vector<fs::path> hdAt = {pack / (wid + L"-hd.rtz")};
+    if (!fromWork || pack.filename().wstring().rfind(L".", 0) != 0)  // (the work folder's parent is the mods folder)
+        hdAt.push_back(pack.parent_path() / (wid + L"-hd.rtz"));
+    for (const fs::path& c : hdAt)
         if (fs::is_regular_file(c, ec)) {
             hd = c;
             break;
@@ -471,7 +495,8 @@ static bool install_one_model_pack(const fs::path& pack, const fs::path& modsDir
 
 // Installs every model pack in dir; false (nothing claimed) when dir holds none.
 static bool install_model_packs_from(const fs::path& dir, const fs::path& modsDir, const std::string& profile,
-                                     const std::wstring& gameTitle, InstallResult* r) {
+                                     const std::wstring& gameTitle, InstallResult* r,
+                                     const std::wstring& fallbackId = L"", bool fromWork = false) {
     std::vector<fs::path> packs = find_model_packs(dir);
     if (packs.empty()) return false;
     if (profile.empty()) {
@@ -482,7 +507,7 @@ static bool install_model_packs_from(const fs::path& dir, const fs::path& modsDi
     bool allOk = true;
     for (const auto& p : packs) {
         std::wstring line;
-        bool ok = install_one_model_pack(p, modsDir, profile, gameTitle, r, &line);
+        bool ok = install_one_model_pack(p, modsDir, profile, gameTitle, r, &line, fallbackId, fromWork);
         allOk = allOk && ok;
         all += (all.empty() ? L"" : L"; ") + line;
     }
@@ -497,9 +522,10 @@ bool remove_model_pack(const fs::path& packDir, const fs::path& modsDir, std::ws
     if (!recycle_path(packDir, errorOut)) return false;
     if (leaf.size() > 9) {
         fs::path hd = modsDir / (leaf.substr(0, leaf.size() - 9) + L"-hd.rtz");
-        if (fs::exists(hd, ec)) {
-            std::wstring ignored;
-            recycle_path(hd, &ignored);
+        std::wstring hdErr;
+        if (fs::exists(hd, ec) && !recycle_path(hd, &hdErr)) {
+            if (errorOut) *errorOut = L"the pack is removed, but its HD textures aren't: " + hdErr;
+            return false;
         }
     }
     logf(L"mods: removed model pack %s (Recycle Bin)", packDir.c_str());
@@ -526,7 +552,8 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
                     mz_zip_archive_file_stat st;
                     if (!mz_zip_reader_file_stat(&zf.za, i, &st)) continue;
                     std::string nm = st.m_filename;
-                    hasPack = nm == "model.bin" || (nm.size() > 10 && nm.compare(nm.size() - 10, 10, "/model.bin") == 0);
+                    hasPack = nm == "model.bin" || (nm.size() > 10 && (nm.compare(nm.size() - 10, 10, "/model.bin") == 0 ||
+                                                                       nm.compare(nm.size() - 10, 10, "\\model.bin") == 0));
                 }
             }
         }
@@ -545,13 +572,17 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
                 mz_zip_archive_file_stat st;
                 if (!mz_zip_reader_file_stat(&zf.za, i, &st) || mz_zip_reader_is_file_a_directory(&zf.za, i)) continue;
                 std::string nm = st.m_filename;
-                if (nm.empty() || nm[0] == '/' || nm[0] == '\\' || nm.find(':') != std::string::npos ||
-                    nm.find("..") != std::string::npos)
+                for (auto& c : nm)
+                    if (c == '\\') c = '/';
+                if (nm.empty() || nm[0] == '/' || nm.find(':') != std::string::npos || nm.find("..") != std::string::npos)
                     continue;  // never outside the work folder
                 fs::path out = work / fs::path(u8w(nm));
                 fs::create_directories(out.parent_path(), ec);
                 FILE* f = nullptr;
-                if (_wfopen_s(&f, out.c_str(), L"wb") != 0 || !f) continue;
+                if (_wfopen_s(&f, out.c_str(), L"wb") != 0 || !f) {
+                    r.message = src.filename().wstring() + L": can't unpack " + u8w(nm);
+                    return r;
+                }
                 bool okx = mz_zip_reader_extract_to_cfile(&zf.za, i, f, 0);
                 fclose(f);
                 if (!okx) {
@@ -559,7 +590,7 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
                     return r;
                 }
             }
-            if (install_model_packs_from(work, modsDir, modelProfile, gameTitle, &r)) return r;
+            if (install_model_packs_from(work, modsDir, modelProfile, gameTitle, &r, src.stem().wstring(), true)) return r;
         }
     }
     return install_mod_file_or_folder(src, modsDir, gameId, gameTitle);
