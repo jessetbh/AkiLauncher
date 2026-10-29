@@ -21,6 +21,7 @@ struct GameEntry {
     std::wstring romCode;     // cartridge code in the ROM header (0x3B, e.g. "NW4E"):
                               // the ROM folder scan finds the game's dumps and hacks by it
     int romVersion = -1;      // the accepted dump's header version byte (0x3F; -1 = unknown)
+    std::wstring modGameId;   // the port's mod_game_id: mod.json "game_id" of mods made for it
 
     // resolved by build_game_list
     std::filesystem::path repoPath;

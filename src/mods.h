@@ -1,0 +1,68 @@
+#pragma once
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <vector>
+
+struct GameEntry;
+
+// Mods page (aki-roadmap#96, launcher install side): a game's mods folder,
+// what is in it, installing texture packs and mods into it, removing them.
+// The game's runtime does the loading, ordering and enabling (its Mods menu);
+// the launcher only manages files.
+
+// %LOCALAPPDATA%\<exe stem>\mods, or mods\ next to the exe when the game runs
+// portable (portable.txt next to the exe), as the ports resolve it.
+std::filesystem::path game_mods_dir(const GameEntry& g);
+
+// The fields of mod.json the launcher shows (the runtime's manifest keys).
+struct ModManifest {
+    bool present = false;
+    bool valid = false;  // parsed as a JSON object
+    std::wstring id, version, name, gameId, description;
+    std::vector<std::wstring> authors;
+};
+// A small JSON reader for mod.json: top-level string fields and the authors
+// array; anything else is skipped.
+ModManifest parse_mod_manifest(const std::string& json);
+
+enum class ModKind { Nrm, Rtz, Folder };
+struct ModItem {
+    std::filesystem::path path;
+    ModKind kind = ModKind::Nrm;
+    bool textures = false;   // has rt64.json (or hash-named images, for a folder)
+    bool code = false;       // .nrm with code (mod_binary.bin)
+    bool hasThumb = false;   // thumb.png at the root
+    bool bundled = false;    // the game copies it back on start (assets\mods\)
+    uintmax_t bytes = 0;
+    ModManifest manifest;
+    std::wstring problem;    // why it may not load ("" = looks fine)
+
+    std::wstring display_name() const;
+    std::wstring kind_text() const;  // "Texture pack", "Code mod", "Code + textures"
+};
+
+ModItem inspect_mod(const std::filesystem::path& p, const std::filesystem::path& bundledDir = {});
+// Everything in the mods folder that is a mod (the models\ folder and the
+// runtime's own json files are left out), sorted by name.
+std::vector<ModItem> list_mods(const std::filesystem::path& modsDir, const std::filesystem::path& bundledDir = {});
+
+// The thumbnail's PNG bytes (empty if none).
+std::vector<uint8_t> read_mod_thumb(const ModItem& m);
+
+struct InstallResult {
+    bool ok = false;
+    std::vector<std::filesystem::path> installed;
+    std::wstring message;  // for the UI, success or not
+};
+// Installs an .nrm, .rtz, a zip (rt64.json at its root -> an .rtz; a package
+// with .nrm/.rtz files inside -> those) or a pack folder into modsDir.
+// Refuses a mod whose mod.json names another game. A file replaces an older
+// copy of the same name (that one goes to the Recycle Bin); a folder never
+// replaces one.
+InstallResult install_mod(const std::filesystem::path& src, const std::filesystem::path& modsDir,
+                          const std::wstring& gameId, const std::wstring& gameTitle);
+// Moves a mod to the Recycle Bin (undoable). Bundled mods are refused.
+bool remove_mod(const ModItem& m, std::wstring* errorOut);
+// Recycle Bin move for any file or folder (also used for replaced copies).
+bool recycle_path(const std::filesystem::path& p, std::wstring* errorOut);

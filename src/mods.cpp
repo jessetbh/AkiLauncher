@@ -1,0 +1,595 @@
+#include "mods.h"
+
+#include "games.h"
+#include "launch.h"
+
+#include <windows.h>
+#include <shellapi.h>
+
+#include <algorithm>
+#include <cwctype>
+#include <fstream>
+#include <memory>
+
+#include "miniz.h"
+
+namespace fs = std::filesystem;
+
+static std::wstring u8w(const std::string& s) {
+    if (s.empty()) return {};
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+    std::wstring w(n > 0 ? n : 0, 0);
+    if (n > 0) MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), w.data(), n);
+    return w;
+}
+
+// A zip opened through _wfopen (any path), for miniz's reader.
+struct ZipFile {
+    mz_zip_archive za{};
+    FILE* f = nullptr;
+    bool open = false;
+    explicit ZipFile(const fs::path& p) {
+        if (_wfopen_s(&f, p.c_str(), L"rb") != 0 || !f) {
+            f = nullptr;
+            return;
+        }
+        std::error_code ec;
+        uintmax_t size = fs::file_size(p, ec);
+        open = !ec && mz_zip_reader_init_cfile(&za, f, (mz_uint64)size, 0);
+    }
+    ~ZipFile() {
+        if (open) mz_zip_reader_end(&za);
+        if (f) fclose(f);
+    }
+    ZipFile(const ZipFile&) = delete;
+    ZipFile& operator=(const ZipFile&) = delete;
+};
+
+static std::wstring lower(std::wstring s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// Where the mods are
+// ---------------------------------------------------------------------------
+
+fs::path game_mods_dir(const GameEntry& g) {
+    std::error_code ec;
+    fs::path exeDir = g.exePath.parent_path();
+    if (!exeDir.empty() && fs::exists(exeDir / L"portable.txt", ec)) return exeDir / L"mods";
+    wchar_t lad[MAX_PATH]{};
+    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
+    std::wstring stem = fs::path(g.exeRel).stem().wstring();
+    return fs::path(lad) / stem / L"mods";
+}
+
+// ---------------------------------------------------------------------------
+// mod.json
+// ---------------------------------------------------------------------------
+
+namespace {
+struct Json {
+    const std::string& s;
+    size_t i = 0;
+    bool ok = true;
+
+    void ws() {
+        while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
+    }
+    bool eat(char c) {
+        ws();
+        if (i < s.size() && s[i] == c) {
+            ++i;
+            return true;
+        }
+        return false;
+    }
+    static void put_utf8(std::string& o, unsigned cp) {
+        if (cp < 0x80) o += (char)cp;
+        else if (cp < 0x800) { o += (char)(0xC0 | (cp >> 6)); o += (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) {
+            o += (char)(0xE0 | (cp >> 12)); o += (char)(0x80 | ((cp >> 6) & 0x3F)); o += (char)(0x80 | (cp & 0x3F));
+        } else {
+            o += (char)(0xF0 | (cp >> 18)); o += (char)(0x80 | ((cp >> 12) & 0x3F));
+            o += (char)(0x80 | ((cp >> 6) & 0x3F)); o += (char)(0x80 | (cp & 0x3F));
+        }
+    }
+    unsigned hex4() {
+        if (i + 4 > s.size()) { ok = false; return 0; }
+        unsigned v = 0;
+        for (int k = 0; k < 4; ++k) {
+            char c = s[i++];
+            v <<= 4;
+            if (c >= '0' && c <= '9') v |= c - '0';
+            else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
+            else ok = false;
+        }
+        return v;
+    }
+    std::string str() {
+        std::string o;
+        if (!eat('"')) { ok = false; return o; }
+        while (i < s.size() && s[i] != '"') {
+            char c = s[i++];
+            if (c != '\\') { o += c; continue; }
+            if (i >= s.size()) { ok = false; break; }
+            char e = s[i++];
+            switch (e) {
+                case 'n': o += '\n'; break;
+                case 't': o += '\t'; break;
+                case 'r': o += '\r'; break;
+                case 'b': o += '\b'; break;
+                case 'f': o += '\f'; break;
+                case 'u': {
+                    unsigned cp = hex4();
+                    if (cp >= 0xD800 && cp < 0xDC00 && i + 1 < s.size() && s[i] == '\\' && s[i + 1] == 'u') {
+                        i += 2;
+                        unsigned lo = hex4();
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                    }
+                    put_utf8(o, cp);
+                    break;
+                }
+                default: o += e;  // \" \\ \/
+            }
+        }
+        if (i >= s.size()) ok = false;
+        else ++i;
+        return o;
+    }
+    void skip() {  // any value
+        ws();
+        if (i >= s.size()) { ok = false; return; }
+        char c = s[i];
+        if (c == '"') { str(); return; }
+        if (c == '{' || c == '[') {
+            char close = c == '{' ? '}' : ']';
+            ++i;
+            if (eat(close)) return;
+            do {
+                if (close == '}') { str(); if (!eat(':')) { ok = false; return; } }
+                skip();
+            } while (ok && eat(','));
+            if (!eat(close)) ok = false;
+            return;
+        }
+        size_t start = i;
+        while (i < s.size() && s[i] != ',' && s[i] != '}' && s[i] != ']' && !isspace((unsigned char)s[i])) ++i;
+        if (i == start) ok = false;
+    }
+};
+}  // namespace
+
+ModManifest parse_mod_manifest(const std::string& raw) {
+    ModManifest m;
+    m.present = true;
+    std::string text = raw.rfind("\xEF\xBB\xBF", 0) == 0 ? raw.substr(3) : raw;
+    Json j{text};
+    if (!j.eat('{')) return m;
+    if (!j.eat('}')) {
+        do {
+            std::string key = j.str();
+            if (!j.ok || !j.eat(':')) return m;
+            j.ws();
+            bool isStr = j.i < text.size() && text[j.i] == '"';
+            if (isStr && (key == "id" || key == "version" || key == "display_name" || key == "game_id" ||
+                          key == "description" || key == "short_description")) {
+                std::wstring v = u8w(j.str());
+                if (key == "id") m.id = v;
+                else if (key == "version") m.version = v;
+                else if (key == "display_name") m.name = v;
+                else if (key == "game_id") m.gameId = v;
+                else if (key == "short_description" || m.description.empty()) m.description = v;
+            } else if (key == "authors" && j.i < text.size() && text[j.i] == '[') {
+                j.eat('[');
+                if (!j.eat(']')) {
+                    do {
+                        j.ws();
+                        if (j.i < text.size() && text[j.i] == '"') m.authors.push_back(u8w(j.str()));
+                        else j.skip();
+                    } while (j.ok && j.eat(','));
+                    if (!j.eat(']')) return m;
+                }
+            } else {
+                j.skip();
+            }
+            if (!j.ok) return m;
+        } while (j.eat(','));
+        if (!j.eat('}')) return m;
+    }
+    m.valid = j.ok;
+    return m;
+}
+
+// ---------------------------------------------------------------------------
+// Inspecting
+// ---------------------------------------------------------------------------
+
+std::wstring ModItem::display_name() const {
+    if (!manifest.name.empty()) return manifest.name;
+    if (!manifest.id.empty()) return manifest.id;
+    return kind == ModKind::Folder ? path.filename().wstring() : path.stem().wstring();
+}
+
+std::wstring ModItem::kind_text() const {
+    if (code && textures) return L"Code + textures";
+    if (code) return L"Code mod";
+    if (textures) return L"Texture pack";
+    return kind == ModKind::Nrm ? L"Mod" : L"Unknown";
+}
+
+static bool is_hash_image(const std::wstring& name) {
+    // <16 hex>.png / .dds: loads in our rt64 without an rt64.json entry (aki-roadmap#48).
+    fs::path p(name);
+    std::wstring ext = lower(p.extension().wstring());
+    std::wstring stem = p.stem().wstring();
+    if (ext != L".png" && ext != L".dds") return false;
+    if (stem.size() != 16) return false;
+    for (wchar_t c : stem)
+        if (!iswxdigit(c)) return false;
+    return true;
+}
+
+static std::string read_text_file(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+static void inspect_zip(ModItem& m) {
+    ZipFile zf(m.path);
+    if (!zf.open) {
+        m.problem = L"not a valid zip file";
+        return;
+    }
+    mz_zip_archive& za = zf.za;
+    bool nestedRt64 = false;
+    int n = (int)mz_zip_reader_get_num_files(&za);
+    for (int i = 0; i < n; ++i) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&za, i, &st)) continue;
+        std::string name = st.m_filename;
+        std::string lname = name;
+        std::transform(lname.begin(), lname.end(), lname.begin(), ::tolower);
+        if (lname == "rt64.json") m.textures = true;
+        else if (lname.size() > 10 && lname.compare(lname.size() - 10, 10, "/rt64.json") == 0) nestedRt64 = true;
+        if (lname == "mod_binary.bin") m.code = true;
+        if (lname == "thumb.png") m.hasThumb = true;
+        if (lname == "mod.json") {
+            size_t sz = 0;
+            void* p = mz_zip_reader_extract_to_heap(&za, i, &sz, 0);
+            if (p) {
+                m.manifest = parse_mod_manifest(std::string((const char*)p, sz));
+                mz_free(p);
+            }
+        }
+    }
+    if (m.kind == ModKind::Nrm && !m.manifest.present) m.problem = L"no mod.json: the game won't load it";
+    else if (m.manifest.present && !m.manifest.valid) m.problem = L"mod.json is not valid JSON";
+    else if (m.kind == ModKind::Rtz && !m.textures)
+        m.problem = nestedRt64 ? L"rt64.json is in a subfolder, not at the root: zip the folder's contents"
+                               : L"no rt64.json at the root";
+}
+
+static void inspect_folder(ModItem& m) {
+    std::error_code ec;
+    m.textures = fs::exists(m.path / L"rt64.json", ec);
+    m.hasThumb = fs::exists(m.path / L"thumb.png", ec);
+    if (fs::exists(m.path / L"mod.json", ec)) m.manifest = parse_mod_manifest(read_text_file(m.path / L"mod.json"));
+    int seen = 0;
+    for (fs::recursive_directory_iterator it(m.path, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end && seen < 20000; it.increment(ec), ++seen) {
+        std::error_code fec;
+        if (!it->is_regular_file(fec)) continue;
+        m.bytes += it->file_size(fec);
+        if (!m.textures && is_hash_image(it->path().filename().wstring())) m.textures = true;
+    }
+    if (m.manifest.present && !m.manifest.valid) m.problem = L"mod.json is not valid JSON";
+    else if (!m.textures) m.problem = L"no rt64.json and no <hash>.png images: nothing would load";
+}
+
+ModItem inspect_mod(const fs::path& p, const fs::path& bundledDir) {
+    ModItem m;
+    m.path = p;
+    std::error_code ec;
+    if (fs::is_directory(p, ec)) {
+        m.kind = ModKind::Folder;
+        inspect_folder(m);
+        return m;
+    }
+    std::wstring ext = lower(p.extension().wstring());
+    m.kind = ext == L".rtz" ? ModKind::Rtz : ModKind::Nrm;
+    m.bytes = fs::file_size(p, ec);
+    if (!bundledDir.empty() && fs::exists(bundledDir / p.filename(), ec)) m.bundled = true;
+    inspect_zip(m);
+    return m;
+}
+
+std::vector<ModItem> list_mods(const fs::path& modsDir, const fs::path& bundledDir) {
+    std::vector<ModItem> out;
+    std::error_code ec;
+    for (fs::directory_iterator it(modsDir, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        std::error_code fec;
+        std::wstring name = it->path().filename().wstring();
+        if (it->is_directory(fec)) {
+            // models\: aki-model packs, managed by their own tools; dot folders: tool state.
+            if (lower(name) == L"models" || name.empty() || name[0] == L'.') continue;
+            out.push_back(inspect_mod(it->path(), bundledDir));
+        } else if (it->is_regular_file(fec)) {
+            std::wstring ext = lower(it->path().extension().wstring());
+            if (ext == L".nrm" || ext == L".rtz") out.push_back(inspect_mod(it->path(), bundledDir));
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const ModItem& a, const ModItem& b) {
+        return lower(a.display_name()) < lower(b.display_name());
+    });
+    return out;
+}
+
+std::vector<uint8_t> read_mod_thumb(const ModItem& m) {
+    std::vector<uint8_t> out;
+    if (!m.hasThumb) return out;
+    if (m.kind == ModKind::Folder) {
+        std::string s = read_text_file(m.path / L"thumb.png");
+        out.assign(s.begin(), s.end());
+        return out;
+    }
+    ZipFile zf(m.path);
+    if (!zf.open) return out;
+    size_t sz = 0;
+    void* p = mz_zip_reader_extract_file_to_heap(&zf.za, "thumb.png", &sz, 0);
+    if (p) {
+        out.assign((const uint8_t*)p, (const uint8_t*)p + sz);
+        mz_free(p);
+    }
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Installing and removing
+// ---------------------------------------------------------------------------
+
+bool recycle_path(const fs::path& p, std::wstring* errorOut) {
+    // AkiLauncherTests: delete for real instead of filling the Recycle Bin with synthetic files.
+    wchar_t test[4]{};
+    if (GetEnvironmentVariableW(L"AKI_LAUNCHER_TEST_NO_RECYCLE", test, 4) == 1 && test[0] == L'1') {
+        std::error_code ec;
+        fs::remove_all(p, ec);
+        if (ec && errorOut) *errorOut = L"can't delete " + p.wstring();
+        return !ec;
+    }
+    std::wstring from = fs::absolute(p).wstring();
+    from.push_back(L'\0');  // double-null-terminated list
+    SHFILEOPSTRUCTW op{};
+    op.wFunc = FO_DELETE;
+    op.pFrom = from.c_str();
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI;
+    int r = SHFileOperationW(&op);
+    std::error_code ec;
+    if (r != 0 || op.fAnyOperationsAborted || fs::exists(p, ec)) {
+        if (errorOut) *errorOut = L"couldn't move " + p.filename().wstring() + L" to the Recycle Bin (in use? close the game)";
+        return false;
+    }
+    return true;
+}
+
+bool remove_mod(const ModItem& m, std::wstring* errorOut) {
+    if (m.bundled) {
+        if (errorOut) *errorOut = m.display_name() + L" comes with the game and is copied back on its next start: "
+                                  L"turn it off in the game's Mods menu instead";
+        return false;
+    }
+    if (!recycle_path(m.path, errorOut)) return false;
+    logf(L"mods: removed %s (Recycle Bin)", m.path.c_str());
+    return true;
+}
+
+static bool wrong_game(const ModManifest& man, const std::wstring& gameId, const std::wstring& title,
+                       const std::wstring& what, std::wstring* msg) {
+    if (!man.gameId.empty() && !gameId.empty() && man.gameId != gameId) {
+        *msg = what + L" is made for \"" + man.gameId + L"\", not " + title + L" (" + gameId + L")";
+        return true;
+    }
+    return false;
+}
+
+// Writes bytes (or copies a file) to dest through dest.new; an existing dest
+// goes to the Recycle Bin first.
+static bool place_file(const fs::path& dest, const std::string* bytes, const fs::path* srcFile, std::wstring* msg,
+                       bool* replaced) {
+    std::error_code ec;
+    fs::path tmp = dest;
+    tmp += L".new";
+    if (bytes) {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f.write(bytes->data(), (std::streamsize)bytes->size());
+        f.close();
+        if (f.fail()) {
+            fs::remove(tmp, ec);
+            *msg = L"can't write " + tmp.wstring();
+            return false;
+        }
+    } else {
+        fs::copy_file(*srcFile, tmp, fs::copy_options::overwrite_existing, ec);
+        if (ec) {
+            fs::remove(tmp, ec);
+            *msg = L"can't copy to " + tmp.wstring();
+            return false;
+        }
+    }
+    *replaced = fs::exists(dest, ec);
+    if (*replaced && !recycle_path(dest, msg)) {
+        fs::remove(tmp, ec);
+        return false;
+    }
+    fs::rename(tmp, dest, ec);
+    if (ec) {
+        fs::remove(tmp, ec);
+        *msg = L"can't write " + dest.wstring();
+        return false;
+    }
+    return true;
+}
+
+static bool copy_tree(const fs::path& src, const fs::path& dst, std::wstring* msg) {
+    std::error_code ec;
+    fs::create_directories(dst, ec);
+    for (fs::recursive_directory_iterator it(src, fs::directory_options::skip_permission_denied, ec), end;
+         !ec && it != end; it.increment(ec)) {
+        fs::path rel = fs::relative(it->path(), src, ec);
+        if (ec) break;
+        std::error_code fec;
+        if (it->is_directory(fec)) fs::create_directories(dst / rel, fec);
+        else if (it->is_regular_file(fec)) fs::copy_file(it->path(), dst / rel, fs::copy_options::overwrite_existing, fec);
+        if (fec) {
+            *msg = L"can't copy " + rel.wstring() + L" (" + u8w(fec.message()) + L")";
+            return false;
+        }
+    }
+    if (ec) {
+        *msg = L"can't read " + src.wstring();
+        return false;
+    }
+    return true;
+}
+
+InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const std::wstring& gameId,
+                          const std::wstring& gameTitle) {
+    InstallResult r;
+    std::error_code ec;
+    if (!fs::exists(src, ec)) {
+        r.message = L"no such file: " + src.wstring();
+        return r;
+    }
+    if (fs::equivalent(src.parent_path(), modsDir, ec)) {
+        r.message = src.filename().wstring() + L" is already in the mods folder";
+        return r;
+    }
+    fs::create_directories(modsDir, ec);
+    std::wstring name = src.filename().wstring();
+    bool replaced = false;
+
+    // A pack folder: copied as it is (its name is the pack's name in the Mods menu).
+    if (fs::is_directory(src, ec)) {
+        ModItem m = inspect_mod(src);
+        if (!m.problem.empty()) {
+            r.message = name + L": " + m.problem;
+            return r;
+        }
+        if (wrong_game(m.manifest, gameId, gameTitle, name, &r.message)) return r;
+        fs::path dest = modsDir / name;
+        if (fs::exists(dest, ec)) {
+            r.message = name + L" is installed already: remove it first to replace it";
+            return r;
+        }
+        if (!copy_tree(src, dest, &r.message)) {
+            fs::remove_all(dest, ec);
+            return r;
+        }
+        r.ok = true;
+        r.installed.push_back(dest);
+        r.message = L"Installed " + m.display_name() + L" (folder)";
+        logf(L"mods: installed folder %s -> %s", src.c_str(), dest.c_str());
+        return r;
+    }
+
+    std::wstring ext = lower(src.extension().wstring());
+    if (ext == L".nrm" || ext == L".rtz") {
+        ModItem m = inspect_mod(src);
+        if (!m.problem.empty()) {  // it wouldn't load: don't install it
+            r.message = name + L": " + m.problem;
+            return r;
+        }
+        if (wrong_game(m.manifest, gameId, gameTitle, name, &r.message)) return r;
+        fs::path dest = modsDir / name;
+        if (!place_file(dest, nullptr, &src, &r.message, &replaced)) return r;
+        r.ok = true;
+        r.installed.push_back(dest);
+        r.message = L"Installed " + m.display_name() + (replaced ? L" (the older copy is in the Recycle Bin)" : L"");
+        logf(L"mods: installed %s -> %s", src.c_str(), dest.c_str());
+        return r;
+    }
+
+    if (ext != L".zip") {
+        r.message = name + L": not a mod (.nrm), texture pack (.rtz, .zip or a folder)";
+        return r;
+    }
+    // A .zip: a texture pack zipped as is (rt64.json at the root) becomes an
+    // .rtz; a package with .nrm / .rtz files inside installs those.
+    auto zf = std::make_unique<ZipFile>(src);
+    if (!zf->open) {
+        r.message = name + L": not a valid zip file";
+        return r;
+    }
+    mz_zip_archive& za = zf->za;
+    bool rootRt64 = mz_zip_reader_locate_file(&za, "rt64.json", nullptr, 0) >= 0;
+    if (rootRt64) {
+        ModManifest man;
+        size_t sz = 0;
+        if (void* p = mz_zip_reader_extract_file_to_heap(&za, "mod.json", &sz, 0)) {
+            man = parse_mod_manifest(std::string((const char*)p, sz));
+            mz_free(p);
+        }
+        zf.reset();  // closed before the copy
+        if (wrong_game(man, gameId, gameTitle, name, &r.message)) return r;
+        fs::path dest = modsDir / (src.stem().wstring() + L".rtz");
+        if (!place_file(dest, nullptr, &src, &r.message, &replaced)) return r;
+        r.ok = true;
+        r.installed.push_back(dest);
+        r.message = L"Installed " + dest.filename().wstring() + L" (a texture pack zip, saved as .rtz)" +
+                    (replaced ? L"; the older copy is in the Recycle Bin" : L"");
+        logf(L"mods: installed %s -> %s", src.c_str(), dest.c_str());
+        return r;
+    }
+    std::vector<std::pair<std::wstring, std::string>> members;
+    int n = (int)mz_zip_reader_get_num_files(&za);
+    for (int i = 0; i < n; ++i) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&za, i, &st) || mz_zip_reader_is_file_a_directory(&za, i)) continue;
+        std::wstring member = u8w(st.m_filename);
+        std::wstring leaf = fs::path(member).filename().wstring();  // flat: no paths from the zip
+        std::wstring mext = lower(fs::path(leaf).extension().wstring());
+        if (mext != L".nrm" && mext != L".rtz") continue;
+        size_t sz = 0;
+        void* p = mz_zip_reader_extract_to_heap(&za, i, &sz, 0);
+        if (!p) continue;
+        members.emplace_back(leaf, std::string((const char*)p, sz));
+        mz_free(p);
+    }
+    zf.reset();
+    if (members.empty()) {
+        r.message = name + L": no rt64.json at its root and no .nrm or .rtz inside: not a mod package";
+        return r;
+    }
+    // Check every member before writing any.
+    fs::path tmpDir = modsDir / L".aki-install";
+    fs::create_directories(tmpDir, ec);
+    for (auto& [leaf, bytes] : members) {
+        fs::path probe = tmpDir / leaf;
+        {
+            std::ofstream f(probe, std::ios::binary | std::ios::trunc);
+            f.write(bytes.data(), (std::streamsize)bytes.size());
+        }
+        ModItem m = inspect_mod(probe);
+        fs::remove(probe, ec);
+        if (wrong_game(m.manifest, gameId, gameTitle, leaf, &r.message)) {
+            fs::remove_all(tmpDir, ec);
+            return r;
+        }
+    }
+    fs::remove_all(tmpDir, ec);
+    int replacedCount = 0;
+    for (auto& [leaf, bytes] : members) {
+        fs::path dest = modsDir / leaf;
+        if (!place_file(dest, &bytes, nullptr, &r.message, &replaced)) return r;
+        replacedCount += replaced;
+        r.installed.push_back(dest);
+    }
+    r.ok = true;
+    r.message = L"Installed " + std::to_wstring(members.size()) + L" file(s) from " + name +
+                (replacedCount ? L" (older copies are in the Recycle Bin)" : L"");
+    logf(L"mods: installed %zu files from %s", members.size(), src.c_str());
+    return r;
+}

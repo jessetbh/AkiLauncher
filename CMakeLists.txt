@@ -47,6 +47,7 @@ add_executable(AkiLauncher WIN32
     src/installer.cpp
     src/rebuild.cpp
     src/romscan.cpp
+    src/mods.cpp
 )
 if(MSVC)
     # App icon + version resource (title bar / taskbar / Explorer)
@@ -60,7 +61,8 @@ target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9
 option(AKI_LAUNCHER_TESTS "Build AkiLauncherTests" OFF)
 if(AKI_LAUNCHER_TESTS)
     add_executable(AkiLauncherTests tests/tests_main.cpp tests/rebuild_tests.cpp tests/romscan_tests.cpp
-                   src/rebuild.cpp src/romscan.cpp src/settings.cpp src/launch.cpp src/games.cpp)
+                   tests/mods_tests.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
+                   src/launch.cpp src/games.cpp)
     target_compile_definitions(AkiLauncherTests PRIVATE UNICODE _UNICODE NOMINMAX)
-    target_link_libraries(AkiLauncherTests PRIVATE xinput9_1_0 bcrypt)
+    target_link_libraries(AkiLauncherTests PRIVATE miniz_lib xinput9_1_0 bcrypt)
 endif()
