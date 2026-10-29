@@ -58,6 +58,7 @@ bool game_is_portable(const GameEntry& g);
 bool wants_portable_game(const GameEntry& g, bool launcherPortable, bool portableGames);
 // Writes portable.txt in g's working directory and copies, once, what the game
 // kept under appDataDir (config, saves, mods; not logs or texture dumps) into
-// it where nothing of that name exists yet. Returns how many files it copied
-// (-1 if portable.txt couldn't be written).
+// it where nothing of that name exists yet; portable.txt is written last, only
+// when every copy worked. Returns how many files it copied, or -1 (not made
+// portable: the next start tries again).
 int make_game_portable(const GameEntry& g, const std::filesystem::path& appDataDir);

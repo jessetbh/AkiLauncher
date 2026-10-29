@@ -76,7 +76,9 @@ instead of in `%LOCALAPPDATA%\<Game>Recompiled\`. That first time, the launcher
 copies what the game had in AppData (not logs or texture dumps), never over a
 file already in the game folder; the AppData copy stays as it was. Games built
 in a depot checkout are left as they are. `portable_games=0` in `settings.ini`
-turns this off.
+turns this off. (With `AKI_GAMES_ROOT` set, installed games live there, and so
+does their portable data.) If a copy fails, the game keeps using AppData and
+the launcher tries again on its next start.
 
 **What about ROMs?** You provide your own dumps (`.z64`, big-endian). The
 launcher hash-checks your pick against the known-good dump for each game and

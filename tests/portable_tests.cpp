@@ -66,6 +66,16 @@ void run_portable_tests(const fs::path& dir) {
     // Once portable, it no longer qualifies: the copy happens only once.
     CHECK(!wants_portable_game(inst, true, true));
 
+    // A copy that fails leaves the game on AppData (no portable.txt), and a later try finishes it.
+    GameEntry partial = inst;
+    partial.installDir = partial.repoPath = dir / L"games" / L"wm2k";
+    put(partial.repoPath / L"saves", "a file where the saves folder would go");
+    CHECK(make_game_portable(partial, appData) == -1 && !game_is_portable(partial));
+    CHECK(wants_portable_game(partial, true, true));
+    fs::remove(partial.repoPath / L"saves");
+    CHECK(make_game_portable(partial, appData) >= 1 && game_is_portable(partial));
+    CHECK(get(partial.repoPath / L"saves" / L"slot1.bin") == "save");
+
     // No AppData folder at all: just portable.txt.
     GameEntry fresh = inst;
     fresh.installDir = fresh.repoPath = dir / L"games" / L"vpw2";

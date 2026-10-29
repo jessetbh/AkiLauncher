@@ -4,6 +4,8 @@
 
 #include <fstream>
 
+#include "launch.h"  // logf
+
 namespace fs = std::filesystem;
 
 static bool looks_like_depot(const fs::path& p) {
@@ -67,32 +69,48 @@ bool wants_portable_game(const GameEntry& g, bool launcherPortable, bool portabl
 }
 
 int make_game_portable(const GameEntry& g, const fs::path& appDataDir) {
+    // Copy first, portable.txt last: if anything fails the game stays on its
+    // AppData data (nothing looks lost) and the next start tries again;
+    // already-copied files are skipped then.
     std::error_code ec;
-    {
-        std::ofstream marker(g.repoPath / L"portable.txt", std::ios::binary | std::ios::app);
-        if (!marker) return -1;
-    }
     int copied = 0;
-    if (!fs::is_directory(appDataDir, ec)) return 0;
-    fs::recursive_directory_iterator it(appDataDir, fs::directory_options::skip_permission_denied, ec), end;
-    for (; !ec && it != end; it.increment(ec)) {
-        fs::path rel = fs::relative(it->path(), appDataDir, ec);
-        if (ec) break;
-        std::wstring first = rel.begin()->wstring();
-        std::error_code fec;
-        // Texture dumps can be huge and are made again on demand; logs are per run.
-        if (it->is_directory(fec)) {
-            if (_wcsicmp(first.c_str(), L"texture_dump") == 0) it.disable_recursion_pending();
-            continue;
+    bool failed = false;
+    if (fs::is_directory(appDataDir, ec)) {
+        fs::recursive_directory_iterator it(appDataDir, fs::directory_options::skip_permission_denied, ec), end;
+        for (; !ec && it != end; it.increment(ec)) {
+            std::error_code fec;
+            // Links are not followed: a link must not make the copy write (or read) outside these folders.
+            if (it->is_symlink(fec)) {
+                if (it->is_directory(fec)) it.disable_recursion_pending();
+                continue;
+            }
+            fs::path rel = it->path().lexically_relative(appDataDir);
+            if (rel.empty() || *rel.begin() == L"..") continue;
+            // Texture dumps can be huge and are made again on demand; logs are per run.
+            if (it->is_directory(fec)) {
+                if (_wcsicmp(rel.begin()->c_str(), L"texture_dump") == 0) it.disable_recursion_pending();
+                continue;
+            }
+            if (!it->is_regular_file(fec) || _wcsicmp(it->path().extension().c_str(), L".log") == 0) continue;
+            fs::path dest = g.repoPath / rel;
+            if (fs::exists(dest, fec)) continue;  // never over anything the install already has
+            fs::create_directories(dest.parent_path(), fec);
+            if (!fec) fs::copy_file(it->path(), dest, fs::copy_options::skip_existing, fec);
+            if (fec) {
+                failed = true;
+                logf(L"portable: can't copy %s (%S)", it->path().c_str(), fec.message().c_str());
+            } else {
+                ++copied;
+            }
         }
-        if (!it->is_regular_file(fec) || _wcsicmp(it->path().extension().c_str(), L".log") == 0) continue;
-        fs::path dest = g.repoPath / rel;
-        if (fs::exists(dest, fec)) continue;  // never over anything the install already has
-        fs::create_directories(dest.parent_path(), fec);
-        fs::copy_file(it->path(), dest, fs::copy_options::skip_existing, fec);
-        if (!fec) ++copied;
+        if (ec) {
+            failed = true;
+            logf(L"portable: can't read %s (%S)", appDataDir.c_str(), ec.message().c_str());
+        }
     }
-    return copied;
+    if (failed) return -1;
+    std::ofstream marker(g.repoPath / L"portable.txt", std::ios::binary | std::ios::app);
+    return marker ? copied : -1;
 }
 
 std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {

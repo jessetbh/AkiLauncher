@@ -625,9 +625,15 @@ static void carry_portable(const GameEntry& g) {
     wchar_t lad[MAX_PATH]{};
     GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
     std::filesystem::path appData = std::filesystem::path(lad) / std::filesystem::path(g.exeRel).stem();
+    // Synchronous: a first-time copy (config, saves, mods) before the game reads them.
+    ULONGLONG t0 = GetTickCount64();
     int n = make_game_portable(g, appData);
-    logf(L"portable: %s now keeps its data in %s (%d file(s) copied from %s)", g.title.c_str(),
-         g.repoPath.c_str(), n, appData.c_str());
+    if (n < 0)
+        logf(L"portable: %s stays on %s for now (a copy failed; retried next start)", g.title.c_str(),
+             appData.c_str());
+    else
+        logf(L"portable: %s now keeps its data in %s (%d file(s) copied from %s, %llu ms)", g.title.c_str(),
+             g.repoPath.c_str(), n, appData.c_str(), GetTickCount64() - t0);
 }
 
 static void open_mods(const std::vector<GameEntry>& games, int index) {
