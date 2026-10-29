@@ -148,6 +148,7 @@ static void test_registry(const fs::path& tmp) {
     CHECK(r.status == pkg::Registry::Status::Ok && r.entries.size() == 1 && r.others.size() == 1);
     CHECK(r.owner("MODS/A.NRM/") == &r.entries[0] && !r.owner("mods/b.nrm"));
     r.entries[0].version = "1.1.0";
+    r.entries[0].changed = true;  // unchanged entries go back exactly as read
     std::wstring err;
     CHECK(pkg::save_registry(f, r, &err));
     std::string text = get(f);
@@ -366,6 +367,87 @@ static void test_patch_mod(const fs::path& tmp) {
     CHECK(stray == 0);
 }
 
+
+static void test_review_fixes(const fs::path& tmp) {
+    fs::path data = tmp / L"data-x";
+    pkg::InstallTarget t = target(data);
+    pkg::InstallOptions o;
+    o.today = "20261029";
+    // A failure halfway (a file the new version replaces is open elsewhere) puts everything back.
+    CHECK(pkg::install_package(conversion(tmp / L"x1", "conv-x", "1.0.0", kRomSha1, "OLD\n"), t, o).outcome == Outcome::Installed);
+    std::string regBefore = get(data / L"packages.json");
+    HANDLE lock = CreateFileW((data / L"mods" / L"conv_tex.rtz").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(lock != INVALID_HANDLE_VALUE);
+    pkg::PackageInstall r = pkg::install_package(conversion(tmp / L"x2", "conv-x", "2.0.0", kRomSha1, "NEW\n"), t, o);
+    CloseHandle(lock);
+    CHECK(r.outcome == Outcome::Failed && has(r.message, L"nothing was changed"));
+    CHECK(get(data / L"conversions" / L"conv-x" / L"codes.txt") == "OLD\n");
+    CHECK(get(data / L"packages.json") == regBefore);
+    int stray = 0;
+    for (auto& e : fs::directory_iterator(data)) stray += e.path().filename().wstring().rfind(L".aki-", 0) == 0;
+    for (auto& e : fs::directory_iterator(data / L"conversions")) stray += e.path().filename().wstring() != L"conv-x";
+    CHECK(stray == 0);
+    // ... and with nothing locked, the same upgrade goes through.
+    CHECK(pkg::install_package(tmp / L"x2", t, o).outcome == Outcome::Upgraded);
+    CHECK(get(data / L"conversions" / L"conv-x" / L"codes.txt") == "NEW\n");
+
+    // Remove keeps a file changed since it was installed.
+    CHECK(pkg::install_package(addon(tmp / L"x3", "edit-me", "1.0.0"), t, o).ok());
+    put(data / L"mods" / L"demo.nrm", "player edit");
+    std::wstring msg;
+    CHECK(pkg::remove_package("edit-me", data, false, &msg));
+    CHECK(!fs::exists(data / L"mods" / L"demo.nrm") && has(msg, L"kept as demo.nrm.edited-"));
+    bool keptEdit = false;
+    for (auto& e : fs::directory_iterator(data / L"mods"))
+        keptEdit = keptEdit || (e.path().filename().wstring().rfind(L"demo.nrm.edited-", 0) == 0 && get(e.path()) == "player edit");
+    CHECK(keptEdit);
+
+    // packages.json: entries this install didn't touch are written back as they were, in their order.
+    fs::path data2 = tmp / L"data-y";
+    put(data2 / L"packages.json", R"({"format":1,"packages":[{"id":"odd","kind":"addon","files":[{"hash":"x"},{"path":"mods/odd.nrm","hash":"h","note":1}],"zz":[1,2]},)"
+                                  R"({"id":"q","kind":"shader-pack"}]})");
+    CHECK(pkg::install_package(addon(tmp / L"y1", "fresh", "1.0.0"), target(data2), o).ok());
+    std::string text = get(data2 / L"packages.json");
+    size_t a = text.find("\"odd\""), b = text.find("shader-pack"), c = text.find("\"fresh\"");
+    CHECK(a != std::string::npos && b != std::string::npos && c != std::string::npos && a < b && b < c);
+    CHECK(text.find("\"hash\": \"x\"") != std::string::npos && text.find("\"zz\"") != std::string::npos);
+    // A recorded path outside the data folder makes the file one to leave alone.
+    for (const char* bad : {"../x.nrm", "C:/x.nrm", "mods/../../x"}) {
+        put(data2 / L"packages.json", std::string(R"({"format":1,"packages":[{"id":"a","kind":"addon","files":[{"path":")") + bad + R"(","hash":"h"}]}]})");
+        CHECK(!pkg::load_registry(data2 / L"packages.json").may_save());
+    }
+
+    // Zip names: '\' separators (PowerShell 5.1's Compress-Archive) and DOS-codepage names (Explorer) are read, never a crash.
+    std::string man = manifest("addon", "zipnames", "1.0.0", R"({"nrm":"sub/z.nrm"})");
+    put(tmp / L"z.zip", zip_bytes({{"aki-package.json", man}, {"thumb.png", kPng},
+                                   {"sub\\z.nrm", zip_bytes({{"mod.json", mod_json("zipnames")}, {"mod_binary.bin", "b"}})},
+                                   {"caf\x82.txt", "cp437"}}));
+    {
+        pkg::Package pk(tmp / L"z.zip");
+        CHECK(pk.has("sub/z.nrm") && pk.has("caf\xC3\xA9.txt") && pk.unsafe.empty());
+    }
+    CHECK(pkg::install_package(tmp / L"z.zip", target(tmp / L"data-z"), o).ok());
+    // Names that are the same file on Windows beyond ASCII case.
+    put(tmp / L"z2.zip", zip_bytes({{"aki-package.json", man}, {"\xC3\x89.txt", "1"}, {"\xC3\xA9.txt", "2"}}));
+    {
+        pkg::Package pk(tmp / L"z2.zip");
+        CHECK(pk.clashes.size() == 1);
+    }
+    // A conversion whose own aki.json names another id is refused (the game keys its saves on that id).
+    fs::path cm = conversion(tmp / L"x4", "conv-y", "1.0.0", kRomSha1);
+    put(cm / L"conversion" / L"aki.json", R"({"id":"something-else"})");
+    r = pkg::install_package(cm, t, o);
+    CHECK(r.outcome == Outcome::Refused && has(r.message, L"aki.json id is \"something-else\""));
+    // A patch-mod hack while the game runs: refused before anything is written.
+    fs::path hack = tmp / L"h.nrm";
+    put(hack, zip_bytes({{"mod.json", R"({"id":"h_hack","version":"1.0.0","game_id":"wwfnomercy"})"}, {"patch.bps", "BPS1"}}));
+    pkg::InstallOptions running;
+    running.gameRunning = true;
+    fs::path data3 = tmp / L"data-h";
+    CHECK(pkg::install_patch_mod(hack, target(data3), running).outcome == Outcome::Refused);
+    CHECK(!fs::exists(data3));
+}
+
 void run_packages_tests(const fs::path& tmp) {
     std::error_code ec;
     fs::remove_all(tmp, ec);
@@ -378,4 +460,5 @@ void run_packages_tests(const fs::path& tmp) {
     test_refusals(tmp);
     test_kinds_zip_and_conversions(tmp);
     test_patch_mod(tmp);
+    test_review_fixes(tmp);
 }

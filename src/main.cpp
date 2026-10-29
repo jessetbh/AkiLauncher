@@ -215,7 +215,7 @@ struct UiState {
     std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
     std::vector<pkg::ConversionInfo> convs;
     int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
-    std::map<int, std::vector<pkg::ConversionInfo>> convCache;
+    std::map<std::wstring, std::vector<pkg::ConversionInfo>> convCache;  // by artKey
     // launcher self-update (aki-roadmap#117)
     bool showUpdate = false;
     bool updateRequested = false;  // "Update now": install as soon as the download is verified
@@ -993,11 +993,11 @@ static std::filesystem::path conversions_data_dir(const GameEntry& g) {
 
 // The game's conversions (cached per game; dropped when the Mods page closes or a game ends).
 static const std::vector<pkg::ConversionInfo>& game_conversions(const std::vector<GameEntry>& games, int i) {
-    auto it = g_ui.convCache.find(i);
+    auto it = g_ui.convCache.find(games[i].artKey);
     if (it == g_ui.convCache.end()) {
         std::vector<pkg::ConversionInfo> v;
         if (g_shot ? !g_shotModsDir.empty() : games[i].exeFound) v = pkg::list_conversions(conversions_data_dir(games[i]));
-        it = g_ui.convCache.emplace(i, std::move(v)).first;
+        it = g_ui.convCache.emplace(games[i].artKey, std::move(v)).first;
     }
     return it->second;
 }
@@ -1172,7 +1172,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     if (g_ui.convRemove >= 0 && g_ui.convRemove < (int)g_ui.convs.size()) {
         std::wstring msg;
         bool running = g_session.active() && g_session.artKey == g.artKey;
-        bool ok = pkg::remove_package(g_ui.convs[g_ui.convRemove].id, game_data_dir(g), running, &msg);
+        bool ok = pkg::remove_package(g_ui.convs[g_ui.convRemove].id, conversions_data_dir(g), running, &msg);
         mods_note(ok ? msg + L" (in the Recycle Bin)" : L"Not removed: " + msg, ok);
         refresh_mods(games);
     }
@@ -3153,6 +3153,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                 }
                 if (st.phase == InstallPhase::Done) {
                     games = build_game_list(depotRoot);
+                    g_ui.convCache.clear();  // a game installed or rebuilt: its conversions read again
                     apply_overrides(games);
                     play_flip();
                 } else {
@@ -3213,6 +3214,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                 }
                 // A first build makes the exe appear: re-scan like after an install.
                 games = build_game_list(depotRoot);
+                g_ui.convCache.clear();  // a game installed or rebuilt: its conversions read again
                 apply_overrides(games);
                 if (ph == RebuildPhase::Done) play_flip();
             }

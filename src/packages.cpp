@@ -48,6 +48,27 @@ static std::string lower(std::string s) {
     return s;
 }
 
+// Case folded the way Windows compares names (not only ASCII): the key for "same file on Windows".
+static std::string fold(const std::string& s) {
+    std::wstring ws = w(s);
+    if (!ws.empty()) CharLowerBuffW(ws.data(), (DWORD)ws.size());
+    return u8(ws);
+}
+
+static bool valid_utf8(const std::string& s) {
+    return s.empty() || MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), (int)s.size(), nullptr, 0) > 0;
+}
+
+// A zip entry name as UTF-8: as it is when it is valid UTF-8 (flagged or not), else the zip's old DOS codepage (437),
+// as Explorer and older tools write non-ASCII names.
+static std::string zip_name_utf8(const std::string& raw) {
+    if (valid_utf8(raw)) return raw;
+    int n = MultiByteToWideChar(437, 0, raw.data(), (int)raw.size(), nullptr, 0);
+    std::wstring ws((size_t)n, L'\0');
+    MultiByteToWideChar(437, 0, raw.data(), (int)raw.size(), ws.data(), n);
+    return u8(ws);
+}
+
 static bool ends_with(const std::string& s, const std::string& tail) {
     return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0;
 }
@@ -312,7 +333,7 @@ Package::Package(const fs::path& p) : path_(p) {
     std::vector<std::pair<std::string, uint64_t>> found;
     std::map<std::string, std::string> seen;  // lower-case name -> first spelling
     auto add = [&](const std::string& rel, uint64_t size, const std::string& zipName) {
-        std::string key = lower(rel);
+        std::string key = fold(rel);
         auto it = seen.find(key);
         if (it != seen.end()) {
             clashes.push_back(it->second == rel ? rel : it->second + " / " + rel);
@@ -350,11 +371,13 @@ Package::Package(const fs::path& p) : path_(p) {
                     mz_zip_archive_file_stat st;
                     if (!mz_zip_reader_file_stat(za, i, &st) || mz_zip_reader_is_file_a_directory(za, i)) continue;
                     std::string raw = st.m_filename;
-                    if (!safe_path(raw)) {
-                        unsafe.push_back(raw);
+                    std::string name = zip_name_utf8(raw);
+                    std::replace(name.begin(), name.end(), '\\', '/');  // Compress-Archive (PowerShell 5.1) writes '\'
+                    if (!valid_utf8(name) || !safe_path(name)) {
+                        unsafe.push_back(name);
                         continue;
                     }
-                    add(raw, st.m_uncomp_size, raw);
+                    add(name, st.m_uncomp_size, raw);
                 }
             } else {
                 delete za;
@@ -604,6 +627,14 @@ CheckResult check_package(const fs::path& src) {
         if (!files.empty() && !contains(files, base + "/" + kConversionManifest))
             problem(ps, true, "payload", w("payload folder " + m.folder + " has no conversion manifest (aki.json)" +
                                            (contains(files, base + "/conversion.json") ? ": it has conversion.json, the game reads aki.json" : "")));
+        // Its folder is conversions\<package id>\, and the game keys its saves on the conversion's id: the same one.
+        std::string cj;
+        JsonValue cv;
+        if (pk.read(base + "/" + kConversionManifest, &cj, kMaxJson) && json_parse(cj, &cv) && cv.is(JsonValue::Type::Object)) {
+            std::string cid = str(cv, "id");
+            if (!cid.empty() && cid != m.id)
+                problem(ps, true, "payload", w("the conversion's aki.json id is \"" + cid + "\", the package says \"" + m.id + "\""));
+        }
         for (auto& a : m.addons)
             if (need_file(a, "addon") && !ends_with(lower(a), ".nrm") && !ends_with(lower(a), ".rtz"))
                 problem(ps, false, "payload", w("payload addon " + a + " is neither .nrm nor .rtz"));
@@ -695,7 +726,7 @@ static bool known_kind(const std::string& k) {
     return k == "addon" || k == "texture-pack" || k == "model-pack" || k == "conversion";
 }
 
-static std::string path_key(const std::string& p) { return lower(strip_slash(p)); }
+static std::string path_key(const std::string& p) { return fold(strip_slash(p)); }
 
 const RegEntry* Registry::find(const std::string& id) const {
     for (auto& e : entries)
@@ -753,7 +784,16 @@ Registry load_registry(const fs::path& file) {
         e.installed = str(item, "installed");
         if (const JsonValue* files = item.get("files"); files && files->is(JsonValue::Type::Array))
             for (auto& fv : files->items)
-                if (fv.is(JsonValue::Type::Object) && !str(fv, "path").empty()) e.files.push_back({str(fv, "path"), str(fv, "hash")});
+                if (fv.is(JsonValue::Type::Object) && !str(fv, "path").empty()) {
+                    // A path outside the data folder (absolute, '..'): not a file of ours, and never one to remove.
+                    if (!safe_path(str(fv, "path"))) {
+                        r.status = Registry::Status::Corrupt;
+                        r.entries.clear();
+                        r.others.clear();
+                        return r;
+                    }
+                    e.files.push_back({str(fv, "path"), str(fv, "hash")});
+                }
         e.raw = item;
         r.entries.push_back(std::move(e));
     }
@@ -805,10 +845,29 @@ bool save_registry(const fs::path& file, const Registry& reg, std::wstring* err)
     JsonValue root = reg.raw.is(JsonValue::Type::Object) ? reg.raw : JsonValue{};
     root.type = JsonValue::Type::Object;
     set_member(root, "format", json_number(1));
+    // The file's own order: an entry nobody changed goes back exactly as it was read, a changed one rebuilt in its
+    // place, a removed one left out; entries of unknown kinds stay where they were; new entries go last.
     JsonValue list;
     list.type = JsonValue::Type::Array;
-    for (auto& e : reg.entries) list.items.push_back(entry_json(e));
-    for (auto& o : reg.others) list.items.push_back(o);
+    std::set<std::string> written;
+    const JsonValue* before = reg.raw.is(JsonValue::Type::Object) ? reg.raw.get("packages") : nullptr;
+    if (before && before->is(JsonValue::Type::Array)) {
+        for (auto& item : before->items) {
+            bool ours = item.is(JsonValue::Type::Object) && known_kind(str(item, "kind")) && !str(item, "id").empty();
+            if (!ours) {
+                list.items.push_back(item);
+                continue;
+            }
+            const RegEntry* e = reg.find(str(item, "id"));
+            if (!e || written.count(e->id)) continue;  // removed (or a duplicate id: the first one stands)
+            list.items.push_back(e->changed ? entry_json(*e) : item);
+            written.insert(e->id);
+        }
+    } else {
+        for (auto& o : reg.others) list.items.push_back(o);
+    }
+    for (auto& e : reg.entries)
+        if (!written.count(e.id)) list.items.push_back(e.changed || !e.raw.is(JsonValue::Type::Object) ? entry_json(e) : e.raw);
     set_member(root, "packages", list);
     std::string text = json_write(root) + "\n";
     std::error_code ec;
@@ -1024,9 +1083,12 @@ PackageInstall install_package(const fs::path& src, const InstallTarget& t, cons
     }
     std::string day = o.today.empty() ? today_yyyymmdd() : o.today;
 
-    // What goes: the old version's files (and those of the packages it replaces). Unedited ones to the Recycle Bin,
-    // edited ones kept. A file in place that no package recorded (put there by hand) is replaced only when it is the
-    // same as the new one; otherwise it is kept as edited too.
+    // What goes: the old version's files (and those of the packages it replaces), and whatever is where a new part
+    // lands. Each is first moved aside into the staging folder (a rename), the new parts are moved in, and the registry
+    // is saved; a failure at any step moves everything back, so the data folder is as it was. Only after the save do
+    // the old ones go: unedited (its recorded hash, or the same as the new copy) to the Recycle Bin, edited ones
+    // beside their place as <name>.edited-YYYYMMDD. A file no package recorded (put there by hand) counts as edited
+    // unless it is the same as the new one.
     std::vector<const RegEntry*> going;
     if (old) going.push_back(old);
     for (auto& id : m.replaces)
@@ -1034,13 +1096,34 @@ PackageInstall install_package(const fs::path& src, const InstallTarget& t, cons
     std::map<std::string, RegFile> recorded;  // path key -> the recorded path and hash
     for (auto* e : going)
         for (auto& f : e->files) recorded[path_key(f.path)] = f;
+    struct Aside { fs::path original, backup; bool unedited; };
+    std::vector<Aside> aside;
+    std::vector<fs::path> placed;
+    fs::path backups = staging / L".aside";
+    auto rollback = [&] {
+        for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
+            std::error_code e;
+            fs::remove_all(*it, e);
+        }
+        for (auto it = aside.rbegin(); it != aside.rend(); ++it) move_path(it->backup, it->original);
+    };
+    auto put_aside = [&](const fs::path& p, bool unedited) {
+        Aside a{p, backups / std::to_wstring(aside.size()), unedited};
+        if (!move_path(p, a.backup)) return false;
+        aside.push_back(a);
+        return true;
+    };
+    auto fail = [&](const std::wstring& why) {
+        rollback();
+        return refuse(r, L"Not installed: " + why + L" (nothing was changed)", PackageInstall::Outcome::Failed);
+    };
     for (auto& [key, f] : recorded) {
         fs::path p = t.dataDir / fs::u8path(strip_slash(f.path));
-        bool reused = dests.count(key) > 0;
-        if (!reused && !retire(p, f.hash, day, &r))
-            return refuse(r, L"Not installed: couldn't move " + p.wstring() + L" (is it open?)", PackageInstall::Outcome::Failed);
+        if (dests.count(key) || !fs::exists(p, ec)) continue;  // a part lands there: handled below
+        if (!put_aside(p, !f.hash.empty() && pack_hash(p) == f.hash)) return fail(L"couldn't move " + p.wstring() + L" (is it open?)");
     }
     RegEntry entry;
+    entry.changed = true;
     entry.raw = old ? old->raw : JsonValue{};
     entry.id = m.id;
     entry.kind = m.kind;
@@ -1052,16 +1135,13 @@ PackageInstall install_package(const fs::path& src, const InstallTarget& t, cons
         fs::path staged = staging / fs::u8path(p.to);
         std::string newHash = pack_hash(staged);
         if (fs::exists(dst, ec)) {
-            // Recorded: unedited goes, edited is kept. Not recorded (put there by hand): goes only when it is the
-            // same as the new one.
             auto it = recorded.find(path_key(p.to));
             std::string cur = pack_hash(dst);
-            std::string trusted = cur == newHash ? cur : (it != recorded.end() ? it->second.hash : std::string());
-            bool ok = retire(dst, trusted, day, &r);
-            if (!ok) return refuse(r, L"Not installed: couldn't move " + dst.wstring() + L" (is it open?)", PackageInstall::Outcome::Failed);
+            bool unedited = cur == newHash || (it != recorded.end() && !it->second.hash.empty() && cur == it->second.hash);
+            if (!put_aside(dst, unedited)) return fail(L"couldn't move " + dst.wstring() + L" (is it open?)");
         }
-        if (!move_path(staged, dst))
-            return refuse(r, L"Not installed: couldn't put " + w(p.to) + L" in place", PackageInstall::Outcome::Failed);
+        if (!move_path(staged, dst)) return fail(L"couldn't put " + w(p.to) + L" in place");
+        placed.push_back(dst);
         entry.files.push_back({p.to, newHash});
     }
     // The registry: this entry in place of the old one, the replaced ones gone.
@@ -1073,8 +1153,19 @@ PackageInstall install_package(const fs::path& src, const InstallTarget& t, cons
     kept.push_back(entry);
     reg.entries = kept;
     std::wstring err;
-    if (!save_registry(regFile, reg, &err))
-        return refuse(r, L"Installed " + r.name + L", but " + err + L": the game won't list it as a package", PackageInstall::Outcome::Failed);
+    if (!save_registry(regFile, reg, &err)) return fail(err);
+    // Done: what was put aside goes (never deleted: an edited one, or one the Recycle Bin won't take, is kept).
+    for (auto& a : aside) {
+        if (a.unedited && recycle_path(a.backup, nullptr)) continue;
+        fs::path kept2 = edited_name(a.original, day);
+        if (move_path(a.backup, kept2)) {
+            r.keptEdited.push_back(kept2);
+            r.notes.push_back(L"you had changed " + a.original.filename().wstring() + L": kept as " + kept2.filename().wstring());
+        } else {
+            guard.p.clear();  // the staging folder now holds it: left in place
+            r.notes.push_back(L"your copy of " + a.original.filename().wstring() + L" is in " + a.backup.wstring());
+        }
+    }
 
     r.outcome = outcome;
     std::wstring what = kind_words(m.kind);
@@ -1127,6 +1218,7 @@ PackageInstall install_patch_mod(const fs::path& nrm, const InstallTarget& t, co
     if (authors.empty()) authors.push_back("unknown");
     std::string gid = str(v, "game_id");
     if (!gid.empty() && gid != t.gameId) return refuse(r, L"Not installed: " + r.name + L" is for " + w(gid) + L", not " + t.gameTitle);
+    if (o.gameRunning) return refuse(r, L"Not installed: close " + t.gameTitle + L" first (it reads these files)");
     // Its base ROM is the player's own: the hack was applied to this game's ROM until now.
     std::string rom;
     for (auto& s : t.romSha1)
@@ -1190,10 +1282,16 @@ bool remove_package(const std::string& id, const fs::path& dataDir, bool gameRun
         if (msg) *msg = L"not installed as a package";
         return false;
     }
+    // Unedited files to the Recycle Bin; one changed since (by the player, or the game) kept as .edited-<date>.
     std::error_code ec;
+    PackageInstall kept;
+    std::string day = today_yyyymmdd();
     for (auto& f : e->files) {
-        fs::path p = dataDir / fs::u8path(f.path);
-        if (fs::exists(p, ec) && !recycle_path(p, msg)) return false;
+        fs::path p = dataDir / fs::u8path(strip_slash(f.path));
+        if (fs::exists(p, ec) && !retire(p, f.hash, day, &kept)) {
+            if (msg) *msg = L"couldn't move " + p.wstring() + L" (is it open?)";
+            return false;
+        }
     }
     std::wstring name = w(e->id);
     bool conversion = e->kind == "conversion";
@@ -1202,6 +1300,7 @@ bool remove_package(const std::string& id, const fs::path& dataDir, bool gameRun
     if (msg) {
         *msg = L"Removed " + name;
         if (conversion && fs::exists(dataDir / L"saves" / w(id), ec)) *msg += L" (its saves stay in saves\\" + w(id) + L"\\)";
+        for (auto& n : kept.notes) *msg += L" (" + n + L")";
     }
     return true;
 }

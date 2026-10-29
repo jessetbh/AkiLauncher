@@ -111,14 +111,15 @@ struct RegFile {
 struct RegEntry {
     std::string id, kind, version, source, installed;
     std::vector<RegFile> files;
-    JsonValue raw;  // the entry as read: fields this launcher doesn't know are written back unchanged
+    JsonValue raw;         // the entry as read: written back as it is unless changed
+    bool changed = false;  // rebuilt from the fields above (fields this launcher doesn't know kept from raw)
 };
 struct Registry {
     enum class Status { Missing, Ok, Newer, Corrupt, Unreadable };
     Status status = Status::Missing;
     JsonValue raw;                  // the whole file as read (unknown top-level keys are kept)
-    std::vector<RegEntry> entries;  // known kinds
-    std::vector<JsonValue> others;  // entries of a kind this launcher doesn't know: kept as they are
+    std::vector<RegEntry> entries;  // known kinds; an entry removed from here is dropped from the file
+    std::vector<JsonValue> others;  // entries of a kind this launcher doesn't know: kept as they are, where they are
     bool may_save() const { return status == Status::Missing || status == Status::Ok; }
     const RegEntry* find(const std::string& id) const;
     // The entry owning a path (case-insensitive, a trailing '/' ignored), or nullptr.
