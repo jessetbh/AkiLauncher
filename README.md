@@ -245,6 +245,7 @@ To check the launcher's pages without anyone at the screen, render them to PNG f
 ```powershell
 AkiLauncher.exe --shot quick-match C:\shots\quick-match.png [--game nomercy] [--demo]
 AkiLauncher.exe --shot-all C:\shots                        # every page as C:\shots\<page>.png
+AkiLauncher.exe --shot-all C:\shots4k --size 3840x2160   # at another size (default 1600x900)
 ```
 
 Pages: `home`, `settings`, `mods`, `model-packs`, `quick-match`, `history-tour`, `dev` (the home page with dev mode

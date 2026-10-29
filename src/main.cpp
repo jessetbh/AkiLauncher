@@ -364,8 +364,18 @@ static void reregister_hotkey() {
 static int g_pendingWindowMode = -1;
 
 // Fonts are sized from the window height; rebuilt on every mode switch.
+// The style the launcher sets up (sizes for a 900-pixel-high UI), scaled by build_fonts.
+static ImGuiStyle g_baseStyle;
+static float g_fontsH = 0;  // the UI height the fonts and style were built for
+
+// Fonts and the style's sizes (padding, spacing, frame heights, rounding, scrollbars) for a UI uiH pixels high, so
+// a 4K window looks like a 1080p one, only sharper.
 static void build_fonts(float uiH) {
     ImGuiIO& io = ImGui::GetIO();
+    g_fontsH = uiH;
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = g_baseStyle;
+    style.ScaleAllSizes(uiH / 900.0f);
     io.Fonts->Clear();
     const char* segoe = "C:\\Windows\\Fonts\\segoeui.ttf";
     const char* segoeBold = "C:\\Windows\\Fonts\\segoeuib.ttf";
@@ -431,6 +441,12 @@ static void set_launcher_windowed(bool windowed) {
     build_fonts(uiH);
     ImGui_ImplDX11_InvalidateDeviceObjects();  // recreated (with the atlas) on next NewFrame
     logf(L"window mode -> %s", windowed ? L"windowed" : L"fullscreen");
+}
+
+// A page's content column width: a share of the window, but no wider than maxAspect x its height, so forms stay
+// a readable width on wide and ultrawide screens. Pages centre it.
+static float page_column(float vw, float vh, float share, float maxAspect) {
+    return fminf(vw * share, vh * maxAspect);
 }
 
 static void text_centered(const std::string& s) {
@@ -1065,7 +1081,7 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
     text_centered_colored(palette::dim, narrow(g.title));
     ImGui::PopFont();
 
-    float panelW = vw * 0.70f;
+    float panelW = page_column(vw, vh, 0.70f, 1.45f);
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
     ImGui::BeginChild("##mods", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_None);
     ImGui::PushFont(g_ui.fontBase);
@@ -1150,8 +1166,22 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
     }
     g_ui.modsRemove = removeIndex;  // the thumbnails drawn above stay alive this frame
     if (!g.modelProfile.empty()) {
+        // The model-packs shot: the section scrolled to the top (when the list is long enough to scroll) and outlined,
+        // so it isn't the mods shot again.
         if (g_shotScrollPacks) ImGui::SetScrollHereY(0.0f);
+        ImVec2 top = ImGui::GetCursorScreenPos();
+        ImGui::GetWindowDrawList()->ChannelsSplit(2);
+        ImGui::GetWindowDrawList()->ChannelsSetCurrent(1);
         draw_model_packs(g, panelW, thumb);
+        ImGui::GetWindowDrawList()->ChannelsSetCurrent(0);
+        if (g_shotScrollPacks) {
+            ImVec2 pad(ImGui::GetStyle().ItemSpacing.x, ImGui::GetStyle().ItemSpacing.y);
+            ImVec2 a(top.x - pad.x * 0.5f, top.y), b(top.x + ImGui::GetContentRegionAvail().x + pad.x * 0.5f,
+                                                      ImGui::GetCursorScreenPos().y + pad.y);
+            ImGui::GetWindowDrawList()->AddRectFilled(a, b, IM_COL32(250, 199, 72, 18), ImGui::GetStyle().FrameRounding);
+            ImGui::GetWindowDrawList()->AddRect(a, b, IM_COL32(250, 199, 72, 170), ImGui::GetStyle().FrameRounding, 0, 2.0f);
+        }
+        ImGui::GetWindowDrawList()->ChannelsMerge();
     }
     ImGui::PopFont();
     ImGui::EndChild();
@@ -1246,8 +1276,8 @@ static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
     text_centered_colored(palette::dim, narrow(g.title));
     ImGui::PopFont();
 
-    float panelW = vw * 0.56f;
-    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.18f));
+    float panelW = page_column(vw, vh, 0.50f, 1.0f);
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.20f));
     ImGui::BeginChild("##quick", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_None);
     ImGui::PushFont(g_ui.fontBase);
     int launch = -1;
@@ -1361,7 +1391,7 @@ static int draw_tour(std::vector<GameEntry>& games, WORD pad) {
     text_centered("H I S T O R Y   T O U R");
     ImGui::PopFont();
     int launch = -1;
-    float panelW = vw * 0.62f;
+    float panelW = page_column(vw, vh, 0.56f, 1.1f);
     if (!g_ui.tourOk) {
         ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.18f));
         ImGui::BeginChild("##tour", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_None);
@@ -1491,7 +1521,7 @@ static void draw_update_page(WORD pad) {
     ImGui::SetCursorPosY(vh * 0.055f);
     text_centered("U P D A T E");
     ImGui::PopFont();
-    float panelW = vw * 0.62f;
+    float panelW = page_column(vw, vh, 0.62f, 1.2f);
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
     ImGui::BeginChild("##update", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_None);
     ImGui::PushFont(g_ui.fontBase);
@@ -1803,7 +1833,7 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     text_centered("S E T T I N G S");
     ImGui::PopFont();
 
-    float panelW = vw * 0.62f;
+    float panelW = page_column(vw, vh, 0.62f, 1.2f);
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.14f));
     ImGui::BeginChild("##settings", ImVec2(panelW, vh * 0.72f), ImGuiChildFlags_None);
 
@@ -2702,7 +2732,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     if (g_shot) {
         // Never shown: no focus taken, nothing on the screen. The swapchain renders all the same.
         hwnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"AKI Launcher (screenshot)", WS_POPUP,
-                               -32000, -32000, 1600, 900, nullptr, nullptr, hinst, nullptr);
+                               -32000, -32000, shot.width, shot.height, nullptr, nullptr, hinst, nullptr);
     } else if (smoke) {
         hwnd = CreateWindowW(wc.lpszClassName, L"AKI Launcher", WS_OVERLAPPEDWINDOW, 100, 100,
                              1280, 720, nullptr, nullptr, hinst, nullptr);
@@ -2715,7 +2745,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                              nullptr, nullptr, hinst, nullptr);
     }
 
-    if (g_shot ? !create_offscreen_device(1600, 900) : !create_device(hwnd)) {
+    if (g_shot ? !create_offscreen_device((UINT)shot.width, (UINT)shot.height) : !create_device(hwnd)) {
         logf(L"no D3D11 device");
         destroy_device();
         UnregisterClassW(wc.lpszClassName, hinst);
@@ -2736,6 +2766,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     ImGuiStyle& style = ImGui::GetStyle();
     style.FrameRounding = 8.0f;
     style.Colors[ImGuiCol_WindowBg] = ImVec4(0.028f, 0.030f, 0.045f, 1.0f);
+    g_baseStyle = style;
 
     // Fonts: Segoe UI at sizes derived from the actual window height.
     RECT cr{};
@@ -2858,6 +2889,13 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (g_resizeW && g_resizeH && g_swapChain) {
             destroy_render_target();
             g_swapChain->ResizeBuffers(0, g_resizeW, g_resizeH, DXGI_FORMAT_UNKNOWN, 0);
+            // A window resized (or moved to a screen with another scale) a good deal gets fonts and sizes for its
+            // new height; small drags keep the atlas.
+            float h = (float)g_resizeH;
+            if (h >= 400 && g_fontsH > 0 && fabsf(h - g_fontsH) > g_fontsH * 0.08f) {
+                build_fonts(h);
+                ImGui_ImplDX11_InvalidateDeviceObjects();  // recreated (with the atlas) on next NewFrame
+            }
             g_resizeW = g_resizeH = 0;
             create_render_target();
         }
