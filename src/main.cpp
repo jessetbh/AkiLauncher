@@ -147,6 +147,7 @@ struct UiState {
     std::string modsNote;
     bool modsNoteOk = true;
     int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
+    int packRemove = -1;  // the same for a model pack
     // Model packs (aki-roadmap#130): <mods>\models\ and its models.txt, for games with model import
     std::vector<ModelPack> packs;
     std::vector<Texture> packThumbs;  // parallel to packs
@@ -717,6 +718,8 @@ static void draw_model_packs(const GameEntry& g, float panelW, float thumb) {
         ImGui::TextColored(palette::dim, "%s", line.c_str());
         if (p.license.empty()) ImGui::TextColored(palette::warn, "no license in pack.json: don't share it as it is");
         else ImGui::TextColored(palette::faint, "license: %s", p.license.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Remove")) g_ui.packRemove = i;  // next frame, before the thumbnails are drawn
         // The pack's current lines, copied (an edit replaces the lines, so no pointer into them is kept).
         const ModelsTxtLine* ap = g_ui.modelsTxt.assignment(p.id);
         const bool has = ap != nullptr;
@@ -901,7 +904,7 @@ static void install_into_mods(const std::vector<GameEntry>& games, const std::ve
     std::wstring all;
     bool allOk = true;
     for (const auto& src : srcs) {
-        InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title);
+        InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title, g.modelProfile);
         allOk = allOk && r.ok;
         if (!all.empty()) all += L"   |   ";
         all += r.message;
@@ -969,6 +972,17 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
         refresh_mods(games);
     }
     g_ui.modsRemove = -1;
+    if (g_ui.packRemove >= 0 && g_ui.packRemove < (int)g_ui.packs.size()) {
+        std::wstring err;
+        const ModelPack& p = g_ui.packs[g_ui.packRemove];
+        std::string name = p.name.empty() ? p.id : p.name;
+        if (remove_model_pack(p.dir, g_ui.modsDir, &err))
+            mods_note(L"Removed model pack " + widen(name) + L" (it is in the Recycle Bin; models.txt keeps its lines)", true);
+        else
+            mods_note(err, false);
+        refresh_mods(games);
+    }
+    g_ui.packRemove = -1;
 
     ImGui::PushFont(g_ui.fontHeader);
     ImGui::SetCursorPosY(vh * 0.055f);

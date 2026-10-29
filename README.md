@@ -118,8 +118,18 @@ is read-only on the page, with the reason shown, in these cases:
 Everything else in `models.txt` (comments, other packs' lines, lines the launcher doesn't know) stays as it was, and the
 file is replaced in one step, so the game never reads half of it. Wrestler names come from the game's roster:
 `assets\rosters\<game>-roster.json` next to the launcher, or AkiTools' `model-templates\profiles\` in a depot. Without
-one, a wrestler line is shown but can only be changed in `models.txt` (**Open models.txt**). Packs come from AkiTools
-`aki-model.py quick` or a modder's zip; the aki_modelimport mod (on in the Mods menu) draws them.
+one, a wrestler line is shown but can only be changed in `models.txt` (**Open models.txt**).
+
+Installing packs: the Mods page's **Install files...**, **Install a pack folder...** or a drop on the window takes a
+model pack too. It accepts an `<id>.akimodel` folder, a folder of them, or a zip of either.
+- The pack goes into `mods\models\`, and its `<id>-hd.rtz` (inside the pack, or next to it) into `mods\`.
+- A pack built for another game is refused.
+- A pack of the same id is replaced, and the old copy goes to the Recycle Bin.
+- Nothing is assigned: pick who it replaces under Model packs.
+- **Remove** on a pack moves it and its HD textures to the Recycle Bin. Its `models.txt` lines stay, listed as
+  naming a pack that isn't installed.
+
+Packs are made with AkiTools (`aki-model.py quick`), and the aki_modelimport mod (on in the Mods menu) draws them.
 
 **I have a folder full of ROMs. Can it find them?** Yes: Settings → ROM
 Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
