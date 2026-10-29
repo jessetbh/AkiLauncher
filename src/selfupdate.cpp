@@ -443,6 +443,7 @@ static void decide(const std::vector<LauncherRelease>& rels, bool prerelease, co
 }
 
 void update_check_start() {
+    if (launch_blocked()) return;  // screenshot mode: no request, no releases file
     init_once();
     {
         std::lock_guard lk(g_mu);
@@ -560,6 +561,7 @@ void update_skip_version() {
 }
 
 bool update_download_start() {
+    if (launch_blocked()) return false;
     LauncherRelease rel;
     {
         std::lock_guard lk(g_mu);

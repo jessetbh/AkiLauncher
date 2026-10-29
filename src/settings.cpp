@@ -118,7 +118,12 @@ void settings_load() {
     if (g_settings.hotkeyVk == 0) { g_settings.hotkeyMods = MOD_SHIFT; g_settings.hotkeyVk = VK_F12; }
 }
 
+static bool g_readOnly = false;
+
+void settings_set_read_only(bool readOnly) { g_readOnly = readOnly; }
+
 void settings_save() {
+    if (g_readOnly) return;
     std::error_code ec;
     std::filesystem::create_directories(settings_path().parent_path(), ec);
     std::ofstream f(settings_path(), std::ios::trunc | std::ios::binary);

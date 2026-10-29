@@ -303,6 +303,7 @@ static bool extract_zip(const std::vector<uint8_t>& zip, const fs::path& dir,
 }
 
 bool install_start(int gameIndex, const GameEntry& g, const ReleaseInfo& rel) {
+    if (launch_blocked()) return false;  // screenshot mode
     int idle = (int)InstallPhase::Idle;
     if (!g_phase.compare_exchange_strong(idle, (int)InstallPhase::Downloading)) return false;
     g_got = 0;
