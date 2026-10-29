@@ -83,10 +83,22 @@ bool parse_shot_args(const std::vector<std::wstring>& args, ShotRequest* out, st
         } else if (a == L"--demo") {
             r.demo = true;
             gameOrDemo = true;
+        } else if (a == L"--size") {
+            int w = 0, h = 0;
+            wchar_t x = 0, extra = 0;
+            if (!value_at(args, i + 1) || swscanf_s(args[i + 1].c_str(), L"%d%c%d%c", &w, &x, 1, &h, &extra, 1) != 3 ||
+                (x != L'x' && x != L'X') || w < 320 || h < 240 || w > 7680 || h > 4320) {
+                *err = L"--size WxH, e.g. 3840x2160 (320x240 to 7680x4320)";
+                return false;
+            }
+            r.width = w;
+            r.height = h;
+            gameOrDemo = true;
+            ++i;
         }
     }
     if (gameOrDemo && !one && !all) {
-        *err = L"--game and --demo go with --shot or --shot-all";
+        *err = L"--game, --demo and --size go with --shot or --shot-all";
         return false;
     }
     r.active = one || all;

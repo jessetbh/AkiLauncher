@@ -10,10 +10,11 @@
 // config (settings_set_read_only, launch_set_blocked); where a page would be empty it shows demo data, made in a temp
 // folder in the formats the real files use.
 //
-//   AkiLauncher.exe --shot <page> <out.png> [--game <id>] [--demo]
-//   AkiLauncher.exe --shot-all <dir> [--game <id>] [--demo]      every page, as <dir>\<page>.png
+//   AkiLauncher.exe --shot <page> <out.png> [--game <id>] [--demo] [--size WxH]
+//   AkiLauncher.exe --shot-all <dir> [--game <id>] [--demo] [--size WxH]      every page, as <dir>\<page>.png
 //
 // --game: a games.json id (default nomercy when the registry has it). --demo: demo data even where real data exists.
+// --size: the frame in pixels (default 1600x900; 3840x2160 for a 4K screen), 320x240 to 7680x4320.
 
 enum class ShotPage { Home, Settings, Mods, ModelPacks, QuickMatch, HistoryTour, Dev };
 
@@ -25,6 +26,7 @@ struct ShotRequest {
     std::vector<std::pair<ShotPage, std::filesystem::path>> shots;  // in order
     std::wstring game;  // "" = the default
     bool demo = false;
+    int width = 1600, height = 900;
 };
 
 // The shot options in a command line (the others are left for the caller). False (with *err) for a malformed one:
