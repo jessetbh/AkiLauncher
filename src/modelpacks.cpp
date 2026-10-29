@@ -25,6 +25,13 @@ static std::string lower(std::string s) {
 // Packs
 // ---------------------------------------------------------------------------
 
+bool valid_pack_id(const std::string& id) {
+    if (id.empty() || id.size() > 31) return false;
+    for (char c : id)
+        if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+    return true;
+}
+
 std::vector<ModelPack> list_model_packs(const fs::path& modelsDir) {
     std::vector<ModelPack> out;
     std::error_code ec;
@@ -74,10 +81,16 @@ static std::vector<std::string> words_of(const std::string& s) {
 }
 
 static bool parse_int(const std::string& s, int base, int* out) {
-    if (s.empty()) return false;
-    char* end = nullptr;
-    long v = strtol(s.c_str(), &end, base);
-    if (*end || v < 0 || v > 0xFFFF) return false;
+    // Plain digits only (no sign, no prefix, no spaces), at most 0xFFFF.
+    if (s.empty() || s.size() > 5) return false;
+    long v = 0;
+    for (char c : s) {
+        int d = (c >= '0' && c <= '9') ? c - '0' : (base == 16 && c >= 'a' && c <= 'f') ? c - 'a' + 10
+                : (base == 16 && c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1;
+        if (d < 0) return false;
+        v = v * base + d;
+    }
+    if (v > 0xFFFF) return false;
     *out = (int)v;
     return true;
 }
@@ -101,7 +114,7 @@ static ModelsTxtLine parse_line(const std::string& raw) {
         l.kind = ModelsTxtLine::Kind::Slot;
         l.pack = lower(w[0]);
     } else if ((w.size() == 3 || (w.size() == 5 && lower(w[3]) == "costume")) && k1 == "wrestler" &&
-               parse_int(lower(w[2]).rfind("0x", 0) == 0 ? w[2].substr(2) : w[2], 16, &l.wrestler) &&
+               lower(w[2]).rfind("0x", 0) == 0 && parse_int(w[2].substr(2), 16, &l.wrestler) &&
                (w.size() == 3 || parse_int(w[4], 10, &l.costume))) {
         l.kind = ModelsTxtLine::Kind::Wrestler;
         l.pack = lower(w[0]);
@@ -168,6 +181,13 @@ const ModelsTxtLine* ModelsTxt::assignment(const std::string& pack) const {
         if ((l.kind == ModelsTxtLine::Kind::Slot || l.kind == ModelsTxtLine::Kind::Wrestler) && l.pack == lower(pack))
             return &l;
     return nullptr;
+}
+
+int ModelsTxt::assignment_count(const std::string& pack) const {
+    int n = 0;
+    for (const auto& l : lines)
+        n += (l.kind == ModelsTxtLine::Kind::Slot || l.kind == ModelsTxtLine::Kind::Wrestler) && l.pack == lower(pack);
+    return n;
 }
 
 bool ModelsTxt::is_off(const std::string& pack) const {

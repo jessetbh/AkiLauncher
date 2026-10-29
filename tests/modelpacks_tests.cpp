@@ -27,7 +27,7 @@ static void test_parse_and_round_trip() {
         "\r\n"
         "banjo        slot 1\r\n"
         "cesiumman    wrestler 0x0302   # the champ\r\n"
-        "snake        wrestler 0404 costume 2\r\n"
+        "snake        wrestler 0x0404 costume 2\r\n"
         "off banjo\r\n"
         "weird line the launcher doesn't know\r\n"
         "toolong      slot 9\r\n";
@@ -42,6 +42,15 @@ static void test_parse_and_round_trip() {
     CHECK(t.lines[4].kind == K::Wrestler && t.lines[4].wrestler == 0x404 && t.lines[4].costume == 2);
     CHECK(t.lines[5].kind == K::Off && t.lines[5].pack == "banjo");
     CHECK(t.lines[6].kind == K::Other && t.lines[7].kind == K::Other);  // slot 9 isn't a slot: kept as is
+    CHECK(t.assignment_count("cesiumman") == 1 && t.assignment_count("nobody") == 0);
+    // Strict numbers: a wrestler id needs 0x; no signs or stray prefixes.
+    for (const char* bad : {"x wrestler 0302", "x wrestler 0x0x12", "x slot +1", "x wrestler 0x", "x wrestler 0x12 costume -1",
+                            "x wrestler 0x10000"}) {
+        ModelsTxt b = ModelsTxt::parse(bad);
+        CHECK(b.lines.size() == 1 && b.lines[0].kind == K::Other);
+    }
+    CHECK(valid_pack_id("q-human_2") && !valid_pack_id("my pack") && !valid_pack_id("Snake") &&
+          !valid_pack_id(std::string(32, 'a')) && !valid_pack_id(""));
     CHECK(t.is_off("banjo") && !t.is_off("snake"));
     CHECK(t.assignment("cesiumman") && t.assignment("cesiumman")->wrestler == 0x302);
     CHECK(!t.assignment("nobody"));

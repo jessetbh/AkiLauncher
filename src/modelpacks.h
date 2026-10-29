@@ -23,6 +23,9 @@ struct ModelPack {
     int triangles = 0;                          // manifest.json
 };
 std::vector<ModelPack> list_model_packs(const std::filesystem::path& modelsDir);
+// The runtime's pack-id rule: a-z 0-9 _ -, at most 31 characters. A folder
+// named otherwise can't be named in models.txt (the launcher leaves it alone).
+bool valid_pack_id(const std::string& id);
 
 struct ModelsTxtLine {
     enum class Kind { Blank, Comment, Slot, Wrestler, Off, Other };
@@ -45,6 +48,7 @@ struct ModelsTxt {
 
     // The pack's assignment (its first slot or wrestler line), or nullptr.
     const ModelsTxtLine* assignment(const std::string& pack) const;
+    int assignment_count(const std::string& pack) const;  // its slot + wrestler lines
     bool is_off(const std::string& pack) const;
     // Replaces the pack's slot / wrestler lines with one, first among the
     // assignments so it wins (kind Blank = no assignment: just removes them).
