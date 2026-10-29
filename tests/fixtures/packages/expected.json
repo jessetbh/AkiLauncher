@@ -1,0 +1,118 @@
+{
+  "about": "aki-roadmap#154 package fixtures: see tests/make_package_fixtures.py",
+  "fixtures": {
+    "bad-base-rom-sha1": {
+      "error": "base_rom.sha1",
+      "exit": 2,
+      "field": "base_rom"
+    },
+    "bad-conversion-no-aki-json": {
+      "error": "no conversion manifest",
+      "exit": 2,
+      "field": "payload"
+    },
+    "bad-conversion-no-base-rom": {
+      "error": "no \"base_rom\"",
+      "exit": 2,
+      "field": "base_rom"
+    },
+    "bad-format": {
+      "error": "format 2",
+      "exit": 2,
+      "field": "format"
+    },
+    "bad-format-true": {
+      "error": "format true",
+      "exit": 2,
+      "field": "format"
+    },
+    "bad-game-short-key": {
+      "error": "aki-package.json.game_id",
+      "exit": 2,
+      "field": "game_id"
+    },
+    "bad-hack-as-addon": {
+      "error": "patch-mod ROM hack is a conversion",
+      "exit": 2,
+      "field": "payload"
+    },
+    "bad-id-49-chars": {
+      "error": "aki-package.json.id",
+      "exit": 2,
+      "field": "id"
+    },
+    "bad-id-case": {
+      "error": "aki-package.json.id",
+      "exit": 2,
+      "field": "id"
+    },
+    "bad-id-device-name": {
+      "error": "Windows device name",
+      "exit": 2,
+      "field": "id"
+    },
+    "bad-id-trailing-dot": {
+      "error": "aki-package.json.id",
+      "exit": 2,
+      "field": "id"
+    },
+    "bad-kind": {
+      "error": "\"plugin\" is not one of",
+      "exit": 2,
+      "field": "kind"
+    },
+    "bad-no-authors": {
+      "error": "at least 1",
+      "exit": 2,
+      "field": "authors"
+    },
+    "bad-nrm-id-mismatch": {
+      "error": "mod.json id is \"other-id\"",
+      "exit": 2,
+      "field": "payload"
+    },
+    "bad-payload-escapes": {
+      "error": "use a relative path",
+      "exit": 2,
+      "field": "payload"
+    },
+    "bad-payload-missing": {
+      "error": "is not in the package",
+      "exit": 2,
+      "field": "payload"
+    },
+    "bad-thumb-not-png": {
+      "error": "not a PNG",
+      "exit": 2,
+      "field": "thumb"
+    },
+    "bad-version": {
+      "error": "aki-package.json.version",
+      "exit": 2,
+      "field": "version"
+    },
+    "valid-addon": {
+      "exit": 0
+    },
+    "valid-conversion": {
+      "exit": 0
+    },
+    "valid-id-48-chars": {
+      "exit": 0
+    },
+    "valid-model-pack": {
+      "exit": 0
+    },
+    "valid-texture-folder": {
+      "exit": 0
+    },
+    "valid-texture-pack": {
+      "exit": 0
+    },
+    "warn-no-license": {
+      "error": "no \"license\"",
+      "exit": 1,
+      "field": "license"
+    }
+  }
+}

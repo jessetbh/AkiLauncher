@@ -1,0 +1,10 @@
+{
+  "format": "aki-conversion",
+  "format_version": 1,
+  "id": "fixture-conversion",
+  "components": {
+    "codes": {
+      "file": "codes.txt"
+    }
+  }
+}
