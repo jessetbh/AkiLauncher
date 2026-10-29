@@ -96,6 +96,10 @@ void settings_load() {
             else if (key == "dev_mode") g_settings.devMode = atoi(val.c_str()) != 0;
             else if (key == "rom_scan_dir") g_settings.romScanDir = u8_to_w(val);
             else if (key == "portable_games") g_settings.portableGames = atoi(val.c_str()) != 0;
+            else if (key == "update_checks") g_settings.updateChecks = atoi(val.c_str()) != 0;
+            else if (key == "update_prerelease") g_settings.updatePrerelease = atoi(val.c_str()) != 0;
+            else if (key == "update_skip") g_settings.updateSkip = u8_to_w(val);
+            else if (key == "update_etag") g_settings.updateEtag = u8_to_w(val);
         } else if (section.rfind("game:", 0) == 0) {
             GameOverride& o = g_settings.overrides[u8_to_w(section.substr(5))];
             if (key == "exe") o.exePath = u8_to_w(val);
@@ -131,6 +135,10 @@ void settings_save() {
     }
     if (g_settings.devMode) f << "dev_mode=1\n";
     if (!g_settings.portableGames) f << "portable_games=0\n";
+    if (!g_settings.updateChecks) f << "update_checks=0\n";
+    if (g_settings.updatePrerelease) f << "update_prerelease=1\n";
+    if (!g_settings.updateSkip.empty()) f << "update_skip=" << w_to_u8(g_settings.updateSkip) << "\n";
+    if (!g_settings.updateEtag.empty()) f << "update_etag=" << w_to_u8(g_settings.updateEtag) << "\n";
     if (!g_settings.romScanDir.empty()) f << "rom_scan_dir=" << w_to_u8(g_settings.romScanDir) << "\n";
     for (auto& [key, o] : g_settings.overrides) {
         if (!o.any()) continue;

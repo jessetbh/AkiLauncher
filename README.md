@@ -131,6 +131,24 @@ are only ever added: an `id` the list already has is skipped. A manifest with
 `"base": "<id>"` is a variant of that game (a mod build, a ROM-hack edition),
 and its tile sits right after the base game's.
 
+**Does it update itself?** Yes. At start and every few hours it asks GitHub
+whether there is a newer AKI Launcher (cheaply: the answer is cached and only
+re-sent when it changed). If there is, a notice appears at the top right;
+`L` (or a click) shows the release notes with *Update now*, *Later* and *Skip
+this version*. *Update now* downloads the release, checks its size and its
+SHA256SUMS (an update without them is refused), swaps the files and restarts.
+- Never while a game, a build or an install runs.
+- Only the files in the release are replaced: `settings.ini`, `portable.txt`,
+  `games\`, mods and saves are never touched.
+- The replaced files are kept in `.update\previous\`. If the new version
+  doesn't start within 30 seconds, the old one puts everything back and keeps
+  running.
+- Settings: *Check for launcher updates* (off: `update_checks=0`) and
+  *Include pre-releases*. A launcher run from a build folder says "dev build,
+  updates off" and never checks.
+- `AKI_UPDATE_FEED=<file>` reads the release list from a local JSON file
+  instead of GitHub (for trying the notice).
+
 **Can I change the box art?** Yes — swap the images in `assets\boxart\`
 (see the README there for file naming).
 

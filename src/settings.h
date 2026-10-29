@@ -35,6 +35,11 @@ struct Settings {
     bool devMode = false;  // dev_mode=1: developer actions (Rebuild game); not in the settings UI
     std::wstring romScanDir;  // last folder the ROM scan looked in
     bool portableGames = true;  // portable_games=0: a portable launcher leaves its games' data in AppData
+    // AKI Launcher's own updates (aki-roadmap#117)
+    bool updateChecks = true;      // update_checks=0: never look for launcher releases
+    bool updatePrerelease = false; // update_prerelease=1: pre-releases count too
+    std::wstring updateSkip;       // update_skip=<tag>: "Skip this version"
+    std::wstring updateEtag;       // update_etag: the release feed's ETag (If-None-Match)
     std::map<std::wstring, GameOverride> overrides;
     std::map<std::wstring, GameStats> stats;
 };
