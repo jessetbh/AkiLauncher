@@ -253,12 +253,14 @@ on). `--game` is a games.json id; it defaults to `nomercy`.
 How a screenshot run behaves:
 - It draws into an offscreen texture, with no window shown and no focus taken. It needs no display, falling back
   to WARP without a GPU.
-- It never launches a game and never writes the launcher settings. It skips update checks, hotkeys, sounds and
-  the portable copy.
+- It never launches a game and never writes the launcher settings. Installs, rebuilds and update checks are off,
+  and it skips hotkeys, sounds and the portable copy.
 - A page with nothing to show (no mods, no model packs, no Quick Match mod), or every page with `--demo`, uses demo
   data: a temp folder in the real file formats, removed at exit. The shot is marked "demo data".
 - The exit code is 0 when every shot was written, 1 if one failed and 2 for bad arguments.
-- It still writes `aki-launcher.log` next to the exe, as every run does.
+- It logs to `aki-launcher-shot.log` next to the exe, so the last real session's `aki-launcher.log` is kept. A
+  connected controller is ignored. A page that can't be shown as asked (no game, a game without model import) is
+  still saved, but the run exits 1.
 
 ### Dev mode
 

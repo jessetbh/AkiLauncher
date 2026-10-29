@@ -32,13 +32,18 @@ static bool page_named(const std::wstring& name, ShotPage* out) {
     return false;
 }
 
+// A value after a flag: present, and not the next flag.
+static bool value_at(const std::vector<std::wstring>& args, size_t i) {
+    return i < args.size() && !args[i].empty() && args[i].rfind(L"--", 0) != 0;
+}
+
 bool parse_shot_args(const std::vector<std::wstring>& args, ShotRequest* out, std::wstring* err) {
     ShotRequest r;
     bool one = false, all = false, gameOrDemo = false;
     for (size_t i = 0; i < args.size(); ++i) {
         const std::wstring& a = args[i];
         if (a == L"--shot") {
-            if (i + 2 >= args.size()) {
+            if (!value_at(args, i + 1) || !value_at(args, i + 2)) {
                 *err = L"--shot <page> <out.png>";
                 return false;
             }
@@ -57,7 +62,7 @@ bool parse_shot_args(const std::vector<std::wstring>& args, ShotRequest* out, st
             one = true;
             i += 2;
         } else if (a == L"--shot-all") {
-            if (i + 1 >= args.size()) {
+            if (!value_at(args, i + 1)) {
                 *err = L"--shot-all <dir>";
                 return false;
             }
@@ -69,7 +74,7 @@ bool parse_shot_args(const std::vector<std::wstring>& args, ShotRequest* out, st
             for (const auto& [n, p] : shot_pages()) r.shots.emplace_back(p, dir / (n + L".png"));
             all = true;
         } else if (a == L"--game") {
-            if (i + 1 >= args.size()) {
+            if (!value_at(args, i + 1)) {
                 *err = L"--game <id>";
                 return false;
             }

@@ -2,7 +2,10 @@
 // demo mods folder as the launcher's own readers see it, and the no-side-effects rule (settings_save writes nothing,
 // GameSession::launch starts nothing).
 #include "../src/games.h"
+#include "../src/installer.h"
 #include "../src/launch.h"
+#include "../src/rebuild.h"
+#include "../src/selfupdate.h"
 #include "../src/modelpacks.h"
 #include "../src/mods.h"
 #include "../src/quickmatch.h"
@@ -41,6 +44,10 @@ static void test_args() {
     CHECK(!parse_shot_args({L"--game", L"nomercy"}, &r, &err));  // --game without a shot
     CHECK(!parse_shot_args({L"--demo"}, &r, &err));
     CHECK(!parse_shot_args({L"--shot", L"home", L"a.png", L"--game"}, &r, &err));
+    // a flag is never taken as a value
+    CHECK(!parse_shot_args({L"--shot", L"home", L"--game", L"nomercy"}, &r, &err));
+    CHECK(!parse_shot_args({L"--shot-all", L"--demo"}, &r, &err));
+    CHECK(!parse_shot_args({L"--shot", L"home", L"a.png", L"--game", L"--demo"}, &r, &err));
 }
 
 // Width, height and one pixel (BGRA) of a PNG, through WIC.
@@ -147,6 +154,16 @@ static void test_no_side_effects(const fs::path& tmp) {
     launch_set_blocked(true);
     CHECK(!s.launch(g, &err) && !s.active());
     CHECK(err.find(L"screenshot") != std::wstring::npos);
+    // ... and so do a rebuild, a game install and the launcher's update check and download.
+    err.clear();
+    CHECK(!rebuild_start(0, g, tmp, &err) && err.find(L"screenshot") != std::wstring::npos);
+    CHECK(!install_start(0, g, ReleaseInfo{}) && install_status().phase == InstallPhase::Idle);
+    update_check_start();
+    update_tick();
+    UpdatePhase ph = update_status().phase;  // the other phases only follow a check (a dev build never checks, so this is no proof on its own)
+    CHECK(ph != UpdatePhase::Checking && ph != UpdatePhase::UpToDate && ph != UpdatePhase::Available &&
+          ph != UpdatePhase::Failed);
+    CHECK(!update_download_start());
     launch_set_blocked(false);
     CHECK(!s.launch(g, &err) && err.find(L"CreateProcess") != std::wstring::npos);  // unblocked: it really tries
 }

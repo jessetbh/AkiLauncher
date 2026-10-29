@@ -127,6 +127,10 @@ static void close_handles() {
 }
 
 bool rebuild_start(int gameIndex, const GameEntry& g, const fs::path& depotRoot, std::wstring* errorOut) {
+    if (launch_blocked()) {
+        if (errorOut) *errorOut = L"rebuilds are off in screenshot mode";
+        return false;
+    }
     if (g_status.phase == RebuildPhase::Running) {
         if (errorOut) *errorOut = L"a rebuild is already running (" + g_status.title + L")";
         return false;

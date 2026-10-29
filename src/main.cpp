@@ -289,6 +289,7 @@ static bool keyboard_mouse_activity() {
 
 // Newly-pressed XInput buttons this frame (any pad), for carousel navigation.
 static WORD pad_pressed() {
+    if (g_shot) return 0;  // a pad someone is holding mustn't drive a screenshot run
     static WORD prev = 0;
     WORD cur = 0;
     for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
@@ -405,6 +406,7 @@ static void remember_windowed_placement() {
 // Runtime switch. A running game follows automatically: GameSession::tick
 // re-forces the game window whenever the launcher rect changes.
 static void set_launcher_windowed(bool windowed) {
+    if (g_shot) return;  // the screenshot window is never shown
     if (windowed) {
         RECT r = windowed_rect();
         SetWindowLongPtrW(g_hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
@@ -905,7 +907,8 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
     const GameEntry& g = games[g_ui.modsGame];
     g_ui.modsDir = g_shotModsDir.empty() ? game_mods_dir(g) : g_shotModsDir;
     // Bundled mods sit in assets\mods next to the exe (none known without one).
-    std::filesystem::path bundled = g.exeFound ? g.exePath.parent_path() / L"assets" / L"mods" : std::filesystem::path();
+    std::filesystem::path bundled = g.exeFound && g_shotModsDir.empty() ? g.exePath.parent_path() / L"assets" / L"mods"
+                                                                         : std::filesystem::path();
     g_ui.modItems = list_mods(g_ui.modsDir, bundled);
     // Thumbnails go through a temp file: the texture loader reads files.
     wchar_t tmpBuf[MAX_PATH]{};
@@ -2578,16 +2581,25 @@ static bool capture_png(const std::filesystem::path& out, std::wstring* err) {
     return ok;
 }
 
-// Puts the UI on a shot's page. Pages with nothing to show get the demo mods folder.
-static void shot_setup(ShotPage page, std::vector<GameEntry>& games, int gameIndex, bool demo,
-                       const std::filesystem::path& demoDir) {
+// Puts the UI on a shot's page. Pages with nothing to show get the demo mods folder. False (with *why) when the page
+// can't be shown as asked: the shot is still saved, and the run fails.
+static bool shot_setup(ShotPage page, std::vector<GameEntry>& games, int gameIndex, bool demo,
+                       const std::filesystem::path& demoDir, bool demoOk, std::wstring* why) {
     if (g_ui.showMods) close_mods();
     g_ui.showSettings = g_ui.showQuick = g_ui.showTour = g_ui.showUpdate = false;
     g_shotModsDir.clear();
     g_shotScrollPacks = false;
     set_dev_mode_from_args(page == ShotPage::Dev);
     if (gameIndex >= 0) g_ui.selected = gameIndex;
-    if (gameIndex < 0) return;
+    bool needsGame = page == ShotPage::Mods || page == ShotPage::ModelPacks || page == ShotPage::QuickMatch;
+    if (gameIndex < 0) {
+        *why = L"no game to show";
+        return !needsGame;
+    }
+    if (page == ShotPage::ModelPacks && games[gameIndex].modelProfile.empty()) {
+        *why = games[gameIndex].title + L" has no model import (no model packs section)";
+        return false;
+    }
     switch (page) {
         case ShotPage::Settings: open_settings(games); break;
         case ShotPage::Mods:
@@ -2613,6 +2625,11 @@ static void shot_setup(ShotPage page, std::vector<GameEntry>& games, int gameInd
         case ShotPage::HistoryTour: open_tour(); break;
         default: break;
     }
+    if (!g_shotModsDir.empty() && !demoOk) {
+        *why = L"the demo mods folder couldn't be made";
+        return false;
+    }
+    return true;
 }
 
 int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
@@ -2629,6 +2646,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     ShotRequest shot;
     {
         std::vector<std::wstring> args(__wargv + 1, __wargv + __argc);
+        for (const auto& a : args)  // a screenshot run keeps the last real session's log
+            if (a == L"--shot" || a == L"--shot-all") log_set_name(L"aki-launcher-shot.log");
         std::wstring err;
         if (!parse_shot_args(args, &shot, &err)) {
             logf(L"shot: %s", err.c_str());
@@ -2670,6 +2689,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // Nothing a screenshot run does may reach the config or start a game.
         settings_set_read_only(true);
         launch_set_blocked(true);
+        // Dev mode is the dev shot's alone (settings or AKI_DEV would put its line on home too); in memory only.
+        settings().devMode = false;
+        SetEnvironmentVariableW(L"AKI_DEV", nullptr);
         logf(L"shot: %d page(s), no launches, settings read-only", (int)shot.shots.size());
     }
 
@@ -2785,6 +2807,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     // Screenshots: which shot, how many frames of it so far, the game, the demo folder (a temp folder, removed at exit).
     size_t shotIndex = 0;
     int shotFrame = 0, shotFailed = 0;
+    bool shotPageOk = true, shotDemoOk = false;
+    std::wstring shotWhy;
     int shotGame = -1;
     std::filesystem::path shotDemo;
     if (g_shot) {
@@ -2800,7 +2824,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         GetTempPathW(MAX_PATH, tmpBuf);
         shotDemo = std::filesystem::path(tmpBuf) / (L"akilauncher-shot-demo-" + std::to_wstring(GetCurrentProcessId()));
         std::wstring err;
-        if (!make_demo_mods_dir(shotDemo, &err)) logf(L"shot: %s", err.c_str());
+        shotDemoOk = make_demo_mods_dir(shotDemo, &err);
+        if (!shotDemoOk) logf(L"shot: %s", err.c_str());
     }
 
     int frame = 0;
@@ -2818,7 +2843,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             if (msg.message == WM_QUIT) done = true;
         }
         if (done) break;
-        if (g_shot && shotFrame == 0) shot_setup(shot.shots[shotIndex].first, games, shotGame, shot.demo, shotDemo);
+        if (g_shot && shotFrame == 0) {
+            shotWhy.clear();
+            shotPageOk = shot_setup(shot.shots[shotIndex].first, games, shotGame, shot.demo, shotDemo, shotDemoOk, &shotWhy);
+        }
 
         // Window-mode switches happen between frames: the font atlas rebuild
         // must not race an in-flight ImGui frame.
@@ -2878,7 +2906,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         }
 
         // --- launcher self-update: periodic check; install once the download is verified ---
-        if (!smoke && testInstall < 0 && testRomIdx < 0 && testRebuild < 0 && testLaunch < 0) {
+        if (!smoke && !g_shot && testInstall < 0 && testRomIdx < 0 && testRebuild < 0 && testLaunch < 0) {
             update_tick();
             if (g_ui.updateRequested && update_status().phase == UpdatePhase::Staged) {
                 g_ui.updateRequested = false;
@@ -3028,8 +3056,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // flows so held buttons don't drive focus mid-capture.
         {
             ImGuiIO& nio = ImGui::GetIO();
-            if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods || g_ui.showUpdate ||
-                g_ui.showQuick || g_ui.showTour)
+            if (!g_shot && ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods ||
+                            g_ui.showUpdate || g_ui.showQuick || g_ui.showTour))
                 nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
             else
                 nio.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
@@ -3125,7 +3153,11 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (g_shot && ++shotFrame >= 20) {
             const auto& [page, out] = shot.shots[shotIndex];
             std::wstring err;
-            if (capture_png(out, &err)) logf(L"shot: %s", out.c_str());
+            if (!shotPageOk) {
+                ++shotFailed;
+                logf(L"shot FAILED: %s: %s (saved, but not the page asked for)", out.c_str(), shotWhy.c_str());
+                capture_png(out, &err);
+            } else if (capture_png(out, &err)) logf(L"shot: %s", out.c_str());
             else {
                 ++shotFailed;
                 logf(L"shot FAILED: %s: %s", out.c_str(), err.c_str());
@@ -3155,6 +3187,10 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     }
 
     if (g_shot) {
+        if (shotIndex < shot.shots.size()) {  // the loop ended early (WM_QUIT, a session end)
+            logf(L"shot: stopped after %d of %d", (int)shotIndex, (int)shot.shots.size());
+            exitCodeOut = 1;
+        }
         if (g_ui.showMods) close_mods();  // its thumbnails may hold demo files open
         std::error_code ec;
         std::filesystem::remove_all(shotDemo, ec);

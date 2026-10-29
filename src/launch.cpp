@@ -14,13 +14,17 @@
 // Logging (WIN32 subsystem has no console; append to a file next to the exe)
 // ---------------------------------------------------------------------------
 
+static std::wstring g_logName = L"aki-launcher.log";
+
+void log_set_name(const wchar_t* name) { g_logName = name; }
+
 static FILE* log_file() {
     static FILE* f = [] {
         wchar_t exeBuf[MAX_PATH]{};
         GetModuleFileNameW(nullptr, exeBuf, MAX_PATH);
         std::wstring path(exeBuf);
         size_t slash = path.find_last_of(L'\\');
-        path = path.substr(0, slash + 1) + L"aki-launcher.log";
+        path = path.substr(0, slash + 1) + g_logName;
         FILE* fp = nullptr;
         _wfopen_s(&fp, path.c_str(), L"w");
         return fp;
@@ -151,6 +155,7 @@ void bring_to_foreground(HWND wnd) {
 static bool g_launchBlocked = false;
 
 void launch_set_blocked(bool blocked) { g_launchBlocked = blocked; }
+bool launch_blocked() { return g_launchBlocked; }
 
 bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     if (active()) return false;
