@@ -47,6 +47,9 @@ timing, and file-backed saves.
   launcher window live.
 - **Quick match** (`Q` / `Back`): the game starts straight into a CPU-vs-CPU
   match in the venue you pick, through the Quick Match mod the games bundle.
+- **History Tour** (`H`): a run of stops through wrestling history, each one a
+  quick match in that event's venue and match type (first slice: five No Mercy
+  stops from WWF 2000).
 
 ## Controls
 
@@ -58,12 +61,31 @@ timing, and file-backed saves.
 | U, RB | install an available update |
 | M, Start | the game's Mods page (install / remove mods and texture packs) |
 | Q, Back | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
+| H (or History Tour... on the Quick match page) | the History Tour: stops through wrestling history, played in order |
 | S, Y | settings (Return to Launcher binding, per-game paths) |
 | F11, Alt+Enter | windowed / fullscreen |
 | Esc | quit |
 | Shift+F12, hold View (in game) | quit prompt → back to launcher |
 
 ## FAQ
+
+**What is the History Tour?** A list of stops, walked in order. Each stop has a year, a title, a two-line blurb, and a
+game with a Quick match venue and match set. **Play this stop** launches it through Quick match, with the same
+one-run-only mod settings. When the game closes, the tour marks the stop done (`tour_stop` in the launcher's settings),
+and its page comes back on the next stop. **Start the tour over** resets it. The built-in tour (`assets/tour.json`) has
+five No Mercy stops from WWF's 2000 pay-per-views. The matches are the game's own CPU-vs-CPU demo matches in that venue,
+so the wrestlers aren't the real card's yet. To write your own, put a `tour.json` next to the launcher; it replaces the
+built-in one:
+
+```json
+{"name": "My tour", "stops": [
+  {"year": 2000, "title": "SummerSlam", "game": "nomercy", "venue": "SummerSlam", "match": "Triple threat",
+   "blurb": ["First line.", "Second line."]}]}
+```
+
+`game` is a games.json id. `venue` and `match` are names from that game's Quick Match options, as its Quick match page
+lists them. `match` may be left out, which means the game's rotation. `blurb` is one or two lines. A `tour.json` that
+doesn't parse is shown as an error on the page, not replaced by the built-in tour.
 
 **How does Quick match work, and does it change my mod settings?** `Q` (`Back` on a controller) opens the selected
 game's Quick match page. It needs the game's bundled Quick Match mod (`assets\mods\aki_quickmatch.nrm` next to the game,

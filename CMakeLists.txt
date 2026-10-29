@@ -46,6 +46,12 @@ string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," AKI_GAMES_BYTES "${AKI_GAMES_
 string(REGEX REPLACE "((0x..,){32})" "\\1\n" AKI_GAMES_BYTES "${AKI_GAMES_BYTES}")
 file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/generated/games_json.inc CONTENT "${AKI_GAMES_BYTES}0x00\n" @ONLY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/assets/games.json)
+# assets/tour.json (the History Tour's stops, aki-roadmap#23), built in the same way.
+file(READ ${CMAKE_SOURCE_DIR}/assets/tour.json AKI_TOUR_HEX HEX)
+string(REGEX REPLACE "([0-9a-f][0-9a-f])" "0x\\1," AKI_TOUR_BYTES "${AKI_TOUR_HEX}")
+string(REGEX REPLACE "((0x..,){32})" "\\1\n" AKI_TOUR_BYTES "${AKI_TOUR_BYTES}")
+file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/generated/tour_json.inc CONTENT "${AKI_TOUR_BYTES}0x00\n" @ONLY)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/assets/tour.json)
 
 add_executable(AkiLauncher WIN32
     src/main.cpp
@@ -62,6 +68,7 @@ add_executable(AkiLauncher WIN32
     src/selfupdate.cpp
     src/modelpacks.cpp
     src/quickmatch.cpp
+    src/tour.cpp
 )
 target_include_directories(AkiLauncher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 if(MSVC)
@@ -76,7 +83,7 @@ target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9
 option(AKI_LAUNCHER_TESTS "Build AkiLauncherTests" OFF)
 if(AKI_LAUNCHER_TESTS)
     add_executable(AkiLauncherTests tests/tests_main.cpp tests/rebuild_tests.cpp tests/romscan_tests.cpp
-                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp tests/selfupdate_tests.cpp tests/modelpacks_tests.cpp tests/quickmatch_tests.cpp src/json.cpp src/quickmatch.cpp src/modelpacks.cpp src/selfupdate.cpp
+                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp tests/selfupdate_tests.cpp tests/modelpacks_tests.cpp tests/quickmatch_tests.cpp tests/tour_tests.cpp src/json.cpp src/quickmatch.cpp src/tour.cpp src/modelpacks.cpp src/selfupdate.cpp
                    src/installer.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
                    src/launch.cpp src/games.cpp)
     target_compile_definitions(AkiLauncherTests PRIVATE UNICODE _UNICODE NOMINMAX)
