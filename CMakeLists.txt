@@ -37,6 +37,12 @@ target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_D
                            ${imgui_SOURCE_DIR}/misc/cpp)
 target_compile_definitions(imgui_lib PUBLIC UNICODE _UNICODE NOMINMAX)
 
+# assets/games.json (the game registry, aki-roadmap#24) is built in as the
+# fallback: a raw string literal in games_json.inc. Edits re-run the configure.
+file(READ ${CMAKE_SOURCE_DIR}/assets/games.json AKI_GAMES_JSON)
+file(WRITE ${CMAKE_BINARY_DIR}/generated/games_json.inc "R\"AKIJSON(${AKI_GAMES_JSON})AKIJSON\"\n")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/assets/games.json)
+
 add_executable(AkiLauncher WIN32
     src/main.cpp
     src/games.cpp
@@ -48,7 +54,9 @@ add_executable(AkiLauncher WIN32
     src/rebuild.cpp
     src/romscan.cpp
     src/mods.cpp
+    src/json.cpp
 )
+target_include_directories(AkiLauncher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 if(MSVC)
     # App icon + version resource (title bar / taskbar / Explorer)
     target_sources(AkiLauncher PRIVATE icons/app.rc)
@@ -61,8 +69,9 @@ target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9
 option(AKI_LAUNCHER_TESTS "Build AkiLauncherTests" OFF)
 if(AKI_LAUNCHER_TESTS)
     add_executable(AkiLauncherTests tests/tests_main.cpp tests/rebuild_tests.cpp tests/romscan_tests.cpp
-                   tests/mods_tests.cpp tests/portable_tests.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
+                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp src/json.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
                    src/launch.cpp src/games.cpp)
     target_compile_definitions(AkiLauncherTests PRIVATE UNICODE _UNICODE NOMINMAX)
+    target_include_directories(AkiLauncherTests PRIVATE ${CMAKE_BINARY_DIR}/generated)
     target_link_libraries(AkiLauncherTests PRIVATE miniz_lib xinput9_1_0 bcrypt)
 endif()

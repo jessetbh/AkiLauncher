@@ -114,6 +114,23 @@ Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
 Only files whose header names one of the games are read in full and
 hashed. The ROMs stay where they are; nothing is uploaded.
 
+**Where does the list of games come from?** From `assets\games.json` (the
+same file is built into `AkiLauncher.exe`, so a missing or broken copy changes
+nothing). Edit it to change or add games: each entry has an `id` (also the box
+art name, `assets\boxart\<id>_front.png`), a `title` and an `exe` (relative to
+the game's depot folder `repo_dir`; installs use its file name), plus optional
+`release_date`, `region`, `rom_file`, `rom_sha1`, `rom_note`, `rom_code`,
+`rom_version`, `mod_game_id`, `github_repo`, `force_borderless` and
+`coming_soon`. The launcher logs why it ignores a file that doesn't parse.
+
+**Will it find a new recomp by itself?** Yes, if the recomp has an
+`aki-game.json` (one entry with the same keys) in its folder. The launcher looks
+one level inside the depot (any folder name: clones and worktrees work) and in
+its `games\` folder (there the folder must be named after the `id`). Found games
+are only ever added: an `id` the list already has is skipped. A manifest with
+`"base": "<id>"` is a variant of that game (a mod build, a ROM-hack edition),
+and its tile sits right after the base game's.
+
 **Can I change the box art?** Yes — swap the images in `assets\boxart\`
 (see the README there for file naming).
 
