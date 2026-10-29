@@ -59,6 +59,7 @@ add_executable(AkiLauncher WIN32
     src/romscan.cpp
     src/mods.cpp
     src/json.cpp
+    src/selfupdate.cpp
 )
 target_include_directories(AkiLauncher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 if(MSVC)
@@ -66,16 +67,17 @@ if(MSVC)
     target_sources(AkiLauncher PRIVATE icons/app.rc)
 endif()
 target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9_1_0
-                      windowscodecs ole32 winmm winhttp bcrypt)
+                      windowscodecs ole32 winmm winhttp bcrypt version)
 
 # Console checks for the dev-mode Rebuild game action (no window needed):
 # cmake -DAKI_LAUNCHER_TESTS=ON, then build-msvc\AkiLauncherTests.exe.
 option(AKI_LAUNCHER_TESTS "Build AkiLauncherTests" OFF)
 if(AKI_LAUNCHER_TESTS)
     add_executable(AkiLauncherTests tests/tests_main.cpp tests/rebuild_tests.cpp tests/romscan_tests.cpp
-                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp src/json.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
+                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp tests/selfupdate_tests.cpp src/json.cpp src/selfupdate.cpp
+                   src/installer.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
                    src/launch.cpp src/games.cpp)
     target_compile_definitions(AkiLauncherTests PRIVATE UNICODE _UNICODE NOMINMAX)
     target_include_directories(AkiLauncherTests PRIVATE ${CMAKE_BINARY_DIR}/generated)
-    target_link_libraries(AkiLauncherTests PRIVATE miniz_lib xinput9_1_0 bcrypt)
+    target_link_libraries(AkiLauncherTests PRIVATE miniz_lib xinput9_1_0 bcrypt winhttp version)
 endif()

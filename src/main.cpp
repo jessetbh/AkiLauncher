@@ -22,6 +22,7 @@
 #include "rebuild.h"
 #include "romscan.h"
 #include "mods.h"
+#include "selfupdate.h"
 #include "launch.h"
 #include "settings.h"
 
@@ -145,6 +146,10 @@ struct UiState {
     std::string modsNote;
     bool modsNoteOk = true;
     int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
+    // launcher self-update (aki-roadmap#117)
+    bool showUpdate = false;
+    bool updateRequested = false;  // "Update now": install as soon as the download is verified
+    std::string updateNote;        // the last apply's outcome
 };
 static UiState g_ui;
 static HWND g_hwnd = nullptr;
@@ -831,6 +836,178 @@ static void draw_mods(std::vector<GameEntry>& games, WORD pad) {
     ImGui::PopFont();
 }
 
+// --- Launcher self-update (aki-roadmap#117) -----------------------------------
+
+static std::string update_line(const UpdateStatus& u) {
+    switch (u.phase) {
+        case UpdatePhase::Off: return "update checks are off";
+        case UpdatePhase::DevBuild: return "dev build, updates off";
+        case UpdatePhase::Idle:
+        case UpdatePhase::Checking: return "checking for updates...";
+        case UpdatePhase::UpToDate: return "up to date" + (u.checkedAt.empty() ? std::string() : " (checked " + narrow(u.checkedAt) + ")");
+        case UpdatePhase::Available: return narrow(u.release.tag) + " is available";
+        case UpdatePhase::Downloading: return "downloading " + narrow(u.release.tag) + "...";
+        case UpdatePhase::Staged: return narrow(u.release.tag) + " downloaded and verified";
+        case UpdatePhase::Failed: return narrow(u.error);
+    }
+    return "";
+}
+
+static void draw_update_page(WORD pad) {
+    ImGuiViewport* vp = ImGui::GetMainViewport();
+    float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
+    UpdateStatus u = update_status();
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) {
+        g_ui.showUpdate = false;
+        return;
+    }
+    ImGui::PushFont(g_ui.fontHeader);
+    ImGui::SetCursorPosY(vh * 0.055f);
+    text_centered("U P D A T E");
+    ImGui::PopFont();
+    float panelW = vw * 0.62f;
+    ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
+    ImGui::BeginChild("##update", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_None);
+    ImGui::PushFont(g_ui.fontBase);
+    ImGui::TextColored(palette::accent, "AKI Launcher %s", narrow(u.release.name.empty() ? u.release.tag : u.release.name).c_str());
+    ImGui::TextColored(palette::dim, "You have %s.  %s", narrow(version_text(u.current)).c_str(), update_line(u).c_str());
+    ImGui::Spacing();
+    bool busy = u.phase == UpdatePhase::Downloading || u.phase == UpdatePhase::Staged;
+    bool blocked = g_session.active() || rebuild_running() || install_status().phase == InstallPhase::Downloading ||
+                   install_status().phase == InstallPhase::Extracting;
+    if (u.phase == UpdatePhase::Available || u.phase == UpdatePhase::Failed) {
+        if (blocked) {
+            ImGui::TextColored(palette::warn, "Finish the running game, build or install first.");
+        } else if (ImGui::Button(u.phase == UpdatePhase::Failed ? "Try again" : "Update now")) {
+            g_ui.updateRequested = true;
+            g_ui.updateNote.clear();
+            update_download_start();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Later")) {
+            update_dismiss();
+            g_ui.showUpdate = false;
+        }
+        if (u.phase == UpdatePhase::Available) {
+            ImGui::SameLine();
+            if (ImGui::Button("Skip this version")) {
+                update_skip_version();
+                g_ui.showUpdate = false;
+            }
+        }
+    } else if (busy) {
+        if (u.total > 0)
+            ImGui::ProgressBar((float)u.got / (float)u.total, ImVec2(panelW * 0.6f, 0));
+        ImGui::TextColored(palette::dim, "%s", u.phase == UpdatePhase::Staged ? "Installing and restarting..."
+                                                                             : "Downloading; it is checked against the release's SHA256SUMS");
+    }
+    if (!g_ui.updateNote.empty()) ImGui::TextColored(palette::error, "%s", g_ui.updateNote.c_str());
+    ImGui::Separator();
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::BeginChild("##notes", ImVec2(0, 0), ImGuiChildFlags_None);
+    std::string notes = narrow(u.release.notes);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted(notes.empty() ? "(no release notes)" : notes.c_str());
+    ImGui::PopTextWrapPos();
+    ImGui::EndChild();
+    ImGui::PopFont();
+    ImGui::PopFont();
+    ImGui::EndChild();
+    ImGui::PushFont(g_ui.fontSmall);
+    ImGui::SetCursorPosY(vh * 0.92f);
+    text_centered_colored(palette::faint, std::string(g_ui.padInput ? "B" : "Esc") +
+                                              " Back      Settings, saves, games and mods stay as they are; "
+                                              "the previous version is kept for a rollback");
+    ImGui::PopFont();
+}
+
+// Settings section: the launcher's version and its update options.
+static void draw_update_settings() {
+    UpdateStatus u = update_status();
+    ImGui::TextColored(palette::accent, "AKI Launcher");
+    ImGui::Spacing();
+    ImGui::TextColored(palette::dim, "Version %s  -  %s", narrow(version_text(u.current)).c_str(), update_line(u).c_str());
+    if (u.phase == UpdatePhase::DevBuild) return;
+    bool checks = settings().updateChecks;
+    if (ImGui::Checkbox("Check for launcher updates", &checks)) {
+        settings().updateChecks = checks;
+        settings_save();
+    }
+    ImGui::SameLine();
+    bool pre = settings().updatePrerelease;
+    if (ImGui::Checkbox("Include pre-releases", &pre)) {
+        settings().updatePrerelease = pre;
+        settings_save();
+    }
+    if (u.phase != UpdatePhase::Off) {
+        ImGui::SameLine();
+        if (ImGui::Button("Check now")) update_check_start();
+        if (u.phase == UpdatePhase::Available) {
+            ImGui::SameLine();
+            if (ImGui::Button("Details...")) {
+                g_ui.showSettings = false;
+                g_ui.showUpdate = true;
+            }
+        }
+    } else {
+        ImGui::PushFont(g_ui.fontSmall);
+        ImGui::TextColored(palette::faint, "(turning checks back on takes effect on the next start)");
+        ImGui::PopFont();
+    }
+}
+
+// The verified download goes in: files swapped (the old ones kept), the new
+// launcher started, and this one waits for it to come up. If it doesn't
+// (exits, or no sign within 30 s), everything is put back and this one goes on.
+// Returns true when this process should now exit.
+static bool apply_update_and_restart(HWND hwnd) {
+    UpdateStatus u = update_status();
+    wchar_t exeBuf[MAX_PATH * 2]{};
+    GetModuleFileNameW(nullptr, exeBuf, (DWORD)std::size(exeBuf));
+    std::filesystem::path exe(exeBuf), appDir = exe.parent_path();
+    std::filesystem::path staging = appDir / L".update" / L"staged", previous = appDir / L".update" / L"previous";
+    if (g_session.active() || rebuild_running()) {
+        g_ui.updateNote = "a game or build is running: try again when it is done";
+        return false;
+    }
+    settings_save();  // before the new launcher reads it
+    std::wstring err;
+    if (!apply_staged_update(appDir, staging, previous, &err)) {
+        g_ui.updateNote = "Update not installed: " + narrow(err);
+        logf(L"update: %s", err.c_str());
+        return false;
+    }
+    std::wstring evName = L"Local\\AkiLauncherUpdate-" + std::to_wstring(GetCurrentProcessId());
+    HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, evName.c_str());
+    UnregisterHotKey(hwnd, HOTKEY_QUICKBACK);  // the new launcher registers it
+    std::wstring cmd = L"\"" + exe.wstring() + L"\" --update-confirm " + evName + L" --updated-from " +
+                       version_text(u.current);
+    STARTUPINFOW si{sizeof(si)};
+    PROCESS_INFORMATION pi{};
+    bool up = false;
+    if (ev && CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr, &si, &pi)) {
+        HANDLE waits[2] = {ev, pi.hProcess};
+        DWORD r = WaitForMultipleObjects(2, waits, FALSE, 30000);
+        up = r == WAIT_OBJECT_0;
+        if (!up && r == WAIT_TIMEOUT) TerminateProcess(pi.hProcess, 1);
+        if (!up) WaitForSingleObject(pi.hProcess, 5000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+    if (ev) CloseHandle(ev);
+    if (up) {
+        logf(L"update: %s is up; this launcher exits", u.release.tag.c_str());
+        return true;
+    }
+    std::wstring rerr;
+    restore_previous(appDir, staging, previous, &rerr);
+    reregister_hotkey();
+    g_ui.updateNote = "The new version didn't start, so " + narrow(version_text(u.current)) +
+                      " was put back" + (rerr.empty() ? "" : " (" + narrow(rerr) + ")");
+    logf(L"update: %s did not come up; rolled back", u.release.tag.c_str());
+    return false;
+}
+
 // Settings section: scan a ROM folder (aki-roadmap#26), results grouped by game.
 static void draw_rom_scan(std::vector<GameEntry>& games) {
     ImGui::TextColored(palette::accent, "ROM Folder");
@@ -1034,6 +1211,11 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
+    draw_update_settings();
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
     draw_rom_scan(games);
 
     ImGui::Spacing();
@@ -1133,6 +1315,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     if (pad || pad_held_mask()) g_ui.padInput = true;
     else if (keyboard_mouse_activity()) g_ui.padInput = false;
 
+    // ------------------------------------------------------------------ update page
+    if (g_ui.showUpdate) {
+        draw_update_page(pad_pressed());
+        ImGui::End();
+        return -1;
+    }
+
     // ------------------------------------------------------------------ mods page
     if (g_ui.showMods) {
         draw_mods(games, pad);
@@ -1171,6 +1360,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             ImGui::End();
             return -1;
         }
+        UpdatePhase up = update_status().phase;
+        if (ImGui::IsKeyPressed(ImGuiKey_L, false) && (up == UpdatePhase::Available || up == UpdatePhase::Failed)) {
+            play_flip();
+            g_ui.showUpdate = true;
+            ImGui::End();
+            return -1;
+        }
         if (ImGui::IsKeyPressed(ImGuiKey_M, false) || (pad & XINPUT_GAMEPAD_START)) {
             play_flip();
             open_mods(games, g_ui.selected);
@@ -1198,6 +1394,20 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     ImGui::PopFont();
     ImGui::PushFont(g_ui.fontSmall);
     text_centered_colored(palette::faint, "N64 Wrestling Recompiled");
+    // A new AKI Launcher (aki-roadmap#117): a quiet notice, top right.
+    {
+        UpdateStatus us = update_status();
+        if (us.phase == UpdatePhase::Available || (us.phase == UpdatePhase::Failed && g_ui.updateRequested)) {
+            std::string label = us.phase == UpdatePhase::Available
+                                    ? "AKI Launcher " + narrow(us.release.tag) + " is available  -  L"
+                                    : "Launcher update failed  -  L";
+            ImVec2 sz = ImGui::CalcTextSize(label.c_str());
+            ImGui::SetCursorPos(ImVec2(vw - sz.x - ImGui::GetFontSize() * 2.0f, vh * 0.03f));
+            ImGui::PushStyleColor(ImGuiCol_Text, us.phase == UpdatePhase::Available ? palette::accent : palette::error);
+            if (ImGui::SmallButton(label.c_str())) g_ui.showUpdate = true;
+            ImGui::PopStyleColor();
+        }
+    }
     ImGui::PopFont();
 
     // ------------------------------------------------------------------ carousel
@@ -1673,6 +1883,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     int testInstall = -1;  // debug: download+install game N, exit 0/4
     int testRomIdx = -1;   // debug: validate+copy a ROM for game N, exit 0/4
     int testRebuild = -1;  // debug: dev-mode rebuild of game N through aki-build, exit 0/4
+    std::wstring updateConfirm;  // self-update: the event the previous launcher waits on (set once running)
+    std::wstring updatedFrom;    // self-update: the version this one replaced
     std::wstring testRomPath;
     for (int i = 1; i < __argc; ++i) {
         std::wstring a = __wargv[i];
@@ -1691,6 +1903,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
         else if (a == L"--dev") set_dev_mode_from_args(true);
         else if (a == L"--test-rebuild" && i + 1 < __argc) testRebuild = _wtoi(__wargv[++i]);
+        else if (a == L"--update-confirm" && i + 1 < __argc) updateConfirm = __wargv[++i];
+        else if (a == L"--updated-from" && i + 1 < __argc) updatedFrom = __wargv[++i];
     }
 
     ImGui_ImplWin32_EnableDpiAwareness();
@@ -1773,6 +1987,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     logf(L"depot root: %s", depotRoot.empty() ? L"(NOT FOUND)" : depotRoot.c_str());
 
     releases_check_start(games);
+    if (!smoke && testInstall < 0 && testRomIdx < 0 && testRebuild < 0 && testLaunch < 0) update_tick();
+    if (!updatedFrom.empty()) logf(L"update: running after an update from %s", updatedFrom.c_str());
 
     // Box art: assets\boxart\<key>_front.png / _back.png under the app root.
     std::filesystem::path artDir = app_root() / L"assets" / L"boxart";
@@ -1792,6 +2008,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     ULONGLONG testCloseTick = 0;
     int exitCodeOut = 0;
     bool done = false;
+    bool exitForUpdate = false;  // the updated launcher took over: don't save over its settings
     while (!done) {
         MSG msg;
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -1856,6 +2073,32 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                 if (!g_ui.showMods) open_mods(games, g_ui.selected);
                 install_into_mods(games, drops);
             }
+        }
+
+        // --- launcher self-update: periodic check; install once the download is verified ---
+        if (!smoke && testInstall < 0 && testRomIdx < 0 && testRebuild < 0 && testLaunch < 0) {
+            update_tick();
+            if (g_ui.updateRequested && update_status().phase == UpdatePhase::Staged) {
+                g_ui.updateRequested = false;
+                if (apply_update_and_restart(hwnd)) {
+                    exitForUpdate = true;
+                    break;
+                }
+            }
+        }
+        // The new launcher is up (a few frames drawn): tell the previous one, which then exits.
+        if (!updateConfirm.empty() && frame == 30) {
+            if (HANDLE ev = OpenEventW(EVENT_MODIFY_STATE, FALSE, updateConfirm.c_str())) {
+                SetEvent(ev);
+                CloseHandle(ev);
+            }
+            logf(L"update: confirmed start (replacing %s)", updatedFrom.c_str());
+            updateConfirm.clear();
+            // The staged copy is done with; .update\previous stays for a manual rollback.
+            wchar_t exeBuf[MAX_PATH * 2]{};
+            GetModuleFileNameW(nullptr, exeBuf, (DWORD)std::size(exeBuf));
+            std::error_code ec;
+            std::filesystem::remove_all(std::filesystem::path(exeBuf).parent_path() / L".update" / L"staged", ec);
         }
 
         // --- dev-mode rebuild (poll the pipe; the panel stays until dismissed) ---
@@ -1983,7 +2226,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // flows so held buttons don't drive focus mid-capture.
         {
             ImGuiIO& nio = ImGui::GetIO();
-            if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods)
+            if ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods || g_ui.showUpdate)
                 nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
             else
                 nio.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
@@ -1992,7 +2235,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && g_ui.insertIndex < 0 &&
+        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && !g_ui.showUpdate && g_ui.insertIndex < 0 &&
             ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0)
             done = true;
 
@@ -2039,7 +2282,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         rebuild_cancel();
     }
 
-    if (!smoke && settings().windowed) {
+    if (!smoke && !exitForUpdate && settings().windowed) {
         remember_windowed_placement();
         settings_save();
     }

@@ -15,6 +15,7 @@ void run_romscan_tests(const std::filesystem::path& tmp);
 void run_mods_tests(const std::filesystem::path& tmp);
 void run_portable_tests(const std::filesystem::path& tmp);
 void run_registry_tests(const std::filesystem::path& tmp);
+void run_selfupdate_tests(const std::filesystem::path& tmp);
 
 int main() {
     wchar_t tmpBuf[MAX_PATH]{};
@@ -28,6 +29,7 @@ int main() {
     run_mods_tests(tmp / L"mods");
     run_portable_tests(tmp / L"portable");
     run_registry_tests(tmp / L"registry");
+    run_selfupdate_tests(tmp / L"selfupdate");
     std::error_code ec;
     std::filesystem::remove_all(tmp, ec);
     printf("%s (%d failed)\n", g_failed ? "FAILED" : "OK", g_failed);
