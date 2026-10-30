@@ -683,41 +683,46 @@ CheckResult check_package(const fs::path& src) {
 
 // --- pack_hash ----------------------------------------------------------------------------------------------------------
 
-// STAND-IN until librecomp's bundled_packs pack_hash is vendored (aki-roadmap#149/#154): FNV-1a 64; a text file
-// (by extension) with CRLF read as LF; a folder hashes its files' relative paths (lower case, '/') and hashes in order.
-static const uint64_t kFnvOffset = 1469598103934665603ull, kFnvPrime = 1099511628211ull;
+// librecomp's recomp::mods::bundled_packs::pack_hash / recomp::packages::hash_path, byte for byte (aki-roadmap#154: the
+// launcher and the game must agree on "edited or not"): FNV-1a 64 over the files sorted by their '/'-separated path
+// (case as it is), each as path bytes, 0x00, contents, 0x00; a single file hashes as one entry named by its file name.
+// Text files (.json, .md, .txt by the extension Python's os.path.splitext sees) count CRLF as LF. Same as AkiMods
+// pack_history.py. Streamed: a file is never held in memory whole.
+static const uint64_t kFnvOffset = 14695981039346656037ull, kFnvPrime = 1099511628211ull;
 
-static bool is_text_name(const std::string& n) {
-    std::string l = lower(n);
-    for (const char* e : {".json", ".txt", ".md", ".ini", ".cfg", ".csv", ".xml", ".toml"})
-        if (ends_with(l, e)) return true;
-    return false;
+static bool is_text_name(const std::string& path) {
+    size_t slash = path.find_last_of('/');
+    std::string name = slash == std::string::npos ? path : path.substr(slash + 1);
+    size_t first = name.find_first_not_of('.');
+    size_t dot = name.find_last_of('.');
+    if (first == std::string::npos || dot == std::string::npos || dot < first) return false;
+    std::string ext = lower(name.substr(dot));
+    return ext == ".json" || ext == ".md" || ext == ".txt";
 }
 
-static bool hash_file(const fs::path& p, uint64_t* h) {
+static void feed(uint64_t* h, unsigned char c) { *h = (*h ^ c) * kFnvPrime; }
+
+static bool hash_file(const fs::path& p, bool text, uint64_t* h) {
     FILE* f = _wfopen(p.c_str(), L"rb");
     if (!f) return false;
-    bool text = is_text_name(u8(p.filename().wstring()));
     std::vector<unsigned char> buf(1 << 20);
     bool pendingCr = false;
     size_t n;
     while ((n = fread(buf.data(), 1, buf.size(), f)) > 0) {
         for (size_t i = 0; i < n; ++i) {
             unsigned char c = buf[i];
-            if (text) {
-                if (pendingCr) {
-                    pendingCr = false;
-                    if (c != '\n') *h = (*h ^ '\r') * kFnvPrime;
-                }
-                if (c == '\r') {
-                    pendingCr = true;
-                    continue;
-                }
+            if (pendingCr) {
+                pendingCr = false;
+                if (c != '\n') feed(h, '\r');
             }
-            *h = (*h ^ c) * kFnvPrime;
+            if (text && c == '\r') {
+                pendingCr = true;
+                continue;
+            }
+            feed(h, c);
         }
     }
-    if (pendingCr) *h = (*h ^ '\r') * kFnvPrime;
+    if (pendingCr) feed(h, '\r');
     bool ok = !ferror(f);
     fclose(f);
     return ok;
@@ -725,22 +730,23 @@ static bool hash_file(const fs::path& p, uint64_t* h) {
 
 std::string pack_hash(const fs::path& p) {
     std::error_code ec;
-    uint64_t h = kFnvOffset;
+    std::vector<std::pair<std::string, fs::path>> files;   // (relative '/' path, file)
     if (fs::is_directory(p, ec)) {
-        std::vector<std::pair<std::string, fs::path>> files;
         for (auto it = fs::recursive_directory_iterator(p, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
-            if (it->is_regular_file(ec)) files.push_back({lower(u8(fs::relative(it->path(), p, ec).generic_wstring())), it->path()});
+            if (it->is_regular_file(ec)) files.push_back({u8(fs::relative(it->path(), p, ec).generic_wstring()), it->path()});
         if (ec) return {};
-        std::sort(files.begin(), files.end());
-        for (auto& [rel, full] : files) {
-            uint64_t fh = kFnvOffset;
-            if (!hash_file(full, &fh)) return {};
-            char line[32];
-            snprintf(line, sizeof line, "%016llx\n", (unsigned long long)fh);
-            for (char c : rel + '\0' + line) h = (h ^ (unsigned char)c) * kFnvPrime;
-        }
-    } else if (!hash_file(p, &h)) {
+    } else if (fs::is_regular_file(p, ec)) {
+        files.push_back({u8(p.filename().wstring()), p});
+    } else {
         return {};
+    }
+    std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    uint64_t h = kFnvOffset;
+    for (auto& [rel, full] : files) {
+        for (unsigned char c : rel) feed(&h, c);
+        feed(&h, 0);
+        if (!hash_file(full, is_text_name(rel), &h)) return {};
+        feed(&h, 0);
     }
     char out[17];
     snprintf(out, sizeof out, "%016llx", (unsigned long long)h);
@@ -936,11 +942,14 @@ static std::string now_utc() {
     return b;
 }
 
-// <path>.edited-YYYYMMDD, or -2, -3 ... when that exists too.
-static fs::path edited_name(const fs::path& p, const std::string& day) {
+// Where a player's copy is kept when a package takes its place or goes: <data>/kept/<its path>.edited-YYYYMMDD (-2, -3
+// ... when that exists), like the game (librecomp KeptFolder): no mod, texture or conversion scan loads it twice.
+static fs::path edited_name(const fs::path& dataDir, const fs::path& p, const std::string& day) {
     std::error_code ec;
+    fs::path rel = fs::relative(p, dataDir, ec);
+    if (ec || rel.empty() || *rel.begin() == L"..") rel = p.filename();
     for (int i = 1;; ++i) {
-        fs::path c = p;
+        fs::path c = dataDir / L"kept" / rel;
         c += L".edited-" + w(day) + (i > 1 ? L"-" + std::to_wstring(i) : L"");
         if (!fs::exists(c, ec)) return c;
     }
@@ -953,15 +962,15 @@ static bool move_path(const fs::path& from, const fs::path& to) {
 }
 
 // A recorded file going away: unedited (its hash is the recorded one) to the Recycle Bin, edited kept as .edited-<date>.
-static bool retire(const fs::path& p, const std::string& recordedHash, const std::string& day, PackageInstall* r) {
+static bool retire(const fs::path& dataDir, const fs::path& p, const std::string& recordedHash, const std::string& day, PackageInstall* r) {
     std::error_code ec;
     if (!fs::exists(p, ec)) return true;
     if (!recordedHash.empty() && pack_hash(p) == recordedHash) return recycle_path(p, nullptr);
-    fs::path kept = edited_name(p, day);
+    fs::path kept = edited_name(dataDir, p, day);
     if (!move_path(p, kept)) return false;
     if (r) {
         r->keptEdited.push_back(kept);
-        r->notes.push_back(L"you had changed " + p.filename().wstring() + L": kept as " + kept.filename().wstring());
+        r->notes.push_back(L"you had changed " + p.filename().wstring() + L": kept as " + fs::relative(kept, dataDir).wstring());
     }
     return true;
 }
@@ -1184,10 +1193,10 @@ PackageInstall install_package(const fs::path& src, const InstallTarget& t, cons
     // Done: what was put aside goes (never deleted: an edited one, or one the Recycle Bin won't take, is kept).
     for (auto& a : aside) {
         if (a.unedited && recycle_path(a.backup, nullptr)) continue;
-        fs::path kept2 = edited_name(a.original, day);
+        fs::path kept2 = edited_name(t.dataDir, a.original, day);
         if (move_path(a.backup, kept2)) {
             r.keptEdited.push_back(kept2);
-            r.notes.push_back(L"you had changed " + a.original.filename().wstring() + L": kept as " + kept2.filename().wstring());
+            r.notes.push_back(L"you had changed " + a.original.filename().wstring() + L": kept as " + fs::relative(kept2, t.dataDir).wstring());
         } else {
             guard.p.clear();  // the staging folder now holds it: left in place
             r.notes.push_back(L"your copy of " + a.original.filename().wstring() + L" is in " + a.backup.wstring());
@@ -1325,9 +1334,9 @@ PackageInstall install_patch_mod(const fs::path& nrm, const InstallTarget& t, co
         if (recycle_path(held, nullptr)) {
             res.notes.push_back(inMods.filename().wstring() + L" moved out of mods\\");
         } else {
-            fs::path kept = edited_name(inMods, o.today.empty() ? today_yyyymmdd() : o.today);
+            fs::path kept = edited_name(t.dataDir, inMods, o.today.empty() ? today_yyyymmdd() : o.today);
             move_path(held, kept);
-            res.notes.push_back(inMods.filename().wstring() + L" moved out of mods\\ as " + kept.filename().wstring());
+            res.notes.push_back(inMods.filename().wstring() + L" moved out of mods\\ as " + fs::relative(kept, t.dataDir).wstring());
         }
     }
     return res;
@@ -1354,7 +1363,7 @@ bool remove_package(const std::string& id, const fs::path& dataDir, bool gameRun
     std::string day = today_yyyymmdd();
     for (auto& f : e->files) {
         fs::path p = dataDir / fs::u8path(strip_slash(f.path));
-        if (fs::exists(p, ec) && !retire(p, f.hash, day, &kept)) {
+        if (fs::exists(p, ec) && !retire(dataDir, p, f.hash, day, &kept)) {
             if (msg) *msg = L"couldn't move " + p.wstring() + L" (is it open?)";
             return false;
         }
