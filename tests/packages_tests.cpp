@@ -166,13 +166,21 @@ static void test_registry(const fs::path& tmp) {
 }
 
 static void test_hash(const fs::path& tmp) {
-    // CRLF-blind for text, not for binaries; a folder hashes its files and names.
-    put(tmp / L"h" / L"a.txt", "one\r\ntwo\r\n");
-    put(tmp / L"h" / L"b.txt", "one\ntwo\n");
-    CHECK(pkg::pack_hash(tmp / L"h" / L"a.txt") == pkg::pack_hash(tmp / L"h" / L"b.txt"));
-    put(tmp / L"h" / L"a.bin", "one\r\n");
-    put(tmp / L"h" / L"b.bin", "one\n");
-    CHECK(pkg::pack_hash(tmp / L"h" / L"a.bin") != pkg::pack_hash(tmp / L"h" / L"b.bin"));
+    // librecomp's pack_hash, byte for byte (golden values from AkiMods pack_history.py, the game's other twin).
+    put(tmp / L"g" / L"pack.akimodel" / L"pack.json", "{\"id\": \"x\"}\r\n");
+    put(tmp / L"g" / L"pack.akimodel" / L"sub" / L"model.bin", std::string("\x00\x01\r\n", 4));
+    CHECK(pkg::pack_hash(tmp / L"g" / L"pack.akimodel") == "541a1356f7cb5eb8");
+    put(tmp / L"g" / L"a.nrm", "zip bytes");
+    CHECK(pkg::pack_hash(tmp / L"g" / L"a.nrm") == "6730593789596cdf");   // a file: one entry named by its file name
+    put(tmp / L"g" / L"notes.txt", "line1\r\nline2\r\r\nend\r");
+    CHECK(pkg::pack_hash(tmp / L"g" / L"notes.txt") == "c2ca3c7ea557d4bc");
+    // CRLF-blind for text, not for binaries (same names in two folders).
+    put(tmp / L"h" / L"a" / L"x.txt", "one\r\ntwo\r\n");
+    put(tmp / L"h" / L"b" / L"x.txt", "one\ntwo\n");
+    CHECK(pkg::pack_hash(tmp / L"h" / L"a" / L"x.txt") == pkg::pack_hash(tmp / L"h" / L"b" / L"x.txt"));
+    put(tmp / L"h" / L"a" / L"x.bin", "one\r\n");
+    put(tmp / L"h" / L"b" / L"x.bin", "one\n");
+    CHECK(pkg::pack_hash(tmp / L"h" / L"a" / L"x.bin") != pkg::pack_hash(tmp / L"h" / L"b" / L"x.bin"));
     put(tmp / L"h1" / L"x" / L"f.txt", "1");
     put(tmp / L"h2" / L"x" / L"f.txt", "1");
     CHECK(pkg::pack_hash(tmp / L"h1") == pkg::pack_hash(tmp / L"h2") && pkg::pack_hash(tmp / L"h1").size() == 16);
@@ -180,6 +188,7 @@ static void test_hash(const fs::path& tmp) {
     CHECK(pkg::pack_hash(tmp / L"h1") != pkg::pack_hash(tmp / L"h2"));
     CHECK(pkg::pack_hash(tmp / L"h" / L"missing").empty());
 }
+
 
 static void test_install_and_upgrade(const fs::path& tmp) {
     fs::path data = tmp / L"data";
@@ -213,7 +222,8 @@ static void test_install_and_upgrade(const fs::path& tmp) {
     put(data / L"mods" / L"demo.nrm", "my own edit");
     r = pkg::install_package(addon(tmp / L"p3", "demo-addon", "1.2.0", "B3"), t, o);
     CHECK(r.outcome == Outcome::Upgraded && r.keptEdited.size() == 1);
-    CHECK(get(data / L"mods" / L"demo.nrm.edited-20261029") == "my own edit");
+    CHECK(get(data / L"kept" / L"mods" / L"demo.nrm.edited-20261029") == "my own edit");   // where no scan loads it twice
+    CHECK(!fs::exists(data / L"mods" / L"demo.nrm.edited-20261029"));
     CHECK(has(r.message, L"1 edited file kept as .edited-20261029"));
     // An older version: needs confirming.
     r = pkg::install_package(tmp / L"p2", t, o);
@@ -396,9 +406,9 @@ static void test_review_fixes(const fs::path& tmp) {
     put(data / L"mods" / L"demo.nrm", "player edit");
     std::wstring msg;
     CHECK(pkg::remove_package("edit-me", data, false, &msg));
-    CHECK(!fs::exists(data / L"mods" / L"demo.nrm") && has(msg, L"kept as demo.nrm.edited-"));
+    CHECK(!fs::exists(data / L"mods" / L"demo.nrm") && has(msg, L"demo.nrm.edited-"));
     bool keptEdit = false;
-    for (auto& e : fs::directory_iterator(data / L"mods"))
+    for (auto& e : fs::directory_iterator(data / L"kept" / L"mods"))
         keptEdit = keptEdit || (e.path().filename().wstring().rfind(L"demo.nrm.edited-", 0) == 0 && get(e.path()) == "player edit");
     CHECK(keptEdit);
 
