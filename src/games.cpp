@@ -80,8 +80,8 @@ std::vector<GameEntry> build_game_list(const std::filesystem::path& depotRoot) {
                       L"Wm2kRecomp", L"build-msvc\\Wm2kRecompiled.exe", L"wm2k.z64",
                       L"wm2k", true, false });
     games.back().githubRepo = L"jessetbh/WWFWrestleMania2000Recomp";
-    games.back().romSha1 = L"D7D1FAD473FEF9B61FE5F8273C975EE7C603A51B";
-    games.back().romNote = L"North American (NTSC-U) release";
+    games.back().romSha1 = L"442D417A52ED672CA1A47E7261A5414DEBB1E27A"; // retail USA (aki-roadmap#124)
+    games.back().romNote = L"North American (NTSC-U) retail release (the \"V1.2\" file is a fan hack and won't match)";
 
     games.push_back({ L"Virtual Pro Wrestling 2", L"January 28, 2000", L"Japan",
                       L"Vpw2Recomp", L"build-msvc\\Vpw2Recompiled.exe", L"vpw2.z64",
