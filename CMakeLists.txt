@@ -46,6 +46,7 @@ add_executable(AkiLauncher WIN32
     src/audio.cpp
     src/installer.cpp
     src/conversions.cpp
+    src/rom_rules.cpp
 )
 if(MSVC)
     # App icon + version resource (title bar / taskbar / Explorer)
@@ -53,3 +54,14 @@ if(MSVC)
 endif()
 target_link_libraries(AkiLauncher PRIVATE imgui_lib miniz_lib d3d11 dxgi xinput9_1_0
                       windowscodecs ole32 winmm winhttp bcrypt)
+
+# Unit tests for the ROM choice (no game, no ROM): built and run before the launcher links, a failure fails the build.
+add_executable(rom_rules_tests tests/rom_rules_tests.cpp src/rom_rules.cpp)
+target_include_directories(rom_rules_tests PRIVATE src)
+set(ROM_RULES_STAMP ${CMAKE_CURRENT_BINARY_DIR}/rom_rules_tests.passed)
+add_custom_command(OUTPUT ${ROM_RULES_STAMP}
+    COMMAND rom_rules_tests
+    COMMAND ${CMAKE_COMMAND} -E touch ${ROM_RULES_STAMP}
+    DEPENDS rom_rules_tests)
+add_custom_target(rom_rules_tests_run DEPENDS ${ROM_RULES_STAMP})
+add_dependencies(AkiLauncher rom_rules_tests_run)

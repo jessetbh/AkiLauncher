@@ -69,14 +69,18 @@ empty `portable.txt` next to `AkiLauncher.exe` (like the game ports) to keep
 
 **What about ROMs?** You provide your own dumps (`.z64`, big-endian). The
 launcher hash-checks your pick against the known-good dump for each game and
-keeps a copy with the installed port. Nothing is downloaded from anywhere
+keeps a copy with the installed port. It also finds a ROM you imported in the
+game itself. If the only ROM it finds is the wrong dump, the game's card says so
+and asks you to select the right one. Nothing is downloaded from anywhere
 except the ports' own GitHub releases, which contain no game data.
 
 **Can I change the box art?** Yes — swap the images in `assets\boxart\`
 (see the README there for file naming).
 
 **Can I point it at my own builds?** Yes — per-game EXE/ROM path overrides
-are in Settings.
+are in Settings. A ROM path you set there is always used, even if it isn't the
+known-good dump (the card warns you); an EXE path also moves the ROM lookup to
+that build's checkout.
 
 ## Building
 
