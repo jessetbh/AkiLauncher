@@ -1,6 +1,8 @@
 #include "launch.h"
 
+#include "conversions.h"
 #include "games.h"
+#include "rom_rules.h"
 #include "settings.h"
 
 #include <xinput.h>
@@ -152,6 +154,14 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut,
                          const std::vector<std::pair<std::wstring, std::wstring>>* extraEnv) {
     if (active()) return false;
 
+    // The port would just exit at once (the --play and --test-launch drivers get here without the card's check).
+    const std::wstring romError = rom_problem(g);
+    if (!romError.empty()) {
+        if (errorOut) *errorOut = romError;
+        logf(L"launch refused for %s: %s", g.title.c_str(), romError.c_str());
+        return false;
+    }
+
     std::wstring cmdline = L"\"" + g.exePath.wstring() + L"\"";
     std::wstring cwd = g.repoPath.wstring();
 
@@ -190,14 +200,17 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut,
     exitCode = 0;
     wasTerminated = false;
     statusNote.clear();
+    romRefusedNote = g.title + L" refused its ROM: " + g.romPath.wstring() + L"\nIt needs the " + g.romNote +
+                     L" (SHA1 " + g.romSha1 + L"). Select ROM, or fix the ROM path in Settings.";
     logTail.clear();
-    // The ports route stdout/stderr (incl. crash backtraces) to
-    // %LOCALAPPDATA%\<exe stem>\<exe stem>.log when launched without a console.
+    // The ports route stdout/stderr (incl. crash backtraces) to <exe stem>.log in their
+    // data folder when launched without a console: the checkout with portable.txt, else
+    // %LOCALAPPDATA%\<exe stem>.
     {
-        wchar_t lad[MAX_PATH]{};
-        GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
-        std::wstring stem = g.exePath.stem().wstring();
-        portLogPath = std::filesystem::path(lad) / stem / (stem + L".log");
+        portLogPath = game_data_dir(g) / (g.exePath.stem().wstring() + L".log");
+        std::error_code ec;
+        portLogBefore = std::filesystem::last_write_time(portLogPath, ec);
+        if (ec) portLogBefore = {};
     }
     launchTick = GetTickCount64();
     runningTick = 0;
@@ -382,8 +395,12 @@ void GameSession::finish(HWND launcherWnd) {
                      [](DWORD c) { wchar_t b[16]; swprintf_s(b, L"%08X", c); return std::wstring(b); }(exitCode) +
                      L")";
     if (wasTerminated || exitCode != 0) {
-        logTail = read_log_tail(portLogPath, 10);
+        // A log this run didn't touch is an older run's: don't show it, or blame the ROM for it.
+        std::error_code logEc;
+        const auto logTime = std::filesystem::last_write_time(portLogPath, logEc);
+        if (!logEc && logTime != portLogBefore) logTail = read_log_tail(portLogPath, 10);
         logf(L"captured %zu tail lines from %s", logTail.size(), portLogPath.c_str());
+        if (!wasTerminated && rom_rules::log_says_rom_refused(logTail)) statusNote = romRefusedNote;
     }
     // Play stats: time from window-found to exit (0 if it never got that far).
     if (!artKey.empty()) {

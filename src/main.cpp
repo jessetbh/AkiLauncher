@@ -231,6 +231,7 @@ static std::wstring widen(const std::string& s) {
 static void apply_overrides(std::vector<GameEntry>& games) {
     std::error_code ec;
     for (auto& g : games) {
+        std::wstring romOverride;
         auto it = settings().overrides.find(g.artKey);
         if (it != settings().overrides.end()) {
             const GameOverride& o = it->second;
@@ -249,15 +250,12 @@ static void apply_overrides(std::vector<GameEntry>& games) {
                 else logf(L"override exe for %s ignored (missing): %s",
                           g.artKey.c_str(), o.exePath.c_str());
             }
-            if (!o.romPath.empty()) {
-                if (std::filesystem::is_regular_file(o.romPath, ec)) g.romPath = o.romPath;
-                else logf(L"override rom for %s ignored (missing): %s",
-                          g.artKey.c_str(), o.romPath.c_str());
-            }
+            romOverride = o.romPath;
             if (o.forceBorderless != -1) g.forceBorderless = o.forceBorderless != 0;
         }
         g.exeFound = std::filesystem::is_regular_file(g.exePath, ec);
-        g.romFound = std::filesystem::is_regular_file(g.romPath, ec);
+        // After the exe override: the ROM belongs with the checkout that runs (aki-roadmap#216).
+        resolve_rom(g, romOverride);
     }
 }
 
@@ -410,9 +408,10 @@ static void draw_box_face(ImDrawList* dl, const Texture& tex, ImVec2 p0, ImVec2 
                 IM_COL32(150, 152, 160, dimmed ? 100 : 170), lbl);
 }
 
-// Validate (SHA1 when known) and copy a user-picked ROM to the game's expected
-// romPath; falls back to a settings override pointing at the original if the
-// copy fails. errOut untouched on success.
+// Validate (SHA1 when known) and copy a user-picked ROM to the checkout that runs
+// (romInstallPath, never over the file a rom= override names, and never over another
+// checkout's ROM); the override is dropped since the picked ROM replaces it. Falls back
+// to an override pointing at the original if the copy fails. errOut untouched on success.
 static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
                              std::wstring* errOut) {
     if (!g.romSha1.empty()) {
@@ -433,12 +432,16 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
         }
     }
     std::error_code ec;
-    std::filesystem::create_directories(g.romPath.parent_path(), ec);
+    std::filesystem::create_directories(g.romInstallPath.parent_path(), ec);
     ec.clear();
-    std::filesystem::copy_file(src, g.romPath, std::filesystem::copy_options::overwrite_existing,
+    std::filesystem::copy_file(src, g.romInstallPath, std::filesystem::copy_options::overwrite_existing,
                                ec);
+    auto ov = settings().overrides.find(g.artKey);
     if (ec) {
         settings().overrides[g.artKey].romPath = src.wstring();
+        settings_save();
+    } else if (ov != settings().overrides.end() && !ov->second.romPath.empty()) {
+        ov->second.romPath.clear();
         settings_save();
     }
     logf(L"ROM set for %s from %s%s", g.title.c_str(), src.c_str(),
@@ -534,7 +537,7 @@ static void close_settings(std::vector<GameEntry>& games) {
     for (size_t i = 0; i < games.size(); ++i) {
         GameEntry& g = games[i];
         std::wstring defExe = (g.repoPath / g.exeRel).wstring();
-        std::wstring defRom = (g.repoPath / g.romFile).wstring();
+        std::wstring defRom = g.romAutoPath.wstring();
         std::wstring edExe = widen(g_ui.exeEdit[i]);
         std::wstring edRom = widen(g_ui.romEdit[i]);
         GameOverride& o = settings().overrides[g.artKey];
@@ -1131,6 +1134,10 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         } else if (soon) { status = "Recompilation not started yet"; statusCol = palette::faint; }
         else if (devCheckout) { status = "Not built - run the port build in " + narrow(s.repoDir); statusCol = palette::warn; }
         else { status = "Not available for download yet"; statusCol = palette::faint; }
+    } else if (s.romWrong) {
+        status = "Wrong ROM - " + narrow(s.romPath.filename().wstring()) + " isn't the dump this port needs. Select your own";
+        statusCol = palette::warn;
+        action = CardAction::PickRom;
     } else {
         status = "Installed - Select your own ROM dump: " + narrow(s.romNote) + " (.z64)";
         statusCol = palette::warn;
@@ -1143,7 +1150,19 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     // Exact dump fingerprint, so users can verify their ROM before picking it
     if (action == CardAction::PickRom && !s.romSha1.empty()) {
         ImGui::PushFont(g_ui.fontSmall);
-        text_centered_colored(palette::faint, "SHA1: " + narrow(s.romSha1));
+        if (s.romWrong) {
+            text_centered_colored(palette::faint, "Needed: " + narrow(s.romNote));
+            text_centered_colored(palette::faint, "Needed SHA1: " + narrow(s.romSha1));
+            text_centered_colored(palette::faint, "This file's SHA1: " +
+                                  (s.romHaveSha1.empty() ? std::string("(couldn't read it)") : narrow(s.romHaveSha1)));
+        } else {
+            text_centered_colored(palette::faint, "SHA1: " + narrow(s.romSha1));
+        }
+        ImGui::PopFont();
+    }
+    if (!s.romNotice.empty()) {
+        ImGui::PushFont(g_ui.fontSmall);
+        text_centered_colored(palette::warn, narrow(s.romNotice));
         ImGui::PopFont();
     }
 
@@ -1360,6 +1379,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     std::wstring addConversionPath;  // --add-conversion <zip|folder>: install it, exit 0/6
     std::wstring playConversion;     // --conversion <id> (with --play N): launch that conversion
     int listConversions = -1;        // --list-conversions N: log game N's conversions, exit 0
+    bool listRoms = false;           // --list-roms: log the ROM each game would get, exit 0 (opens no window)
     int testInstall = -1;  // debug: download+install game N, exit 0/4
     int testRomIdx = -1;   // debug: validate+copy a ROM for game N, exit 0/4
     std::wstring testRomPath;
@@ -1380,6 +1400,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         else if (a == L"--add-conversion" && i + 1 < __argc) addConversionPath = __wargv[++i];
         else if (a == L"--conversion" && i + 1 < __argc) playConversion = __wargv[++i];
         else if (a == L"--list-conversions" && i + 1 < __argc) listConversions = _wtoi(__wargv[++i]);
+        else if (a == L"--list-roms") listRoms = true;
         else if (a == L"--play" && i + 1 < __argc) playNow = _wtoi(__wargv[++i]);
     }
 
@@ -1392,6 +1413,17 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
     settings_load();  // needed before window creation for the windowed pref
     logf(L"settings file: %s", settings_path().c_str());
+
+    if (listRoms) {
+        std::vector<GameEntry> romGames = build_game_list(detect_depot_root());
+        apply_overrides(romGames);
+        for (const GameEntry& g : romGames) {
+            const std::wstring problem = rom_problem(g);
+            if (!problem.empty()) logf(L"   %s", problem.c_str());
+            if (!g.romNotice.empty()) logf(L"   %s", g.romNotice.c_str());
+        }
+        return 0;
+    }
 
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int screenH = GetSystemMetrics(SM_CYSCREEN);

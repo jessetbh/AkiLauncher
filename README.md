@@ -20,7 +20,7 @@ game requires the user's own legally dumped ROM.**
 | WCW vs. nWo World Tour | [WCWvsNWOWorldTourRecomp](https://github.com/jessetbh/WCWvsNWOWorldTourRecomp) | North American (NTSC-U) — `5AD2D8359058C8BB71F08E3D3433B7A50D3BB645` |
 | Virtual Pro Wrestling 64 | [VPW64Recomp](https://github.com/jessetbh/VPW64Recomp) | Japanese (Japan-only; English translations run as [patch mods](https://github.com/jessetbh/VPW64Recomp#can-i-play-it-in-english)) — `F9E9FA2ED819C3A39DB5CB6AFECA186F021DB5ED` |
 | WCW/nWo Revenge | [WCWnWoRevengeRecomp](https://github.com/jessetbh/WCWnWoRevengeRecomp) | North American (NTSC-U) — `E1711A2511394B9357B5F1AC8CA5CC17BD674836` |
-| WWF WrestleMania 2000 | [WWFWrestleMania2000Recomp](https://github.com/jessetbh/WWFWrestleMania2000Recomp) | North American (NTSC-U) — `D7D1FAD473FEF9B61FE5F8273C975EE7C603A51B` |
+| WWF WrestleMania 2000 | [WWFWrestleMania2000Recomp](https://github.com/jessetbh/WWFWrestleMania2000Recomp) | North American (NTSC-U) retail (the "V1.2" fan hack won't match) — `442D417A52ED672CA1A47E7261A5414DEBB1E27A` |
 | Virtual Pro Wrestling 2 | [VPW2Recomp](https://github.com/jessetbh/VPW2Recomp) | Japanese (Japan-only; English translations run as [patch mods](https://github.com/jessetbh/VPW2Recomp#the-game-is-in-japanese--can-i-play-it-in-english)) — `82DD25A044689EAB57AB362FE10C0DA6388C217A` |
 | WWF No Mercy | [WWFNoMercyRecomp](https://github.com/jessetbh/WWFNoMercyRecomp) | North American (NTSC-U) **Rev 1** (Rev 0 won't match) — `91CEE3D096F4A76644D8B35B9AEAD6448909ABD1` |
 
@@ -69,14 +69,18 @@ empty `portable.txt` next to `AkiLauncher.exe` (like the game ports) to keep
 
 **What about ROMs?** You provide your own dumps (`.z64`, big-endian). The
 launcher hash-checks your pick against the known-good dump for each game and
-keeps a copy with the installed port. Nothing is downloaded from anywhere
+keeps a copy with the installed port. It also finds a ROM you imported in the
+game itself. If the only ROM it finds is the wrong dump, the game's card says so
+and asks you to select the right one. Nothing is downloaded from anywhere
 except the ports' own GitHub releases, which contain no game data.
 
 **Can I change the box art?** Yes — swap the images in `assets\boxart\`
 (see the README there for file naming).
 
 **Can I point it at my own builds?** Yes — per-game EXE/ROM path overrides
-are in Settings.
+are in Settings. A ROM path you set there is always used, even if it isn't the
+known-good dump (the card warns you); an EXE path also moves the ROM lookup to
+that build's checkout.
 
 ## Building
 
