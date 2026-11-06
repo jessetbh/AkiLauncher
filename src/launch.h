@@ -29,6 +29,7 @@ struct GameSession {
     std::wstring artKey;             // stats key of the launched game
     DWORD exitCode = 0;
     bool wasTerminated = false;      // TerminateProcess fallback fired
+    std::filesystem::file_time_type portLogBefore{};  // the log's time at launch, to spot a run that wrote none
     std::wstring romRefusedNote;  // what to say if the port refuses the ROM it was given
     std::wstring statusNote;         // shown in the launcher UI after finish
     std::filesystem::path portLogPath;  // %LOCALAPPDATA%\<exe stem>\<exe stem>.log
