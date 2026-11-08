@@ -9,6 +9,7 @@
 #include "games.h"
 #include "installer.h"
 #include "launch.h"
+#include "packages.h"
 #include "miniz.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -277,7 +278,7 @@ bool is_conversion_source(const fs::path& src) {
     return format == "aki-conversion" || (format == "aki-package" && str(j, "kind") == "textures");
 }
 
-AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& src) {
+AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& src, int onlyGame) {
     AddResult r;
     Source s;
     if (!s.init(src)) {
@@ -301,6 +302,11 @@ AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& sr
     }
     if (r.gameIndex < 0) {
         r.message = L"This package is for \"" + wide(gameKey) + L"\", which AKI Launcher doesn't know.";
+        return r;
+    }
+    if (onlyGame >= 0 && onlyGame < (int)games.size() && r.gameIndex != onlyGame) {
+        r.message = src.filename().wstring() + L" is for " + games[r.gameIndex].title + L": add it on that game's Mods page.";
+        r.gameIndex = -1;
         return r;
     }
     const GameEntry& g = games[r.gameIndex];
@@ -355,6 +361,13 @@ AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& sr
             if (!f.empty() && !safe_rel(f)) { r.message = L"Unsafe path in aki.json: " + wide(f); return r; }
         }
     }
+    // The RT files are passed to the game as paths (conversion_env): they must stay inside the conversion too.
+    if (comps.contains("rt") && comps["rt"].is_object()) {
+        for (const char* key : { "lights", "materials" }) {
+            std::string f = str(comps["rt"], key);
+            if (!f.empty() && !safe_rel(f)) { r.message = L"Unsafe path in aki.json: " + wide(f); return r; }
+        }
+    }
     if (comps.contains("saves") && comps["saves"].is_array()) {
         for (const auto& sv : comps["saves"]) {
             std::string f = sv.is_object() ? str(sv, "file") : std::string();
@@ -377,6 +390,12 @@ AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& sr
         }
     }
 
+    // A conversion installed from an aki-package.json package is the shared installer's (packages.json records its
+    // files): replacing it here would leave that record describing files that aren't there.
+    if (pkg::load_registry(data / "packages.json").find(id) != nullptr) {
+        r.message = info.name + L" is already installed as a package: remove it on the Mods page first, or install the new version's package.";
+        return r;
+    }
     const fs::path dst = data / "conversions" / fs::u8path(id);
     const fs::path tmp = data / "conversions" / fs::u8path(".tmp-" + id);
     fs::remove_all(long_path(tmp), ec);

@@ -1098,6 +1098,7 @@ static void install_into_mods(const std::vector<GameEntry>& games, const std::ve
     const GameEntry& g = games[g_ui.modsGame];
     std::wstring all;
     bool allOk = true;
+    bool anyConversion = false;  // an aki.json-only conversion: picked with Play as..., not in the game's Mods menu
     for (const auto& src : srcs) {
         // aki-roadmap#154: a package (aki-package.json) or a patch-mod ROM hack goes through the shared installer;
         // everything else (a plain .nrm, .rtz, zip of them, model-pack folder) installs as before.
@@ -1105,6 +1106,7 @@ static void install_into_mods(const std::vector<GameEntry>& games, const std::ve
         bool hack = _wcsicmp(ext.c_str(), L".nrm") == 0 && pkg::is_patch_mod(src);
         bool ok;
         std::wstring msg;
+        if (!hack && !is_package_source(src) && is_conversion_source(src)) anyConversion = true;
         if (hack || is_package_source(src)) {
             pkg::PackageInstall r = install_one_package(g, src, hack);
             ok = r.ok();
@@ -1114,7 +1116,7 @@ static void install_into_mods(const std::vector<GameEntry>& games, const std::ve
             // long-path extraction, into the game the aki.json names.
             AddResult r;
             if (g_session.active()) r.message = L"Close the game first, then add " + src.filename().wstring() + L".";
-            else r = add_conversion(games, src);
+            else r = add_conversion(games, src, g_ui.modsGame);
             ok = r.ok;
             msg = r.message;
             for (wchar_t& ch : msg) if (ch == L'\n') ch = L' ';
@@ -1128,7 +1130,8 @@ static void install_into_mods(const std::vector<GameEntry>& games, const std::ve
         all += msg;
     }
     refresh_mods(games);
-    mods_note(all + (allOk ? L". Start (or restart) the game to use it; turn mods on and off in its Mods menu." : L""),
+    mods_note(all + (!allOk ? L"" : anyConversion ? L" Pick it with Play as... on the game's card."
+                                                  : L". Start (or restart) the game to use it; turn mods on and off in its Mods menu."),
               allOk);
     if (allOk) play_flip();
 }
