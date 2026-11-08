@@ -45,10 +45,10 @@ struct AddResult {
 // Installs a conversion or texture package from a .zip or a folder into the game its aki.json names. Checks the
 // manifest, the paths in it, and the player's ROM against base_rom.sha1 before writing anything; seeds saves\<id>\
 // only when it's empty; an update replaces the conversion's files and keeps its saves.
-AddResult add_conversion(std::vector<GameEntry>& games, const std::filesystem::path& src);
-
-// Removes conversions\<id>\ (the saves in saves\<id>\ stay).
-bool remove_conversion(const GameEntry& g, const std::wstring& id, std::wstring* err);
+AddResult add_conversion(const std::vector<GameEntry>& games, const std::filesystem::path& src);
+// A zip or folder in this format (aki.json at its root, no aki-package.json): the Mods page's installer hands it to
+// add_conversion, since the shared package installer (packages.h) reads only aki-package.json packages.
+bool is_conversion_source(const std::filesystem::path& src);
 
 // Env vars for running this conversion: AKI_CONVERSION and the RT file overrides.
 std::vector<std::pair<std::wstring, std::wstring>> conversion_env(const ConversionInfo& c);

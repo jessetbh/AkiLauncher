@@ -267,7 +267,17 @@ std::vector<ConversionInfo> list_conversions(const GameEntry& g) {
     return out;
 }
 
-AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
+bool is_conversion_source(const fs::path& src) {
+    Source s;
+    std::string text, unused;
+    if (!s.init(src) || s.read("aki-package.json", unused) || !s.read("aki.json", text)) return false;
+    json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) return false;
+    const std::string format = str(j, "format");
+    return format == "aki-conversion" || (format == "aki-package" && str(j, "kind") == "textures");
+}
+
+AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& src) {
     AddResult r;
     Source s;
     if (!s.init(src)) {
@@ -293,7 +303,7 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
         r.message = L"This package is for \"" + wide(gameKey) + L"\", which AKI Launcher doesn't know.";
         return r;
     }
-    GameEntry& g = games[r.gameIndex];
+    const GameEntry& g = games[r.gameIndex];
     const fs::path data = game_data_dir(g);
     std::error_code ec;
 
@@ -408,15 +418,6 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
     for (const auto& n : installed.notes) r.message += L"\n" + n;
     logf(L"conversions: %s %s -> %s (seeded %d, kept %d)", update ? L"updated" : L"added", r.id.c_str(), dst.c_str(), seeded, kept);
     return r;
-}
-
-bool remove_conversion(const GameEntry& g, const std::wstring& id, std::wstring* err) {
-    std::error_code ec;
-    if (!valid_id(u8(fs::path(id)))) { if (err) *err = L"invalid id"; return false; }
-    fs::remove_all(long_path(game_data_dir(g) / "conversions" / id), ec);
-    if (ec && err) *err = wide(ec.message());
-    logf(L"conversions: removed %s", id.c_str());
-    return !ec;
 }
 
 std::vector<std::pair<std::wstring, std::wstring>> conversion_env(const ConversionInfo& c) {
