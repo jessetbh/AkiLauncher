@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "gameipc.h"
+
 struct GameEntry;
 
 enum class SessionState { Idle, WaitingForWindow, Running, Closing };
@@ -34,6 +36,11 @@ struct GameSession {
     std::wstring statusNote;         // shown in the launcher UI after finish
     std::filesystem::path portLogPath;  // %LOCALAPPDATA%\<exe stem>\<exe stem>.log
     std::vector<std::string> logTail;   // tail of the port's log after a bad exit
+    GameLink link;                      // the game's end of the dev IPC (launch_set_ipc), when it connects
+    // aki-roadmap#154: set before launch() to start the game as one of its conversions (AKI_CONVERSION=<id>, for this
+    // start only; "" = the original game). conversionName is for the playing banner.
+    std::wstring conversion;
+    std::wstring conversionName;
 
     // extraEnv: variables set for this launch only (a conversion's AKI_CONVERSION and RT file overrides).
     bool launch(const GameEntry& g, std::wstring* errorOut,
@@ -44,7 +51,18 @@ struct GameSession {
 
 private:
     void finish(HWND launcherWnd);
+    void poll_link();
 };
+
+// Screenshot mode: from then on nothing starts. GameSession::launch, install_start, rebuild_start, the launcher's
+// update check and its update download all refuse, before any process, request or file.
+void launch_set_blocked(bool blocked);
+bool launch_blocked();
+// Dev: each launch offers the game a GameLink (gameipc.h), its name and token in AKI_LAUNCHER_PIPE / _TOKEN.
+void launch_set_ipc(bool on);
+bool launch_ipc();
+// The log file's name next to the exe (default aki-launcher.log); only before the first logf.
+void log_set_name(const wchar_t* name);
 
 void bring_to_foreground(HWND wnd);
 

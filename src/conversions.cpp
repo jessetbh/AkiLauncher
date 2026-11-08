@@ -237,14 +237,6 @@ namespace {
     }
 }
 
-fs::path game_data_dir(const GameEntry& g) {
-    std::error_code ec;
-    if (fs::is_regular_file(g.repoPath / "portable.txt", ec)) return g.repoPath;
-    wchar_t lad[MAX_PATH]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
-    return fs::path(lad) / g.exePath.stem();
-}
-
 // The manifest's game key (AkiTools/AkiMods keys); only World Tour's differs from the launcher's art key.
 std::wstring game_key(const GameEntry& g) {
     if (g.artKey == L"worldtour") return L"wt";
