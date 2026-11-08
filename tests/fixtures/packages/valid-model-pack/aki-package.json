@@ -1,0 +1,21 @@
+{
+  "format": 1,
+  "kind": "model-pack",
+  "id": "fixture-robot",
+  "version": "1.0.0",
+  "game_id": "wwfnomercy",
+  "display_name": "Fixture model-pack",
+  "authors": [
+    "Fixture"
+  ],
+  "license": "CC0-1.0",
+  "thumb": "thumb.png",
+  "payload": {
+    "packs": [
+      "fixture-robot.akimodel"
+    ],
+    "hd": [
+      "fixture-robot-hd.rtz"
+    ]
+  }
+}

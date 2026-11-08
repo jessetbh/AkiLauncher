@@ -40,9 +40,9 @@ static std::string w_to_u8(const std::wstring& w) {
 // HTTP GET into memory (WinHTTP, follows redirects, https only in practice)
 // ---------------------------------------------------------------------------
 
-static bool http_get(const std::wstring& url, std::vector<uint8_t>& out,
-                     std::atomic<long long>* got, std::atomic<long long>* total,
-                     std::wstring* err) {
+bool http_get_ex(const std::wstring& url, std::vector<uint8_t>& out, std::atomic<long long>* got,
+                 std::atomic<long long>* total, std::wstring* err, const std::wstring& ifNoneMatch,
+                 unsigned long* statusOut, std::wstring* etagOut) {
     wchar_t host[256]{}, path[2048]{}, extra[2048]{};
     URL_COMPONENTS uc{};
     uc.dwStructSize = sizeof(uc);
@@ -74,13 +74,24 @@ static bool http_get(const std::wstring& url, std::vector<uint8_t>& out,
         req = WinHttpOpenRequest(con, L"GET", fullPath.c_str(), nullptr, WINHTTP_NO_REFERER,
                                  WINHTTP_DEFAULT_ACCEPT_TYPES, secure ? WINHTTP_FLAG_SECURE : 0);
     }
-    if (req && WinHttpSendRequest(req, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA,
-                                  0, 0, 0) &&
+    std::wstring headers = ifNoneMatch.empty() ? L"" : L"If-None-Match: " + ifNoneMatch + L"\r\n";
+    if (req && WinHttpSendRequest(req, headers.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS : headers.c_str(),
+                                  headers.empty() ? 0 : (DWORD)-1L, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
         WinHttpReceiveResponse(req, nullptr)) {
         DWORD status = 0, sz = sizeof(status);
         WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
-        if (status == 200) {
+        if (statusOut) *statusOut = status;
+        if (etagOut) {
+            wchar_t etag[512]{};
+            DWORD esz = sizeof(etag);
+            if (WinHttpQueryHeaders(req, WINHTTP_QUERY_ETAG, WINHTTP_HEADER_NAME_BY_INDEX, etag, &esz,
+                                    WINHTTP_NO_HEADER_INDEX))
+                *etagOut = etag;
+        }
+        if (status == 304 && !ifNoneMatch.empty()) {
+            ok = true;  // not modified: the caller keeps its cached copy
+        } else if (status == 200) {
             DWORD len = 0;
             sz = sizeof(len);
             if (WinHttpQueryHeaders(req, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
@@ -113,6 +124,11 @@ static bool http_get(const std::wstring& url, std::vector<uint8_t>& out,
     if (con) WinHttpCloseHandle(con);
     WinHttpCloseHandle(ses);
     return ok;
+}
+
+static bool http_get(const std::wstring& url, std::vector<uint8_t>& out, std::atomic<long long>* got,
+                     std::atomic<long long>* total, std::wstring* err) {
+    return http_get_ex(url, out, got, total, err, L"", nullptr, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +218,7 @@ static InstallStatus g_inst;                       // error/tag/index under mute
 static std::atomic<int> g_phase{(int)InstallPhase::Idle};
 static std::atomic<long long> g_got{0}, g_total{0};
 
-static std::string sha256_mem(const std::vector<uint8_t>& data) {
+std::string sha256_hex(const std::vector<uint8_t>& data) {
     BCRYPT_ALG_HANDLE alg = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
     std::string result;
@@ -225,8 +241,7 @@ static std::string sha256_mem(const std::vector<uint8_t>& data) {
 // SHA256SUMS line format: "<hex>  <filename>". True if the zip's hash matches
 // its entry; missing entry or malformed file = mismatch (be strict once the
 // release ships a sums asset at all).
-static bool sums_match(const std::string& sums, const std::string& zipName,
-                       const std::string& zipHash) {
+bool sha256_sums_match(const std::string& sums, const std::string& zipName, const std::string& zipHash) {
     size_t at = 0;
     while (at < sums.size()) {
         size_t eol = sums.find('\n', at);
@@ -288,6 +303,7 @@ static bool extract_zip(const std::vector<uint8_t>& zip, const fs::path& dir,
 }
 
 bool install_start(int gameIndex, const GameEntry& g, const ReleaseInfo& rel) {
+    if (launch_blocked()) return false;  // screenshot mode
     int idle = (int)InstallPhase::Idle;
     if (!g_phase.compare_exchange_strong(idle, (int)InstallPhase::Downloading)) return false;
     g_got = 0;
@@ -313,8 +329,8 @@ bool install_start(int gameIndex, const GameEntry& g, const ReleaseInfo& rel) {
                      err.c_str());
             } else {
                 std::string zipName = w_to_u8(url.substr(url.find_last_of(L'/') + 1));
-                if (!sums_match(std::string((const char*)sums.data(), sums.size()), zipName,
-                                sha256_mem(zip)))
+                if (!sha256_sums_match(std::string((const char*)sums.data(), sums.size()), zipName,
+                                       sha256_hex(zip)))
                     return fail(L"SHA256 mismatch - corrupted or tampered download");
                 logf(L"install: SHA256 verified against SHA256SUMS");
             }
@@ -371,6 +387,35 @@ std::wstring sha1_file(const std::filesystem::path& p) {
             if (ok && BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0) {
                 wchar_t hex[41]{};
                 for (int i = 0; i < 20; ++i) swprintf_s(hex + i * 2, 3, L"%02X", digest[i]);
+                result = hex;
+            }
+            BCryptDestroyHash(hash);
+        }
+        BCryptCloseAlgorithmProvider(alg, 0);
+    }
+    return result;
+}
+
+// SHA256 of a file as lowercase hex (bcrypt, streamed); empty on failure. Conversion texture packages are pinned by it.
+std::wstring sha256_file(const std::filesystem::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    if (!f) return {};
+    BCRYPT_ALG_HANDLE alg = nullptr;
+    BCRYPT_HASH_HANDLE hash = nullptr;
+    std::wstring result;
+    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) == 0) {
+        if (BCryptCreateHash(alg, &hash, nullptr, 0, nullptr, 0, 0) == 0) {
+            std::vector<char> buf(1 << 20);
+            bool ok = true;
+            while (f && ok) {
+                f.read(buf.data(), (std::streamsize)buf.size());
+                std::streamsize n = f.gcount();
+                if (n > 0 && BCryptHashData(hash, (PUCHAR)buf.data(), (ULONG)n, 0) != 0) ok = false;
+            }
+            UCHAR digest[32]{};
+            if (ok && BCryptFinishHash(hash, digest, sizeof(digest), 0) == 0) {
+                wchar_t hex[65]{};
+                for (int i = 0; i < 32; ++i) swprintf_s(hex + i * 2, 3, L"%02x", digest[i]);
                 result = hex;
             }
             BCryptDestroyHash(hash);

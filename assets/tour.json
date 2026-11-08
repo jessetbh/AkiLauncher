@@ -1,0 +1,60 @@
+{
+  "name": "WWF 2000: a pay-per-view year",
+  "stops": [
+    {
+      "year": 2000,
+      "title": "Royal Rumble",
+      "game": "nomercy",
+      "venue": "Royal Rumble",
+      "match": "Royal Rumble",
+      "blurb": [
+        "January, and the year opens with thirty bodies and one way out: over the top rope.",
+        "Whoever is left standing gets the road to WrestleMania."
+      ]
+    },
+    {
+      "year": 2000,
+      "title": "WrestleMania",
+      "game": "nomercy",
+      "venue": "WrestleMania",
+      "match": "Four wrestlers",
+      "blurb": [
+        "The biggest night of the spring is headlined by four men, not two.",
+        "Eliminations decide who walks out of the four-way with the gold."
+      ]
+    },
+    {
+      "year": 2000,
+      "title": "Backlash",
+      "game": "nomercy",
+      "venue": "Backlash",
+      "match": "Singles A",
+      "blurb": [
+        "Four weeks later the fallout arrives: one on one, nobody to hide behind.",
+        "Settle in the ring what WrestleMania left unfinished."
+      ]
+    },
+    {
+      "year": 2000,
+      "title": "King of the Ring",
+      "game": "nomercy",
+      "venue": "King of the Ring",
+      "match": "Tag team",
+      "blurb": [
+        "June brings the crown and the throne, and a main event fought in teams.",
+        "Watch your partner's back and keep your eyes on the title."
+      ]
+    },
+    {
+      "year": 2000,
+      "title": "SummerSlam",
+      "game": "nomercy",
+      "venue": "SummerSlam",
+      "match": "Triple threat",
+      "blurb": [
+        "The end of summer, and three wrestlers share one ring and one prize.",
+        "One fall settles it, and it doesn't matter whose shoulders hit the mat."
+      ]
+    }
+  ]
+}
