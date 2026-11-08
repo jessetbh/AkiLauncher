@@ -1,6 +1,7 @@
 #include "launch.h"
 
 #include "games.h"
+#include "rom_rules.h"
 #include "settings.h"
 
 #include <xinput.h>
@@ -14,13 +15,17 @@
 // Logging (WIN32 subsystem has no console; append to a file next to the exe)
 // ---------------------------------------------------------------------------
 
+static std::wstring g_logName = L"aki-launcher.log";
+
+void log_set_name(const wchar_t* name) { g_logName = name; }
+
 static FILE* log_file() {
     static FILE* f = [] {
         wchar_t exeBuf[MAX_PATH]{};
         GetModuleFileNameW(nullptr, exeBuf, MAX_PATH);
         std::wstring path(exeBuf);
         size_t slash = path.find_last_of(L'\\');
-        path = path.substr(0, slash + 1) + L"aki-launcher.log";
+        path = path.substr(0, slash + 1) + g_logName;
         FILE* fp = nullptr;
         _wfopen_s(&fp, path.c_str(), L"w");
         return fp;
@@ -148,8 +153,31 @@ void bring_to_foreground(HWND wnd) {
 // GameSession
 // ---------------------------------------------------------------------------
 
-bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
+static bool g_launchBlocked = false;
+
+void launch_set_blocked(bool blocked) { g_launchBlocked = blocked; }
+bool launch_blocked() { return g_launchBlocked; }
+
+static bool g_ipc = false;
+void launch_set_ipc(bool on) { g_ipc = on; }
+bool launch_ipc() { return g_ipc; }
+
+bool GameSession::launch(const GameEntry& g, std::wstring* errorOut,
+                         const std::vector<std::pair<std::wstring, std::wstring>>* extraEnv) {
     if (active()) return false;
+    if (g_launchBlocked) {
+        if (errorOut) *errorOut = L"launching is off in screenshot mode";
+        logf(L"launch blocked (screenshot mode): %s", g.title.c_str());
+        return false;
+    }
+
+    // The port would just exit at once (the --play and --test-launch drivers get here without the card's check).
+    const std::wstring romError = rom_problem(g);
+    if (!romError.empty()) {
+        if (errorOut) *errorOut = romError;
+        logf(L"launch refused for %s: %s", g.title.c_str(), romError.c_str());
+        return false;
+    }
 
     std::wstring cmdline = L"\"" + g.exePath.wstring() + L"\"";
     std::wstring cwd = g.repoPath.wstring();
@@ -157,6 +185,28 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     // Env is inherited by the child; set the autoboot var around CreateProcess
     // only (skips the port's own ROM-select menu).
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", g.romPath.wstring().c_str());
+    // A conversion (aki-roadmap#154): a launch choice, never written to the game's files.
+    SetEnvironmentVariableW(L"AKI_CONVERSION", conversion.empty() ? nullptr : conversion.c_str());
+    if (!conversion.empty()) logf(L"launch: %s as conversion %s", g.title.c_str(), conversion.c_str());
+    // Dev IPC (aki-roadmap#21): the pipe is made before the game starts, so it can connect at once.
+    link.close();
+    if (g_ipc) {
+        std::wstring ipcErr;
+        if (link.open(&ipcErr)) {
+            SetEnvironmentVariableW(L"AKI_LAUNCHER_PIPE", link.pipe_name().c_str());
+            SetEnvironmentVariableW(L"AKI_LAUNCHER_TOKEN", std::wstring(link.token().begin(), link.token().end()).c_str());
+            logf(L"ipc: offering %s", link.pipe_name().c_str());
+        } else {
+            logf(L"ipc: no link for this launch: %s", ipcErr.c_str());
+        }
+    }
+    // A conversion from the picker (aki-roadmap#57): its AKI_CONVERSION and RT file overrides, for this start only.
+    if (extraEnv) {
+        for (const auto& [name, value] : *extraEnv) {
+            SetEnvironmentVariableW(name.c_str(), value.c_str());
+            logf(L"launch env %s=%s", name.c_str(), value.c_str());
+        }
+    }
 
     STARTUPINFOW si{};
     si.cb = sizeof(si);
@@ -164,15 +214,23 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     BOOL ok = CreateProcessW(g.exePath.wstring().c_str(), cmdline.data(), nullptr, nullptr,
                              FALSE, 0, nullptr, cwd.c_str(), &si, &newPi);
     SetEnvironmentVariableW(L"WCW_AUTOBOOT", nullptr);
+    SetEnvironmentVariableW(L"AKI_CONVERSION", nullptr);
+    SetEnvironmentVariableW(L"AKI_LAUNCHER_PIPE", nullptr);
+    SetEnvironmentVariableW(L"AKI_LAUNCHER_TOKEN", nullptr);
+    if (extraEnv) {
+        for (const auto& kv : *extraEnv) SetEnvironmentVariableW(kv.first.c_str(), nullptr);
+    }
 
     if (!ok) {
         DWORD err = GetLastError();
         if (errorOut) *errorOut = L"CreateProcess failed (error " + std::to_wstring(err) + L")";
         logf(L"launch FAILED for %s (err=%lu)", g.title.c_str(), err);
+        link.close();
         return false;
     }
 
     pi = newPi;
+    link.set_expected_pid(pi.dwProcessId);  // it can't have connected before this poll: the link is polled in tick()
     title = g.title;
     artKey = g.artKey;
     forceBorderless = g.forceBorderless;
@@ -180,14 +238,17 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     exitCode = 0;
     wasTerminated = false;
     statusNote.clear();
+    romRefusedNote = g.title + L" refused its ROM: " + g.romPath.wstring() + L"\nIt needs the " + g.romNote +
+                     L" (SHA1 " + g.romSha1 + L"). Select ROM, or fix the ROM path in Settings.";
     logTail.clear();
-    // The ports route stdout/stderr (incl. crash backtraces) to
-    // %LOCALAPPDATA%\<exe stem>\<exe stem>.log when launched without a console.
+    // The ports route stdout/stderr (incl. crash backtraces) to <exe stem>.log in their
+    // data folder when launched without a console: the checkout with portable.txt, else
+    // %LOCALAPPDATA%\<exe stem>.
     {
-        wchar_t lad[MAX_PATH]{};
-        GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
-        std::wstring stem = g.exePath.stem().wstring();
-        portLogPath = std::filesystem::path(lad) / stem / (stem + L".log");
+        portLogPath = game_data_dir(g) / (g.exePath.stem().wstring() + L".log");
+        std::error_code ec;
+        portLogBefore = std::filesystem::last_write_time(portLogPath, ec);
+        if (ec) portLogBefore = {};
     }
     launchTick = GetTickCount64();
     runningTick = 0;
@@ -197,9 +258,30 @@ bool GameSession::launch(const GameEntry& g, std::wstring* errorOut) {
     return true;
 }
 
+// The dev IPC's news (aki-roadmap#21): logged; a finished match also shows on the launcher.
+void GameSession::poll_link() {
+    LinkState before = link.state();
+    link.poll();
+    if (before != LinkState::Ready && link.state() == LinkState::Ready)
+        logf(L"ipc: %s said hello (game %s, version %s)", title.c_str(), link.hello().wstr("game").c_str(),
+             link.hello().wstr("version").c_str());
+    if (before != LinkState::Closed && link.state() == LinkState::Closed && !link.last_error().empty())
+        logf(L"ipc: link closed: %s", json_utf8_to_wide(link.last_error()).c_str());
+    for (const JsonValue& m : link.take()) {
+        std::wstring type = m.wstr("type");
+        if (type == L"state") logf(L"ipc: %s state %s", title.c_str(), m.wstr("state").c_str());
+        else if (type == L"match_end") {
+            logf(L"ipc: %s match over: %s", title.c_str(), json_utf8_to_wide(json_write(m, true)).c_str());
+            statusNote = title + L": match over (dev IPC)";
+        } else if (type == L"bye") logf(L"ipc: %s says bye", title.c_str());
+        else logf(L"ipc: %s sent %s", title.c_str(), type.c_str());
+    }
+}
+
 void GameSession::tick(HWND launcherWnd) {
     if (!active()) return;
     ULONGLONG now = GetTickCount64();
+    poll_link();
 
     // Process gone? (any state)
     if (WaitForSingleObject(pi.hProcess, 0) == WAIT_OBJECT_0) {
@@ -327,6 +409,13 @@ void GameSession::tick(HWND launcherWnd) {
 void GameSession::requestQuickBack() {
     if (!active() || state == SessionState::Closing) return;
     closeRequestTick = GetTickCount64();
+    // A game on the dev IPC is asked to close itself (it saves first); the others get the window close. Only once its
+    // window is up: before that the Closing state's fallbacks (and the launch cover's) need the window path.
+    if (state == SessionState::Running && gameWnd && link.state() == LinkState::Ready && link.send(ipc_line("quit"))) {
+        logf(L"quick-back: ipc quit -> %s", title.c_str());
+        state = SessionState::Closing;
+        return;
+    }
     if (gameWnd && IsWindow(gameWnd)) {
         logf(L"quick-back: WM_CLOSE -> %s (opens the port's quit prompt)", title.c_str());
         PostMessageW(gameWnd, WM_CLOSE, 0, 0);
@@ -358,6 +447,8 @@ static std::vector<std::string> read_log_tail(const std::filesystem::path& path,
 }
 
 void GameSession::finish(HWND launcherWnd) {
+    poll_link();  // a last bye or match_end
+    link.close();
     if (coverWnd) {  // game died before its window appeared
         DestroyWindow(coverWnd);
         coverWnd = nullptr;
@@ -372,8 +463,12 @@ void GameSession::finish(HWND launcherWnd) {
                      [](DWORD c) { wchar_t b[16]; swprintf_s(b, L"%08X", c); return std::wstring(b); }(exitCode) +
                      L")";
     if (wasTerminated || exitCode != 0) {
-        logTail = read_log_tail(portLogPath, 10);
+        // A log this run didn't touch is an older run's: don't show it, or blame the ROM for it.
+        std::error_code logEc;
+        const auto logTime = std::filesystem::last_write_time(portLogPath, logEc);
+        if (!logEc && logTime != portLogBefore) logTail = read_log_tail(portLogPath, 10);
         logf(L"captured %zu tail lines from %s", logTail.size(), portLogPath.c_str());
+        if (!wasTerminated && rom_rules::log_says_rom_refused(logTail)) statusNote = romRefusedNote;
     }
     // Play stats: time from window-found to exit (0 if it never got that far).
     if (!artKey.empty()) {
