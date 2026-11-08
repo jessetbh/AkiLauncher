@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "id": "fixture-robot",
+  "name": "Robot",
+  "game": "nomercy",
+  "version": "1.0.0",
+  "author": "Fixture"
+}

@@ -1,4 +1,6 @@
 #pragma once
+#include <atomic>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -32,6 +34,15 @@ struct InstallStatus {
 bool install_start(int gameIndex, const GameEntry& g, const ReleaseInfo& rel);
 InstallStatus install_status();
 void install_ack();
+
+// HTTP GET into memory (WinHTTP). With ifNoneMatch, a 304 returns true with
+// out empty and *statusOut = 304; etagOut receives the response's ETag.
+bool http_get_ex(const std::wstring& url, std::vector<uint8_t>& out, std::atomic<long long>* got,
+                 std::atomic<long long>* total, std::wstring* err, const std::wstring& ifNoneMatch = L"",
+                 unsigned long* statusOut = nullptr, std::wstring* etagOut = nullptr);
+// SHA-256 as lowercase hex, and a SHA256SUMS line check ("<hex>  <name>").
+std::string sha256_hex(const std::vector<uint8_t>& data);
+bool sha256_sums_match(const std::string& sums, const std::string& zipName, const std::string& zipHash);
 
 // SHA1 of a file as uppercase hex (bcrypt); empty on failure.
 std::wstring sha1_file(const std::filesystem::path& p);

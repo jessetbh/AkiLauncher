@@ -9,6 +9,7 @@
 #include "games.h"
 #include "installer.h"
 #include "launch.h"
+#include "packages.h"
 #include "miniz.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -237,14 +238,6 @@ namespace {
     }
 }
 
-fs::path game_data_dir(const GameEntry& g) {
-    std::error_code ec;
-    if (fs::is_regular_file(g.repoPath / "portable.txt", ec)) return g.repoPath;
-    wchar_t lad[MAX_PATH]{};
-    GetEnvironmentVariableW(L"LOCALAPPDATA", lad, MAX_PATH);
-    return fs::path(lad) / g.exePath.stem();
-}
-
 // The manifest's game key (AkiTools/AkiMods keys); only World Tour's differs from the launcher's art key.
 std::wstring game_key(const GameEntry& g) {
     if (g.artKey == L"worldtour") return L"wt";
@@ -275,7 +268,17 @@ std::vector<ConversionInfo> list_conversions(const GameEntry& g) {
     return out;
 }
 
-AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
+bool is_conversion_source(const fs::path& src) {
+    Source s;
+    std::string text, unused;
+    if (!s.init(src) || s.read("aki-package.json", unused) || !s.read("aki.json", text)) return false;
+    json j = json::parse(text, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) return false;
+    const std::string format = str(j, "format");
+    return format == "aki-conversion" || (format == "aki-package" && str(j, "kind") == "textures");
+}
+
+AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& src, int onlyGame) {
     AddResult r;
     Source s;
     if (!s.init(src)) {
@@ -301,7 +304,12 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
         r.message = L"This package is for \"" + wide(gameKey) + L"\", which AKI Launcher doesn't know.";
         return r;
     }
-    GameEntry& g = games[r.gameIndex];
+    if (onlyGame >= 0 && onlyGame < (int)games.size() && r.gameIndex != onlyGame) {
+        r.message = src.filename().wstring() + L" is for " + games[r.gameIndex].title + L": add it on that game's Mods page.";
+        r.gameIndex = -1;
+        return r;
+    }
+    const GameEntry& g = games[r.gameIndex];
     const fs::path data = game_data_dir(g);
     std::error_code ec;
 
@@ -353,6 +361,13 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
             if (!f.empty() && !safe_rel(f)) { r.message = L"Unsafe path in aki.json: " + wide(f); return r; }
         }
     }
+    // The RT files are passed to the game as paths (conversion_env): they must stay inside the conversion too.
+    if (comps.contains("rt") && comps["rt"].is_object()) {
+        for (const char* key : { "lights", "materials" }) {
+            std::string f = str(comps["rt"], key);
+            if (!f.empty() && !safe_rel(f)) { r.message = L"Unsafe path in aki.json: " + wide(f); return r; }
+        }
+    }
     if (comps.contains("saves") && comps["saves"].is_array()) {
         for (const auto& sv : comps["saves"]) {
             std::string f = sv.is_object() ? str(sv, "file") : std::string();
@@ -375,6 +390,12 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
         }
     }
 
+    // A conversion installed from an aki-package.json package is the shared installer's (packages.json records its
+    // files): replacing it here would leave that record describing files that aren't there.
+    if (pkg::load_registry(data / "packages.json").find(id) != nullptr) {
+        r.message = info.name + L" is already installed as a package: remove it on the Mods page first, or install the new version's package.";
+        return r;
+    }
     const fs::path dst = data / "conversions" / fs::u8path(id);
     const fs::path tmp = data / "conversions" / fs::u8path(".tmp-" + id);
     fs::remove_all(long_path(tmp), ec);
@@ -416,15 +437,6 @@ AddResult add_conversion(std::vector<GameEntry>& games, const fs::path& src) {
     for (const auto& n : installed.notes) r.message += L"\n" + n;
     logf(L"conversions: %s %s -> %s (seeded %d, kept %d)", update ? L"updated" : L"added", r.id.c_str(), dst.c_str(), seeded, kept);
     return r;
-}
-
-bool remove_conversion(const GameEntry& g, const std::wstring& id, std::wstring* err) {
-    std::error_code ec;
-    if (!valid_id(u8(fs::path(id)))) { if (err) *err = L"invalid id"; return false; }
-    fs::remove_all(long_path(game_data_dir(g) / "conversions" / id), ec);
-    if (ec && err) *err = wide(ec.message());
-    logf(L"conversions: removed %s", id.c_str());
-    return !ec;
 }
 
 std::vector<std::pair<std::wstring, std::wstring>> conversion_env(const ConversionInfo& c) {

@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "kind": "texture-pack",
+  "id": "fixture-texture-pack",
+  "version": "1.0.0",
+  "game_id": "wwfnomercy",
+  "display_name": "Fixture texture-pack",
+  "authors": [
+    "Fixture"
+  ],
+  "license": "CC0-1.0",
+  "thumb": "thumb.png",
+  "payload": {
+    "rtz": "fixture.rtz"
+  }
+}

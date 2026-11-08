@@ -27,9 +27,6 @@ struct ConversionInfo {
     std::vector<std::wstring> notes;  // shown under the entry (missing texture package, codes off, ...)
 };
 
-// The folder the game keeps mods and saves in: its working folder when that holds portable.txt, else
-// %LOCALAPPDATA%\<exe stem>.
-std::filesystem::path game_data_dir(const GameEntry& g);
 // The ROM revision tag codes must have for this port (nomercy-rev1 for No Mercy, else the game key).
 std::wstring game_key(const GameEntry& g);
 std::wstring port_rom_tag(const GameEntry& g);
@@ -45,10 +42,11 @@ struct AddResult {
 // Installs a conversion or texture package from a .zip or a folder into the game its aki.json names. Checks the
 // manifest, the paths in it, and the player's ROM against base_rom.sha1 before writing anything; seeds saves\<id>\
 // only when it's empty; an update replaces the conversion's files and keeps its saves.
-AddResult add_conversion(std::vector<GameEntry>& games, const std::filesystem::path& src);
-
-// Removes conversions\<id>\ (the saves in saves\<id>\ stay).
-bool remove_conversion(const GameEntry& g, const std::wstring& id, std::wstring* err);
+// onlyGame >= 0: refuse a package for any other game (the Mods page installs into its own game only).
+AddResult add_conversion(const std::vector<GameEntry>& games, const std::filesystem::path& src, int onlyGame = -1);
+// A zip or folder in this format (aki.json at its root, no aki-package.json): the Mods page's installer hands it to
+// add_conversion, since the shared package installer (packages.h) reads only aki-package.json packages.
+bool is_conversion_source(const std::filesystem::path& src);
 
 // Env vars for running this conversion: AKI_CONVERSION and the RT file overrides.
 std::vector<std::pair<std::wstring, std::wstring>> conversion_env(const ConversionInfo& c);
