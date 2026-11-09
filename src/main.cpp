@@ -1356,6 +1356,11 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
             ImGui::PushTextWrapPos(panelW - ui_px(20));
             ImGui::TextColored(palette::dim, "%s", line.c_str());
             ImGui::PopTextWrapPos();
+            if (!c.models.empty()) {
+                ImGui::PushTextWrapPos(panelW - ui_px(20));
+                ImGui::TextColored(c.modelsOff ? palette::warn : palette::dim, "%s", narrow(c.models).c_str());
+                ImGui::PopTextWrapPos();
+            }
             bool romOk = pkg::conversion_rom_matches(c, rom);
             ImGui::TextColored(romOk ? palette::ready : palette::warn, "%s", romOk ? "Your ROM matches" : "Made for another ROM than yours");
             if (g.launchable() && ImGui::SmallButton("Play")) playConv = i;
@@ -3111,9 +3116,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     if (wantSettings) open_settings(games);
     if (listConversions >= 0 && listConversions < (int)games.size()) {
         for (const ConversionInfo& c : list_conversions(games[listConversions])) {
-            logf(L"conversion %s \"%s\" v%s:%s%s%s%s%s", c.id.c_str(), c.name.c_str(), c.version.c_str(),
+            logf(L"conversion %s \"%s\" v%s:%s%s%s%s%s%s", c.id.c_str(), c.name.c_str(), c.version.c_str(),
                  c.patch ? L" [Patch]" : L"", c.codes ? L" [Codes]" : L"", c.saves ? L" [Save]" : L"",
-                 c.textures ? L" [Textures]" : L"", c.rt ? L" [RT]" : L"");
+                 c.textures ? L" [Textures]" : L"", c.rt ? L" [RT]" : L"", c.models ? L" [Models]" : L"");
             for (const auto& n : c.notes) logf(L"   note: %s", n.c_str());
         }
         return 0;
