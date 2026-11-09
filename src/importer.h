@@ -43,6 +43,9 @@ struct ImportLine {
     std::wstring detail;        // one line: why, what it needs, what was installed
     std::wstring needs;         // NeedsRom: the ROM it needs ("WWF No Mercy (USA) 1.0")
     std::vector<std::filesystem::path> packages;  // Converted: the package zips the worker wrote
+    // HaveIt: the package zips an earlier import built (the ledger's). Installed again when the conversion was removed
+    // (aki-roadmap#272); never deleted by Undo, which deletes only what this batch built (packages).
+    std::vector<std::filesystem::path> reinstall;
     std::wstring log;           // the full text behind [Log] (the worker's why, the converter's output)
     bool viaWorker = false;     // the worker handles it (a ROM hack, patch, bundle, unknown archive)
     bool installAsIs = false;   // the worker found a mod or package file in a picked folder: the launcher installs it

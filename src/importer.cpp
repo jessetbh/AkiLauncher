@@ -211,6 +211,8 @@ WorkerEvent parse_worker_line(const std::string& text) {
     } else if (status == L"have-it") {
         l.outcome = ImportOutcome::HaveIt;
         l.detail = why.empty() ? L"imported before: skipped" : why;
+        l.reinstall = std::move(l.packages);  // an earlier import's packages, not this batch's (aki-roadmap#272)
+        l.packages.clear();
     } else if (status == L"needs-rom") {
         l.outcome = ImportOutcome::NeedsRom;
         l.detail = l.needs.empty() ? (why.empty() ? L"needs its stock ROM" : why) : L"needs " + l.needs;

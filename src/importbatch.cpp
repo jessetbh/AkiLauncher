@@ -129,6 +129,28 @@ void ImportBatch::start_worker_process() {
     }
 }
 
+// aki-roadmap#272: an input imported before whose conversion was removed since. Its earlier package goes in again
+// through the same installer as a Converted line; one still installed stays "Have it".
+void ImportBatch::reinstall_have_it(ImportLine& l) {
+    if (!env_.installPackages) return;
+    ImportLine probe = l;
+    probe.outcome = ImportOutcome::Converted;
+    probe.packages = l.reinstall;
+    probe.detail = L"imported before, installed again from the Converted folder";
+    probe.installed.clear();
+    env_.installPackages(probe);
+    if (probe.outcome == ImportOutcome::Failed) {  // any package failed, as for a Converted line
+        l.outcome = ImportOutcome::Failed;
+        l.detail = probe.detail;
+        l.installed = std::move(probe.installed);    // what did go in is still undone by Undo
+    } else if (!probe.installed.empty()) {
+        l.outcome = ImportOutcome::Installed;
+        l.detail = probe.detail;
+        l.installed = std::move(probe.installed);
+        if (l.kind != L"texture pack") l.kind = L"conversion";
+    }
+}
+
 void ImportBatch::add_worker_line(ImportLine l) {
     fs::path src = import_source_of(l.item, workerInputs_);
     l.source = src;
@@ -145,6 +167,8 @@ void ImportBatch::add_worker_line(ImportLine l) {
         l = std::move(got);
     } else if (l.outcome == ImportOutcome::Converted) {
         env_.installPackages(l);
+    } else if (l.outcome == ImportOutcome::HaveIt && !l.reinstall.empty()) {
+        reinstall_have_it(l);
     }
     if (ph != lines.end()) {
         *ph = std::move(l);
