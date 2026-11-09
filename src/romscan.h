@@ -85,3 +85,8 @@ bool rom_provision(GameEntry& g, const RomScanEntry& e, std::wstring* errorOut);
 // The file's bytes in .z64 order (from any byte order) when their SHA1 is sha1 (upper-case hex), else false: the card's
 // Select ROM takes a byte-swapped copy of the accepted dump as the scan does (aki-roadmap#274).
 bool rom_read_matching_z64(const std::filesystem::path& file, const std::wstring& sha1, std::vector<unsigned char>* z64);
+// A zip file (by its signature). The scan, its Use button and Select ROM read the one N64 ROM inside a zip as that
+// ROM (aki-roadmap#280); a zip with none or several says so.
+bool rom_is_zip(const std::filesystem::path& file);
+// SHA1 of the ROM in .z64 order (byte order undone, the ROM inside a zip), or "" when it isn't one.
+std::wstring rom_z64_sha1(const std::filesystem::path& file);

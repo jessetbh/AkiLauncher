@@ -4,6 +4,7 @@
 #include "../src/games.h"
 #include "../src/romscan.h"
 #include "check.h"
+#include "miniz.h"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -196,6 +197,54 @@ void run_romscan_tests(const fs::path& dir) {
         CHECK(rom_read_matching_z64(roms / L"bs" / L"Test Game.v64", games[0].romSha1, &z) && z == base0);
         CHECK(!rom_read_matching_z64(roms / L"bs" / L"Test Game.v64", L"0000000000000000000000000000000000000000", &z));
         CHECK(!rom_read_matching_z64(roms / L"bs" / L"Test Game.v64", L"", &z));
+    }
+    // aki-roadmap#280: a zip holding one ROM reads as that ROM (the scan, its Use button, Select ROM); a zip with none
+    // or several says so instead of being skipped or hashed as a file.
+    {
+        auto zip_of = [](const std::vector<std::pair<std::string, std::vector<unsigned char>>>& files) {
+            std::vector<unsigned char> out;
+            mz_zip_archive za{};
+            if (!mz_zip_writer_init_heap(&za, 0, 0)) return out;
+            for (const auto& f : files)
+                mz_zip_writer_add_mem(&za, f.first.c_str(), f.second.data(), f.second.size(), MZ_DEFAULT_COMPRESSION);
+            void* buf = nullptr;
+            size_t n = 0;
+            if (mz_zip_writer_finalize_heap_archive(&za, &buf, &n)) out.assign((unsigned char*)buf, (unsigned char*)buf + n);
+            mz_zip_writer_end(&za);
+            mz_free(buf);
+            return out;
+        };
+        std::vector<unsigned char> readme(200, 'r');
+        fs::path zips = dir / L"zips";
+        write_bytes(zips / L"stock.zip", zip_of({{"Test Game (USA)/Test Game (USA).z64", base0}, {"readme.txt", readme}}));
+        write_bytes(zips / L"swapped.zip", zip_of({{"Test Game.v64", swapped(base0, RomByteOrder::V64)}}));
+        write_bytes(zips / L"hack.zip", zip_of({{"Test Game Hack.z64", hack0}}));
+        write_bytes(zips / L"none.zip", zip_of({{"readme.txt", readme}}));
+        write_bytes(zips / L"two.zip", zip_of({{"a.z64", base0}, {"b.z64", hack0}}));
+        CHECK(rom_is_zip(zips / L"stock.zip") && !rom_is_zip(roms / L"Test Game (USA).z64"));
+
+        RomScanEntry zs = rom_classify(zips / L"stock.zip", games);
+        CHECK(zs.verdict == RomVerdict::BaseDump && zs.gameIndex == 0 && zs.sha1 == games[0].romSha1);
+        CHECK(has(zs.note, L"Test Game (USA).z64 in the zip"));
+        CHECK(rom_classify(zips / L"swapped.zip", games).verdict == RomVerdict::BaseDump);
+        RomScanEntry zh = rom_classify(zips / L"hack.zip", games);
+        CHECK(zh.verdict == RomVerdict::OtherBuild && zh.gameIndex == 0);
+        RomScanEntry zn = rom_classify(zips / L"none.zip", games);
+        CHECK(zn.verdict == RomVerdict::NotSupported && has(zn.note, L"no N64 ROM"));
+        RomScanEntry z2 = rom_classify(zips / L"two.zip", games);
+        CHECK(z2.verdict == RomVerdict::NotSupported && has(z2.note, L"2 N64 ROMs"));
+
+        std::vector<unsigned char> z;
+        CHECK(rom_read_matching_z64(zips / L"swapped.zip", games[0].romSha1, &z) && z == base0);  // Select ROM
+        CHECK(!rom_read_matching_z64(zips / L"two.zip", games[0].romSha1, &z));
+        CHECK(rom_z64_sha1(zips / L"stock.zip") == games[0].romSha1 && rom_z64_sha1(zips / L"none.zip").empty());
+        GameEntry gz = games[0];
+        gz.romPath = dir / L"gamez" / L"test.z64";
+        std::wstring zerr;
+        CHECK(rom_provision(gz, zs, &zerr) && read_bytes(gz.romPath) == base0);  // the scan's Use this ROM
+
+        RomCandidates zc = rom_candidates(zips, 100);
+        CHECK(zc.files.size() == 5);
     }
     err.clear();
     CHECK(b && !rom_provision(g, *b, &err) && has(err, L"already has a ROM"));

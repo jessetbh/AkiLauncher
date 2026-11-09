@@ -665,7 +665,8 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
                     ov->second.romPath.clear();
                     settings_save();
                 }
-                logf(L"ROM set for %s from %s (byte-swapped, stored as .z64)", g.title.c_str(), src.c_str());
+                logf(L"ROM set for %s from %s (%s, stored as .z64)", g.title.c_str(), src.c_str(),
+                     rom_is_zip(src) ? L"zipped" : L"byte-swapped");
                 return true;
             }
             *errOut = L"That file isn't the accepted " + g.title +
@@ -674,6 +675,11 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
                       L" dumps won't match: those go in through Import.\n"
                       L"Required SHA1: " + g.romSha1 + L"\n"
                       L"Your file's SHA1: " + h;
+            if (rom_is_zip(src)) {  // the zip's own SHA1 says nothing: name the ROM inside (aki-roadmap#280)
+                std::wstring in = rom_z64_sha1(src);
+                *errOut += in.empty() ? L"\nThat zip doesn't hold exactly one N64 ROM: extract it and select the ROM itself."
+                                      : L"\nThe ROM inside the zip: SHA1 " + in;
+            }
             if (!g.romHint.empty()) *errOut += L"\n" + g.romHint;
             return false;
         }
@@ -705,7 +711,8 @@ static bool pick_rom(GameEntry& g, std::wstring* errOut) {
         return false;
     }
     // .v64 / .n64 copies of the dump are set up as .z64 too (aki-roadmap#274).
-    COMDLG_FILTERSPEC types[] = {{L"N64 ROM (*.z64, *.v64, *.n64)", L"*.z64;*.v64;*.n64"}, {L"All files", L"*.*"}};
+    // A zip holding the dump works too (aki-roadmap#280).
+    COMDLG_FILTERSPEC types[] = {{L"N64 ROM (*.z64, *.v64, *.n64, *.zip)", L"*.z64;*.v64;*.n64;*.zip"}, {L"All files", L"*.*"}};
     dlg->SetFileTypes(2, types);
     std::wstring title = L"Select your " + g.title + L" ROM - " + g.romNote + L" (.z64 / .v64 / .n64)";
     dlg->SetTitle(title.c_str());
@@ -1250,7 +1257,8 @@ static ImportLine install_local(const std::vector<GameEntry>& games, const std::
     l.name = src.filename().wstring();
     l.gameKey = engine_game_key(g.modGameId);
     std::error_code ec;
-    if (!std::filesystem::is_directory(src, ec)) {
+    // A zip goes on to the installers and the converter as before (packages, hacks in zips), not as a ROM (#280).
+    if (!std::filesystem::is_directory(src, ec) && !rom_is_zip(src)) {
         RomScanEntry e = rom_classify(src, games);  // 64 bytes for a non-ROM; hashes only ROMs of the six games
         if (e.header.order != RomByteOrder::NotARom) {
             l.kind = L"ROM";

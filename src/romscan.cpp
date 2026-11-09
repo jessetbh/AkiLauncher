@@ -4,6 +4,7 @@
 #include "launch.h"
 
 #include <windows.h>
+#include "miniz.h"
 #include <bcrypt.h>
 
 #include <algorithm>
@@ -121,21 +122,138 @@ static std::wstring sha1_bytes(const std::vector<unsigned char>& data) {
 
 static constexpr uintmax_t kMaxRomBytes = 128ull << 20;  // N64 cartridges top out at 64 MB
 
-// The whole file in .z64 order; false if unreadable or not a ROM.
-static bool read_z64(const fs::path& file, std::vector<unsigned char>& data, RomByteOrder* orderOut) {
+// ---------------------------------------------------------------------------
+// Zipped ROMs (aki-roadmap#280): a zip holding one N64 ROM reads as that ROM
+// ---------------------------------------------------------------------------
+
+bool rom_is_zip(const fs::path& file) {
+    unsigned char sig[4]{};
+    std::ifstream f(file, std::ios::binary);
+    if (!f) return false;
+    f.read((char*)sig, 4);
+    return f.gcount() == 4 && sig[0] == 'P' && sig[1] == 'K' && sig[2] == 3 && sig[3] == 4;
+}
+
+namespace {
+// A zip opened through _wfopen (any path), for miniz's reader.
+struct RomZip {
+    mz_zip_archive za{};
+    FILE* f = nullptr;
+    bool open = false;
+    explicit RomZip(const fs::path& p) {
+        if (_wfopen_s(&f, p.c_str(), L"rb") != 0 || !f) {
+            f = nullptr;
+            return;
+        }
+        std::error_code ec;
+        uintmax_t size = fs::file_size(p, ec);
+        open = !ec && mz_zip_reader_init_cfile(&za, f, (mz_uint64)size, 0);
+    }
+    ~RomZip() {
+        if (open) mz_zip_reader_end(&za);
+        if (f) fclose(f);
+    }
+    RomZip(const RomZip&) = delete;
+    RomZip& operator=(const RomZip&) = delete;
+};
+}  // namespace
+
+static constexpr uintmax_t kMinRomBytes = 64;
+
+static std::wstring zip_entry_name(const mz_zip_archive_file_stat& st) {
+    std::string nm = st.m_filename;
+    size_t slash = nm.find_last_of("/\\");
+    if (slash != std::string::npos) nm = nm.substr(slash + 1);
+    int len = MultiByteToWideChar(CP_UTF8, 0, nm.data(), (int)nm.size(), nullptr, 0);
+    std::wstring w(len > 0 ? len : 0, 0);
+    if (len > 0) MultiByteToWideChar(CP_UTF8, 0, nm.data(), (int)nm.size(), w.data(), len);
+    return w;
+}
+
+// The entries of a zip whose first bytes are an N64 ROM header (any byte order), in zip order.
+static std::vector<mz_uint> zip_rom_entries(RomZip& z) {
+    std::vector<mz_uint> out;
+    mz_uint n = mz_zip_reader_get_num_files(&z.za);
+    for (mz_uint i = 0; i < n; ++i) {
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&z.za, i, &st) || st.m_is_directory) continue;
+        if (st.m_uncomp_size < kMinRomBytes || st.m_uncomp_size > kMaxRomBytes) continue;
+        // Only entries named like a ROM, or big enough for one, are opened (a texture-pack zip has thousands of files).
+        std::string nm = st.m_filename;
+        std::transform(nm.begin(), nm.end(), nm.begin(), ::tolower);
+        auto ends = [&](const char* x) { size_t n = strlen(x); return nm.size() >= n && nm.compare(nm.size() - n, n, x) == 0; };
+        bool romName = ends(".z64") || ends(".v64") || ends(".n64") || ends(".rom") || ends(".bin");
+        if (!romName && st.m_uncomp_size < (1u << 20)) continue;
+        mz_zip_reader_extract_iter_state* it = mz_zip_reader_extract_iter_new(&z.za, i, 0);
+        if (!it) continue;
+        unsigned char head[4]{};
+        size_t got = mz_zip_reader_extract_iter_read(it, head, sizeof head);
+        mz_zip_reader_extract_iter_free(it);
+        if (got == sizeof head && detect_order(head) != RomByteOrder::NotARom) out.push_back(i);
+    }
+    return out;
+}
+
+// The file's bytes as they are: the file itself, or the one N64 ROM inside a zip. romsInZip: -1 for a plain file,
+// else how many ROMs the zip holds (the bytes are read only when it is exactly one); innerName: that ROM's name.
+static bool read_rom_bytes(const fs::path& file, std::vector<unsigned char>& data, int* romsInZip = nullptr,
+                           std::wstring* innerName = nullptr) {  // zips: #280
+    if (romsInZip) *romsInZip = -1;
+    if (rom_is_zip(file)) {
+        RomZip z(file);
+        if (!z.open) return false;
+        std::vector<mz_uint> roms = zip_rom_entries(z);
+        if (romsInZip) *romsInZip = (int)roms.size();
+        if (roms.size() != 1) return false;
+        mz_zip_archive_file_stat st;
+        if (!mz_zip_reader_file_stat(&z.za, roms[0], &st)) return false;
+        data.resize((size_t)st.m_uncomp_size);
+        if (!mz_zip_reader_extract_to_mem(&z.za, roms[0], data.data(), data.size(), 0)) return false;
+        if (innerName) *innerName = zip_entry_name(st);
+        return true;
+    }
     std::error_code ec;
     uintmax_t size = fs::file_size(file, ec);
-    if (ec || size < 64 || size > kMaxRomBytes) return false;
+    if (ec || size < kMinRomBytes || size > kMaxRomBytes) return false;
     std::ifstream f(file, std::ios::binary);
     if (!f) return false;
     data.resize((size_t)size);
     f.read((char*)data.data(), (std::streamsize)size);
-    if ((uintmax_t)f.gcount() != size) return false;
+    return (uintmax_t)f.gcount() == size;
+}
+
+// The first 64 bytes of the one N64 ROM in a zip (streamed: nothing else is unpacked, so a scan of a folder of
+// zipped ROMs stays quick); roms = how many the zip holds. False unless it is exactly one and readable.
+static bool zip_rom_head(const fs::path& file, unsigned char* head64, size_t* got, int* roms, std::wstring* innerName) {
+    *roms = -1;
+    RomZip z(file);
+    if (!z.open) return false;
+    std::vector<mz_uint> entries = zip_rom_entries(z);
+    *roms = (int)entries.size();
+    if (entries.size() != 1) return false;
+    mz_zip_archive_file_stat st;
+    if (!mz_zip_reader_file_stat(&z.za, entries[0], &st)) return false;
+    *innerName = zip_entry_name(st);
+    mz_zip_reader_extract_iter_state* it = mz_zip_reader_extract_iter_new(&z.za, entries[0], 0);
+    if (!it) return false;
+    *got = mz_zip_reader_extract_iter_read(it, head64, 64);
+    mz_zip_reader_extract_iter_free(it);
+    return *got == 64;
+}
+
+// Raw ROM bytes put in .z64 order; false if they aren't a ROM.
+static bool bytes_to_z64(std::vector<unsigned char>& data, RomByteOrder* orderOut) {
+    if (data.size() < kMinRomBytes) return false;
     RomByteOrder order = detect_order(data.data());
     if (order == RomByteOrder::NotARom) return false;
     to_z64(data.data(), data.size(), order);
     if (orderOut) *orderOut = order;
     return true;
+}
+
+// The whole ROM in .z64 order (also the one ROM in a zip); false if unreadable or not a ROM.
+static bool read_z64(const fs::path& file, std::vector<unsigned char>& data, RomByteOrder* orderOut) {
+    return read_rom_bytes(file, data) && bytes_to_z64(data, orderOut);
 }
 
 static std::wstring widen_name(const std::string& s) {
@@ -157,7 +275,21 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
     e.file = file;
     unsigned char head[64]{};
     size_t got = 0;
-    {
+    std::wstring inner;  // the ROM's name inside a zip (aki-roadmap#280)
+    if (rom_is_zip(file)) {
+        int roms = -1;
+        if (!zip_rom_head(file, head, &got, &roms, &inner)) {
+            if (roms == 0) {
+                e.note = L"a zip with no N64 ROM inside";
+            } else if (roms > 1) {
+                e.note = L"a zip with " + std::to_wstring(roms) + L" N64 ROMs inside: extract it to scan each one";
+            } else {
+                e.verdict = RomVerdict::Unreadable;
+                e.note = L"can't unpack the zip";
+            }
+            return e;
+        }
+    } else {
         std::ifstream f(file, std::ios::binary);
         if (!f) {
             e.verdict = RomVerdict::Unreadable;
@@ -199,7 +331,9 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
     if (g.romSha1.empty() || e.sha1 == g.romSha1) {
         e.verdict = RomVerdict::BaseDump;
         e.note = g.title + L": the accepted dump" +
-                 (order == RomByteOrder::Z64 ? L"" : L" (byte-swapped; set up as .z64)");
+                 (!inner.empty()                ? L" (" + inner + L" in the zip; set up as .z64)"
+                  : order == RomByteOrder::Z64 ? std::wstring()
+                                               : std::wstring(L" (byte-swapped; set up as .z64)"));
     } else if (g.romVersion >= 0 && e.header.version != g.romVersion) {
         // Another official revision (e.g. No Mercy Rev 0): not a hack, just not the dump the port uses.
         e.verdict = RomVerdict::OtherBuild;
@@ -216,7 +350,7 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
 }
 
 RomCandidates rom_candidates(const fs::path& dir, size_t maxFiles) {
-    static const wchar_t* exts[] = {L".z64", L".v64", L".n64", L".rom", L".bin"};
+    static const wchar_t* exts[] = {L".z64", L".v64", L".n64", L".rom", L".bin", L".zip"};  // zipped ROMs: #280
     RomCandidates out;
     // One folder at a time, so a folder that fails to list (a broken link, an
     // offline share) skips only itself.
@@ -343,6 +477,11 @@ void romscan_shutdown() {
 // ---------------------------------------------------------------------------
 // Provisioning
 // ---------------------------------------------------------------------------
+
+std::wstring rom_z64_sha1(const fs::path& file) {
+    std::vector<unsigned char> data;
+    return read_z64(file, data, nullptr) ? sha1_bytes(data) : std::wstring();
+}
 
 bool rom_read_matching_z64(const fs::path& file, const std::wstring& sha1, std::vector<unsigned char>* z64) {
     std::vector<unsigned char> data;
