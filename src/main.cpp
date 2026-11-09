@@ -1230,7 +1230,6 @@ static pkg::PackageInstall install_one_package(const GameEntry& g, const std::fi
     return r;
 }
 
-static void refresh_import_count();
 
 static const pkg::ConversionInfo* play_as(const std::vector<GameEntry>& games, int i);
 
@@ -1243,7 +1242,6 @@ static void open_mods(const std::vector<GameEntry>& games, int index, bool focus
     g_ui.packsNote.clear();
     g_ui.modsRemove = -1;
     refresh_mods(games);
-    refresh_import_count();
     g_ui.showMods = true;
     g_ui.convFocusFrames = 0;
     if (focusConversions) {
@@ -1406,9 +1404,6 @@ static int game_by_engine_key(const std::vector<GameEntry>& games, const std::ws
     return -1;
 }
 
-// aki-roadmap#296: no Import drop-box folder any more (an old Import\ stays on disk, unread). Two ways in: Import a
-// mod... (one item) and Import a folder... (everything inside it, #290); drag and drop takes the same routes.
-static void refresh_import_count() {}
 
 // A Converted line's package zip(s) installed through the #154 installer into the game it was built for.
 static void install_converted(const std::vector<GameEntry>& games, ImportLine& l) {
@@ -1470,7 +1465,7 @@ static void start_import(const std::vector<GameEntry>& games, const std::vector<
     }
     g_ui.modsResults.clear();
     ImportEnv env = make_import_env(games);
-    logf(L"import: %zu item(s)%s", srcs.size(), fromImportFolder ? L" from the Import folder" : L"");
+    logf(L"import: %zu item(s)", srcs.size());
     g_import.start(env, srcs, fromImportFolder);
     finish_start_import(games, fromImportFolder);
 }
@@ -1510,7 +1505,6 @@ static void finish_start_import(const std::vector<GameEntry>& games, bool fromIm
         g_ui.showImport = true;
     }
     refresh_mods(games);
-    refresh_import_count();
 }
 
 static void install_into_mods(const std::vector<GameEntry>& games, const std::vector<std::filesystem::path>& srcs) {
@@ -1613,7 +1607,6 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
             g_import.undo(&msg);
             logf(L"import: %s", msg.c_str());
             refresh_mods(games);
-            refresh_import_count();
             g_ui.convCache.clear();
         }
         ImGui::EndDisabled();
@@ -1877,7 +1870,6 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     ImGui::SameLine();
     if (ImGui::Button("Refresh")) {
         refresh_mods(games);
-        refresh_import_count();
     }
     ImGui::PushFont(g_ui.fontSmall);
     if (gameRuns) ImGui::TextColored(palette::warn, "Import is off while a game runs: close the game first.");
@@ -4177,7 +4169,6 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             if (!g_import.busy()) {
                 logf(L"import: %s", g_import.status.c_str());
                 if (g_ui.showMods) refresh_mods(games);
-                refresh_import_count();
                 g_ui.convCache.clear();
                 play_flip();
             }

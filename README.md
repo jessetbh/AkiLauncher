@@ -131,10 +131,11 @@ except the ports' own GitHub releases, which contain no game data.
 **How do I add mods and texture packs?** Select the game and press `M`
 (`Start` on a controller) for its Mods page. It lists what is in the game's
 mods folder: name, version, authors, type (code mod, texture pack or both)
-and thumbnail. *Install files...* takes `.nrm` mods, `.rtz` texture packs and
-`.zip` files (a texture pack zipped as is becomes an `.rtz`; a mod package
-installs the `.nrm`/`.rtz` files inside it). *Install a pack folder...* copies
-a texture-pack folder. You can also drop any of these on the launcher window.
+and thumbnail. *Import a mod...* takes one file: an `.nrm` mod, an `.rtz` texture
+pack or a `.zip` (a texture pack zipped as is becomes an `.rtz`; a mod package
+installs the `.nrm`/`.rtz` files inside it). *Import a folder...* takes a texture-pack
+folder, or a folder of mods, packs and hacks (each item on its own). You can also drop
+any of these on the launcher window.
 - A mod whose `mod.json` names another game is refused.
 - Replacing a file moves the old copy to the Recycle Bin, and *Remove* does
   the same, so both can be undone.
@@ -165,7 +166,7 @@ file is replaced in one step, so the game never reads half of it. Wrestler names
 `assets\rosters\<game>-roster.json` next to the launcher, or AkiTools' `model-templates\profiles\` in a depot. Without
 one, a wrestler line is shown but can only be changed in `models.txt` (**Open models.txt**).
 
-Installing packs: the Mods page's **Install files...**, **Install a pack folder...** or a drop on the window takes a
+Installing packs: the Mods page's **Import a mod...**, **Import a folder...** or a drop on the window takes a
 model pack too. It accepts an `<id>.akimodel` folder, a folder of them, or a zip of either.
 - The pack goes into `mods\models\`, and its `<id>-hd.rtz` (inside the pack, or next to it) into `mods\`.
 - A pack built for another game is refused.

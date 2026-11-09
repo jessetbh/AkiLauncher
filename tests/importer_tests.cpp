@@ -410,15 +410,65 @@ static void test_expand_folder(const fs::path& dir) {
     CHECK(import_expand_folder(mod).size() == 1 && import_expand_folder(mod)[0] == mod);
     fs::create_directories(dir / L"empty");
     CHECK(import_expand_folder(dir / L"empty").size() == 1);
-    // A folder holding only texture packs that replace the same textures: each pack on its own, never one merged pack.
+    // Rice names for synthetic packs: count textures of a game, CRCs from `first` on.
+    auto rice = [](const wchar_t* game, int first, int count, const fs::path& into) {
+        for (int i = 0; i < count; ++i) {
+            wchar_t name[96];
+            swprintf(name, 96, L"%ls#%08X#2#1_all.png", game, 0x1000 + first + i);
+            put_text(into / name, "png");
+        }
+    };
+    // A folder holding only texture packs that replace the same textures (40 of 50 shared): each pack on its own.
     fs::path packsOnly = dir / L"texture-packs";
-    put_text(packsOnly / L"Pack A" / L"Wrestlers" / kRice1, "png");
-    put_text(packsOnly / L"Pack A" / L"Arenas" / kRice2, "png");
-    put_text(packsOnly / L"Pack B" / L"Inner" / L"Wrestlers" / kRice1, "png");
-    put_text(packsOnly / L"Pack B" / L"Inner" / L"Arenas" / kRice3, "png");
+    rice(L"WWF No Mercy", 0, 30, packsOnly / L"Pack A" / L"Wrestlers");
+    rice(L"WWF No Mercy", 30, 20, packsOnly / L"Pack A" / L"Arenas");
+    rice(L"WWF No Mercy", 10, 40, packsOnly / L"Pack B" / L"Inner" / L"Wrestlers");
+    rice(L"WWF No Mercy", 500, 10, packsOnly / L"Pack B" / L"Inner" / L"Arenas");
     put_text(packsOnly / L"Formula.txt", "x");
     l = leaves(import_expand_folder(packsOnly));
     CHECK(l.size() == 2 && has(l, L"Pack A") && has(l, L"Pack B"));
+    // One pack's parts with a stray shared texture (two attires of one wrestler share 1 of 5, as in TNA vs ROH): one pack.
+    fs::path oneTna = dir / L"TNA pack";
+    rice(L"WWF No Mercy", 0, 5, oneTna / L"Lance Hoyt" / L"Attire 1");
+    rice(L"WWF No Mercy", 4, 5, oneTna / L"Lance Hoyt" / L"Attire 4");
+    rice(L"WWF No Mercy", 100, 15, oneTna / L"Arenas" / L"NOAH Arena");
+    rice(L"WWF No Mercy", 114, 5, oneTna / L"Arenas" / L"Deleted");
+    CHECK(import_expand_folder(oneTna).size() == 1 && import_expand_folder(oneTna)[0] == oneTna);
+    // Packs for two different games side by side: two packs.
+    fs::path twoGames = dir / L"two games";
+    rice(L"WWF No Mercy", 0, 10, twoGames / L"NM pack");
+    rice(L"WRESTLEMANIA 2000", 0, 10, twoGames / L"WM pack");
+    CHECK(import_expand_folder(twoGames).size() == 2);
+    // A pack with a readme zip at its top and its textures in parts: one pack, the zip rides along.
+    fs::path partsZip = dir / L"parts zip pack";
+    rice(L"WWF No Mercy", 0, 10, partsZip / L"Arenas");
+    rice(L"WWF No Mercy", 50, 10, partsZip / L"Wrestlers");
+    put_text(partsZip / L"readme.zip", "zip");
+    CHECK(import_expand_folder(partsZip).size() == 1);
+    // A collection with a loose cover image, one pack and a hack zip: the pack and the hack, never one pack.
+    fs::path cover = dir / L"cover collection";
+    put_text(cover / L"cover.png", "png");
+    rice(L"WWF No Mercy", 0, 10, cover / L"Some pack");
+    put_text(cover / L"hack.zip", "zip");
+    l = leaves(import_expand_folder(cover));
+    CHECK(l.size() == 2 && has(l, L"Some pack") && has(l, L"hack.zip"));
+    // A hack zip (MBs) beside two small packs of one game: the hack and each pack, never one pack with the hack in it.
+    fs::path hackBeside = dir / L"hack beside packs";
+    rice(L"WWF No Mercy", 0, 5, hackBeside / L"Wrestler A pack");
+    rice(L"WWF No Mercy", 100, 5, hackBeside / L"Wrestler B pack");
+    put_text(hackBeside / L"No Mercy Plus V3.zip", std::string(2u << 20, 'x'));
+    l = leaves(import_expand_folder(hackBeside));
+    CHECK(has(l, L"No Mercy Plus V3.zip") && !has(l, L"hack beside packs"));
+    // A No Mercy pack beside a pack named for another ROM (VPW's Shift-JIS names don't map to a game): two packs.
+    fs::path nmVpw = dir / L"nm and vpw2";
+    rice(L"WWF No Mercy", 0, 10, nmVpw / L"NM pack");
+    rice(L"VPW2 JP NAME", 0, 10, nmVpw / L"VPW2 pack");
+    CHECK(import_expand_folder(nmVpw).size() == 2);
+    // A Project64 install folder without its markers next to hacks is not a bundle: a collection.
+    fs::path n64 = dir / L"N64";
+    put_text(n64 / L"Project64 2.4" / L"Plugin" / L"x.dll", "x");
+    put_text(n64 / L"hack.z64", "rom");
+    CHECK(leaves(import_expand_folder(n64)).size() == 1 && has(leaves(import_expand_folder(n64)), L"hack.z64"));  // not a bundle; nothing in it
     // One pack's own parts (no shared textures) stay one pack, and so does a pack with a readme zip at its top or deep in.
     CHECK(import_expand_folder(packsOnly / L"Pack A").size() == 1);
     fs::path zipPack = dir / L"zip pack";
