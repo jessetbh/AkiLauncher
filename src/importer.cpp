@@ -490,3 +490,11 @@ bool import_lines_from_json(const std::string& text, std::vector<ImportLine>* li
     }
     return true;
 }
+
+ImportRomRoute import_rom_route(bool baseDump, bool otherBuild, bool otherRegion, bool unreadable) {
+    if (baseDump) return ImportRomRoute::Stock;
+    if (otherRegion) return ImportRomRoute::Unsupported;
+    if (unreadable) return ImportRomRoute::Failed;
+    (void)otherBuild;  // a hack of one of the six, or an unknown code: the converter decides either way
+    return ImportRomRoute::Converter;
+}
