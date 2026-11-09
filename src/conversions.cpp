@@ -25,6 +25,14 @@ namespace {
         return w;
     }
 
+    std::string narrow(const std::wstring& w) {
+        if (w.empty()) return {};
+        int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+        std::string s(n, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), s.data(), n, nullptr, nullptr);
+        return s;
+    }
+
     // A path as UTF-8 bytes (C++20's u8string() is std::u8string).
     std::string u8(const fs::path& p) {
         const std::u8string s = p.u8string();
@@ -178,13 +186,20 @@ namespace {
             }
         }
         if (auto b = j.find("base_rom"); b != j.end() && b->is_object()) {
-            c.baseSha1 = upper(wide(str(*b, "sha1")));
+            // A string or a list of strings (any one matches), as the shared installer reads it (aki-roadmap#243).
+            if (auto s = b->find("sha1"); s != b->end()) {
+                if (s->is_string()) c.baseSha1.push_back(upper(wide(s->get<std::string>())));
+                else if (s->is_array())
+                    for (const auto& x : *s)
+                        if (x.is_string()) c.baseSha1.push_back(upper(wide(x.get<std::string>())));
+            }
             c.baseRevision = wide(str(*b, "revision"));
         }
         const json comps = j.value("components", json::object());
         if (comps.contains("patch")) c.patch = true;
         if (comps.contains("codes")) {
             c.codes = true;
+            if (comps["codes"].is_object()) c.codesFile = str(comps["codes"], "file");
             c.codesRom = wide(str(comps["codes"], "rom"));
             if (c.codesRom.empty()) c.codesRom = wide(str(comps["codes"], "rom_revision"));
         }
@@ -213,32 +228,21 @@ namespace {
         return c;
     }
 
+    // The notes come from the same function as the Mods page's (pkg::conversion_notes, aki-roadmap#243). The codes
+    // file's own "# rom:" line decides whether the game runs its codes, as in the game; aki.json's codes.rom doesn't.
     void annotate(ConversionInfo& c, const GameEntry& g) {
-        std::error_code ec;
-        if (!c.texturesPackage.empty()) {
-            const fs::path pkg = game_data_dir(g) / "conversions" / "_packages" / c.texturesPackage;
-            c.texturesInstalled = fs::is_directory(pkg, ec);
-            if (!c.texturesInstalled) c.notes.push_back(L"Texture package " + c.texturesPackage + L" isn't added yet: add its zip to see the textures");
-            else if (!c.texturesSha256.empty()) {
-                const std::string have = read_text(pkg / ".package.sha256");
-                if (!have.empty() && wide(have) != c.texturesSha256)
-                    c.notes.push_back(L"The added " + c.texturesPackage + L" isn't the version this conversion was made with (sha256 differs)");
-            }
-        }
-        if (!c.requiresPatchBase.empty()) {
-            c.notes.push_back(L"Its ROM patch isn't included: it needs your own " + c.requiresPatchBase +
-                L" ROM (rerun the import with --base-rom)");
-        }
-        if (c.codes) {
-            const std::wstring port = port_rom_tag(g);
-            auto game = [](const std::wstring& t) { return t.substr(0, t.find(L"-rev")); };
-            c.codesRunnable = !c.codesRom.empty() && game(c.codesRom) == game(port);
-            if (!c.codesRunnable) {
-                c.notes.push_back(L"Its codes aren't tagged for this game (" + (c.codesRom.empty() ? std::wstring(L"no tag") : c.codesRom) + L"), so they stay off");
-            } else if (c.codesRom != port) {
-                c.notes.push_back(L"Its codes are for " + c.codesRom + L"; they're translated to " + port + L" as they run (codes outside the known map are skipped)");
-            }
-        }
+        pkg::ConversionNoteFacts f;
+        f.texturesPackage = narrow(c.texturesPackage);
+        f.texturesSha256 = narrow(c.texturesSha256);
+        f.requiresPatchBase = narrow(c.requiresPatchBase);
+        f.codesFile = c.codes ? c.codesFile : std::string();
+        f.manifestCodesRom = narrow(c.codesRom);
+        f.portTag = narrow(port_rom_tag(g));
+        pkg::read_conversion_note_files(game_data_dir(g), c.folder, f);
+        pkg::ConversionNotes n = pkg::conversion_notes(f);
+        c.notes = std::move(n.notes);
+        c.texturesInstalled = n.texturesInstalled;
+        c.codesRunnable = n.codesRunnable;
     }
 }
 
@@ -393,10 +397,12 @@ AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& sr
         return r;
     }
     if (!info.baseSha1.empty()) {
-        std::wstring have = upper(sha1_file(g.romPath));
-        if (have != info.baseSha1) {
-            r.message = info.name + L" needs a different " + g.title + L" ROM.\nRequired SHA1: " + info.baseSha1 +
-                        L" (" + info.baseRevision + L")\nYour ROM's SHA1: " + have;
+        const std::wstring have = upper(sha1_file(g.romPath));
+        if (std::find(info.baseSha1.begin(), info.baseSha1.end(), have) == info.baseSha1.end()) {
+            std::wstring need;
+            for (const auto& s : info.baseSha1) need += (need.empty() ? L"" : L" or ") + s;
+            r.message = info.name + L" needs a different " + g.title + L" ROM.\nRequired SHA1: " + need +
+                        (info.baseRevision.empty() ? L"" : L" (" + info.baseRevision + L")") + L"\nYour ROM's SHA1: " + have;
             return r;
         }
     }

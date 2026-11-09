@@ -2,9 +2,15 @@
   "format": "aki-conversion",
   "format_version": 1,
   "id": "fixture-conversion",
+  "game": "nomercy",
+  "base_rom": {
+    "sha1": "231b50fff9a4a6c67d48dbe0ba1181153e879060"
+  },
   "components": {
     "codes": {
-      "file": "codes.txt"
+      "file": "codes.txt",
+      "format": "aki-codes",
+      "rom": "nomercy-rev1"
     }
   }
 }

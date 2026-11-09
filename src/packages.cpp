@@ -1460,7 +1460,129 @@ static void conversion_models(const JsonValue& aki, const fs::path& folder, Conv
         (names.empty() ? L"" : L": " + names + (count > 4 ? L", ..." : L"")) : L"Custom models";
 }
 
-std::vector<ConversionInfo> list_conversions(const fs::path& dataDir) {
+namespace {
+bool tag_space(char c) { return c == ' ' || c == '\t' || c == '\r'; }
+char tag_lower(char c) { return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; }
+
+// librecomp conversion::codes::parse_rom_tag: "<game>" or "<game>-rev<N>" ('-', '_' or ' ' before "rev"), nothing
+// after it. rev = -1 when no revision digit is given.
+bool parse_rom_tag(const char* p, const char* end, const std::string& gameKey, int& rev) {
+    while (p < end && tag_space(*p)) p++;
+    size_t k = 0;
+    while (k < gameKey.size() && p < end && tag_lower(*p) == gameKey[k]) { p++; k++; }
+    if (k != gameKey.size()) return false;
+    if (p < end && (*p == '-' || *p == '_' || *p == ' ')) {
+        p++;
+        if (end - p >= 3 && tag_lower(p[0]) == 'r' && tag_lower(p[1]) == 'e' && tag_lower(p[2]) == 'v') {
+            p += 3;
+            while (p < end && tag_space(*p)) p++;
+            if (p < end && *p >= '0' && *p <= '9') rev = *p++ - '0';
+        }
+    }
+    while (p < end && tag_space(*p)) p++;
+    return p == end;
+}
+}  // namespace
+
+CodesVerdict codes_tag_verdict(const std::string& text, const std::string& portTag, std::string* tag) {
+    if (tag) tag->clear();
+    // librecomp conversion::codes::split_rom_tag
+    const size_t at = portTag.find("-rev");
+    const std::string gameKey = portTag.substr(0, at);
+    int nativeRev = 0;
+    if (at != std::string::npos && at + 4 < portTag.size() && portTag[at + 4] >= '0' && portTag[at + 4] <= '9') nativeRev = portTag[at + 4] - '0';
+
+    const char* p = text.data();
+    const char* textEnd = p + text.size();
+    if (text.size() >= 3 && uint8_t(p[0]) == 0xEF && uint8_t(p[1]) == 0xBB && uint8_t(p[2]) == 0xBF) p += 3;
+    // The first "# rom:" line counts.
+    for (const char* q = p; q < textEnd;) {
+        const char* eol = q;
+        while (eol < textEnd && *eol != '\n') eol++;
+        const char* a = q;
+        while (a < eol && tag_space(*a)) a++;
+        const char* b = eol;
+        while (b > a && tag_space(b[-1])) b--;
+        if (a < b && *a == '#') {
+            const char* t = a + 1;
+            while (t < b && tag_space(*t)) t++;
+            if (b - t >= 4 && tag_lower(t[0]) == 'r' && tag_lower(t[1]) == 'o' && tag_lower(t[2]) == 'm' && t[3] == ':') {
+                const char* v = t + 4;
+                while (v < b && tag_space(*v)) v++;
+                if (tag) tag->assign(v, b);
+                int rev = -1;
+                if (!parse_rom_tag(t + 4, b, gameKey, rev)) return CodesVerdict::Refused;
+                if (rev < 0 || rev == nativeRev) return CodesVerdict::Native;
+                // Another revision goes to the cheats mod, which translates only a No Mercy Rev 0 list.
+                return (gameKey == "nomercy" && nativeRev == 1 && rev == 0) ? CodesVerdict::Translated : CodesVerdict::Refused;
+            }
+        }
+        q = eol < textEnd ? eol + 1 : eol;
+    }
+    return CodesVerdict::Native;
+}
+
+ConversionNotes conversion_notes(const ConversionNoteFacts& f) {
+    ConversionNotes r;
+    if (!f.texturesPackage.empty()) {
+        r.texturesInstalled = f.texturesAdded;
+        if (!f.texturesAdded) {
+            r.notes.push_back(L"Texture package " + w(f.texturesPackage) + L" isn't added yet: add its zip to see the textures");
+        } else if (!f.texturesSha256.empty() && !f.addedSha256.empty() && lower(f.addedSha256) != lower(f.texturesSha256)) {
+            r.notes.push_back(L"The added " + w(f.texturesPackage) + L" isn't the version this conversion was made with (sha256 differs)");
+        }
+    }
+    if (!f.requiresPatchBase.empty()) {
+        r.notes.push_back(L"Its ROM patch isn't included: it needs your own " + w(f.requiresPatchBase) + L" ROM (rerun the import with --base-rom)");
+    }
+    if (!f.codesFile.empty() && !f.portTag.empty()) {
+        if (!f.codesReadable) {
+            r.codesRunnable = false;
+            r.notes.push_back(L"Its codes file " + w(f.codesFile) + L" is missing, so no codes run");
+            return r;
+        }
+        std::string tag;
+        const CodesVerdict v = codes_tag_verdict(f.codesText, f.portTag, &tag);
+        r.codesRunnable = v != CodesVerdict::Refused;
+        if (v == CodesVerdict::Translated) {
+            r.notes.push_back(L"Its codes are for " + w(tag) + L"; they're translated to " + w(f.portTag) +
+                L" as they run (codes outside the known map are skipped)");
+        } else if (v == CodesVerdict::Refused) {
+            r.notes.push_back(L"Its codes file is tagged " + w(tag) + L", so the game won't run its codes");
+        }
+        // aki.json's codes.rom decides nothing; say so only when it reads differently from the file's tag.
+        if (!f.manifestCodesRom.empty() && codes_tag_verdict("# rom: " + f.manifestCodesRom, f.portTag) != v) {
+            r.notes.push_back(L"aki.json says its codes are for " + w(f.manifestCodesRom) + L"; the codes file's # rom: line decides");
+        }
+    }
+    return r;
+}
+
+void read_conversion_note_files(const fs::path& dataDir, const fs::path& folder, ConversionNoteFacts& f) {
+    std::error_code ec;
+    auto slurp = [](const fs::path& p, bool* ok) {
+        std::ifstream in(p, std::ios::binary);
+        if (ok) *ok = bool(in);
+        return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    };
+    if (!f.texturesPackage.empty()) {
+        const fs::path pkgDir = dataDir / L"conversions" / L"_packages" / fs::u8path(f.texturesPackage);
+        f.texturesAdded = fs::is_directory(pkgDir, ec);
+        if (f.texturesAdded) {
+            std::string s = slurp(pkgDir / L".package.sha256", nullptr);
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
+            f.addedSha256 = s;
+        }
+    }
+    if (!f.codesFile.empty()) {
+        bool ok = false;
+        const fs::path codes = folder / fs::u8path(f.codesFile);
+        if (fs::is_regular_file(codes, ec)) f.codesText = slurp(codes, &ok);
+        f.codesReadable = ok;
+    }
+}
+
+std::vector<ConversionInfo> list_conversions(const fs::path& dataDir, const std::string& portTag) {
     std::vector<ConversionInfo> out;
     Registry reg = load_registry(dataDir / L"packages.json");
     std::error_code ec;
@@ -1503,6 +1625,25 @@ std::vector<ConversionInfo> list_conversions(const fs::path& dataDir) {
         c.folder = it->path();
         c.saves = dataDir / L"saves" / it->path().filename();
         conversion_models(v, c.folder, c);
+        {
+            ConversionNoteFacts nf;
+            nf.portTag = portTag;
+            if (const JsonValue* comps = v.get("components"); comps && comps->is(JsonValue::Type::Object)) {
+                if (const JsonValue* t = comps->get("textures"); t && t->is(JsonValue::Type::Object)) {
+                    nf.texturesPackage = str(*t, "package");
+                    nf.texturesSha256 = str(*t, "sha256");
+                }
+                if (const JsonValue* cd = comps->get("codes"); cd && cd->is(JsonValue::Type::Object)) {
+                    nf.codesFile = str(*cd, "file");
+                    nf.manifestCodesRom = str(*cd, "rom");
+                    if (nf.manifestCodesRom.empty()) nf.manifestCodesRom = str(*cd, "rom_revision");
+                }
+            }
+            if (const JsonValue* rq = v.get("requires"); rq && rq->is(JsonValue::Type::Object))
+                if (const JsonValue* rp = rq->get("patch"); rp && rp->is(JsonValue::Type::Object)) nf.requiresPatchBase = str(*rp, "base");
+            read_conversion_note_files(dataDir, c.folder, nf);
+            c.notes = conversion_notes(nf).notes;
+        }
         if (const RegEntry* e = reg.owner("conversions/" + dir); e && e->kind == "conversion") {
             c.recorded = true;
             if (!e->version.empty()) c.version = w(e->version);

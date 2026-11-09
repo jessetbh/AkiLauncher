@@ -6,6 +6,16 @@
       "exit": 2,
       "field": "base_rom"
     },
+    "bad-conversion-aki-json-id": {
+      "error": "aki.json id is \"something-else\"",
+      "exit": 2,
+      "field": "payload"
+    },
+    "bad-conversion-bare-bps": {
+      "error": "is a bare .bps",
+      "exit": 2,
+      "field": "payload"
+    },
     "bad-conversion-no-aki-json": {
       "error": "no conversion manifest",
       "exit": 2,
@@ -15,6 +25,11 @@
       "error": "no \"base_rom\"",
       "exit": 2,
       "field": "base_rom"
+    },
+    "bad-conversion-patch-mod-id": {
+      "error": "is mod another-hack, the conversion is fixture-conversion",
+      "exit": 2,
+      "field": "payload"
     },
     "bad-format": {
       "error": "format 2",
@@ -95,6 +110,9 @@
       "exit": 0
     },
     "valid-conversion": {
+      "exit": 0
+    },
+    "valid-conversion-patch": {
       "exit": 0
     },
     "valid-id-48-chars": {

@@ -1059,7 +1059,7 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
     g_ui.modIsHack.clear();
     for (const auto& m : g_ui.modItems)
         g_ui.modIsHack.push_back(m.kind == ModKind::Nrm && !m.code && !m.bundled && pkg::is_patch_mod(m.path));
-    g_ui.convs = pkg::list_conversions(conversions_data_dir(g));
+    g_ui.convs = pkg::list_conversions(conversions_data_dir(g), narrow(port_rom_tag(g)));
     g_ui.convCache.clear();
 }
 
@@ -1096,7 +1096,7 @@ static const std::vector<pkg::ConversionInfo>& game_conversions(const std::vecto
     auto it = g_ui.convCache.find(games[i].artKey);
     if (it == g_ui.convCache.end()) {
         std::vector<pkg::ConversionInfo> v;
-        if (g_shot ? !g_shotModsDir.empty() : games[i].exeFound) v = pkg::list_conversions(conversions_data_dir(games[i]));
+        if (g_shot ? !g_shotModsDir.empty() : games[i].exeFound) v = pkg::list_conversions(conversions_data_dir(games[i]), narrow(port_rom_tag(games[i])));
         it = g_ui.convCache.emplace(games[i].artKey, std::move(v)).first;
     }
     return it->second;
@@ -1961,6 +1961,12 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
             if (!c.models.empty()) {
                 ImGui::PushTextWrapPos(panelW - ui_px(20));
                 ImGui::TextColored(c.modelsOff ? palette::warn : palette::dim, "%s", narrow(c.models).c_str());
+                ImGui::PopTextWrapPos();
+            }
+            // aki-roadmap#243: missing texture package, ROM patch left out, codes the game won't run.
+            if (!c.notes.empty()) {
+                ImGui::PushTextWrapPos(panelW - ui_px(20));
+                for (const auto& n : c.notes) ImGui::TextColored(palette::warn, "%s", narrow(n).c_str());
                 ImGui::PopTextWrapPos();
             }
             bool romOk = pkg::conversion_rom_matches(c, rom);

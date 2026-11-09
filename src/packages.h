@@ -199,7 +199,43 @@ struct ConversionInfo {
     bool untested = false;                 // built on this PC by the converter, not tested by the AKI team
     std::vector<std::wstring> knownIssues;
     std::wstring note;                     // the catalog's note, or why the converter chose the tier
+    // aki-roadmap#243: what the player should know before playing it (texture package missing, ROM patch left out,
+    // codes the game won't run); conversion_notes() writes them, the Mods page shows them.
+    std::vector<std::wstring> notes;
 };
+
+// --- conversion notes (aki-roadmap#243), shared by the Mods page (list_conversions) and the installer -----------------
+
+// How the game treats a conversion's codes file on the port whose ROM tag is portTag (nomercy-rev1, wt-rev0, ...). The
+// file's first "# rom:" line decides, as in librecomp conversion::codes::parse_file / parse_rom_tag:
+//   Native: no tag, or this game's key with no revision or the port's own ("nomercy", "NoMercy_Rev 1");
+//   Translated: No Mercy Rev 0 codes on No Mercy (Rev 1): the cheats mod translates them as they run;
+//   Refused: anything else (another game, another revision, words after the tag): the game won't run them.
+// tag (optional) gets the tag as written, trimmed ("" = no tag).
+enum class CodesVerdict { Native, Translated, Refused };
+CodesVerdict codes_tag_verdict(const std::string& text, const std::string& portTag, std::string* tag = nullptr);
+
+struct ConversionNoteFacts {
+    std::string texturesPackage;    // components.textures.package ("" = none)
+    bool texturesAdded = false;     // conversions\_packages\<package>\ is there
+    std::string texturesSha256;     // the package zip it was made with ("" = not pinned)
+    std::string addedSha256;        // the added package's .package.sha256 ("" = unknown)
+    std::string requiresPatchBase;  // requires.patch.base: a ROM patch left out until the player supplies that ROM
+    std::string codesFile;          // components.codes.file ("" = no codes)
+    bool codesReadable = false;     // the codes file could be read
+    std::string codesText;
+    std::string manifestCodesRom;   // components.codes.rom (or rom_revision): mentioned only when it disagrees
+    std::string portTag;            // port_rom_tag of the game ("" = unknown: no codes note)
+};
+struct ConversionNotes {
+    std::vector<std::wstring> notes;
+    bool texturesInstalled = true;
+    bool codesRunnable = true;      // Native or Translated
+};
+ConversionNotes conversion_notes(const ConversionNoteFacts& f);
+// Fills f's file facts from the game's data folder and the installed conversion folder: whether the texture package
+// is added and its sha256, and the codes file's text (texturesPackage and codesFile must be set first).
+void read_conversion_note_files(const std::filesystem::path& dataDir, const std::filesystem::path& folder, ConversionNoteFacts& f);
 // Why the game runs a conversion without its models, "" when it runs with them: the game's rule (librecomp
 // conversion::models_refusal), kept the same. relink: the patch's relink.json (nullptr: a plain patch or none).
 // Packs load into Expansion RAM, physical 0x00400000-0x00800000; a relinked hack using it needs aki-roadmap#156.
@@ -208,8 +244,9 @@ std::wstring conversion_models_refusal(const JsonValue* relink, bool relinkUnrea
 constexpr int kModelsFormat = 2;
 // A conversion tier as the player reads it ("verified" -> "Verified"; unknown words are kept as they are).
 std::wstring conversion_tier_word(const std::string& tier);
-// conversions\<id>\ folders with an aki.json, recorded or not, sorted by name.
-std::vector<ConversionInfo> list_conversions(const std::filesystem::path& dataDir);
+// conversions\<id>\ folders with an aki.json, recorded or not, sorted by name. portTag: the game's port_rom_tag, for
+// the codes note ("" = no codes note).
+std::vector<ConversionInfo> list_conversions(const std::filesystem::path& dataDir, const std::string& portTag = std::string());
 // Whether the player's ROM is one the conversion names (no names: any ROM).
 bool conversion_rom_matches(const ConversionInfo& c, const std::vector<std::string>& romSha1);
 

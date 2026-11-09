@@ -12,9 +12,11 @@ struct GameEntry;
 
 struct ConversionInfo {
     std::wstring id, name, version, authors, description, credits, permission, game;
-    std::wstring baseSha1, baseRevision;
+    std::vector<std::wstring> baseSha1;  // base_rom.sha1, a string or a list (upper-case hex; any one matches)
+    std::wstring baseRevision;
     bool patch = false, codes = false, saves = false, textures = false, rt = false;
-    std::wstring codesRom;          // e.g. nomercy-rev0
+    std::wstring codesRom;          // aki.json's tag, e.g. nomercy-rev0 (the codes file's own # rom: line decides)
+    std::string codesFile;          // components.codes.file
     std::wstring texturesPackage;   // dependency package "Team-Name" ("" = inline or none)
     std::wstring texturesNaming;    // rt64 / rice / jabo
     std::wstring requiresPatchBase; // aki.json requires.patch.base: a ROM patch left out until the player supplies that ROM
