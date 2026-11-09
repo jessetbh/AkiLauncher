@@ -3044,13 +3044,15 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             ImGui::End();
             return -1;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_H, false)) {
+        // aki-roadmap#287: Quick match and the History Tour (which runs on it) are dev-only in 0.3.0.
+        const bool quickUi = quick_match_ui_enabled(dev_mode());
+        if (quickUi && ImGui::IsKeyPressed(ImGuiKey_H, false)) {
             play_flip();
             open_tour();
             ImGui::End();
             return -1;
         }
-        if ((ImGui::IsKeyPressed(ImGuiKey_Q, false) || (pad & XINPUT_GAMEPAD_BACK)) && !game_busy(g_ui.selected)) {
+        if (quickUi && (ImGui::IsKeyPressed(ImGuiKey_Q, false) || (pad & XINPUT_GAMEPAD_BACK)) && !game_busy(g_ui.selected)) {
             play_flip();
             open_quick(games, g_ui.selected);
             ImGui::End();
@@ -3576,17 +3578,17 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     ImGui::SetCursorPosY(vh * 0.945f);
     // No depot is the normal end-user state (games install via download);
     // the per-card status already says what each game needs.
+    const bool quickHints = quick_match_ui_enabled(dev_mode());  // aki-roadmap#287
     if (g_ui.padInput)
         text_centered_colored(palette::faint,
-                              "D-Pad Browse      A Play      X Flip Box      "
-                              "Y Settings      Start Mods      Back Quick Match      In Game:  Hold " +
+                              std::string("D-Pad Browse      A Play      X Flip Box      Y Settings      Start Mods      ") +
+                                  (quickHints ? "Back Quick Match      " : "") + "In Game:  Hold " +
                                   chord_to_string(settings().chordMask) + "  To Return");
     else
         text_centered_colored(palette::faint,
-                              "Left/Right Browse      Enter Play      F Flip Box      "
-                              "S Settings      M Mods      Q Quick Match      H History Tour      Esc Quit      In Game:  " +
-                                  hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) +
-                                  "  To Return");
+                              std::string("Left/Right Browse      Enter Play      F Flip Box      S Settings      M Mods      ") +
+                                  (quickHints ? "Q Quick Match      H History Tour      " : "") + "Esc Quit      In Game:  " +
+                                  hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) + "  To Return");
     ImGui::PopFont();
 
     // ------------------------------------------------------------------ cart insert
