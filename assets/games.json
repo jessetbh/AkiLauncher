@@ -34,7 +34,7 @@
       "rom_sha1": "F9E9FA2ED819C3A39DB5CB6AFECA186F021DB5ED",
       "rom_code": "NVPJ",
       "mod_game_id": "vpw64",
-      "rom_note": "Japanese release (Japan-only; translations go in as patch mods)",
+      "rom_note": "Japanese release (Japan-only; translations go in through Import)",
       "rom_stored_file": "vpw.vpw64.jp.z64",
       "rom_hint": "Translated ROM? Select the clean Japanese ROM here and add the translation as a patch mod (steps in the game's README FAQ).",
       "rom_version": 0
@@ -90,7 +90,7 @@
       "rom_sha1": "82DD25A044689EAB57AB362FE10C0DA6388C217A",
       "rom_code": "NA2J",
       "mod_game_id": "vpw2",
-      "rom_note": "Japanese release (Japan-only; translations go in as patch mods)",
+      "rom_note": "Japanese release (Japan-only; translations go in through Import)",
       "rom_stored_file": "vpw.vpw2.jp.z64",
       "rom_hint": "Translated ROM? Select the clean Japanese ROM here and add the translation as a patch mod (steps in the game's README FAQ).",
       "rom_version": 0
