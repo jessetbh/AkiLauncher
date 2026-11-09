@@ -199,12 +199,16 @@ WorkerEvent parse_worker_line(const std::string& text) {
     } else if (status == L"stock") {
         l.outcome = ImportOutcome::Stock;
         l.detail = why.empty() ? L"this is the stock game: nothing to convert" : why;
+        // The same hint a loose stock ROM gets (aki-roadmap#271): one inside a folder or zip said only "nothing to convert".
+        if (l.detail.find(L"card") == std::wstring::npos) l.detail += L". Set it as the game's ROM on its card if it needs one";
     } else if (status == L"have-it") {
         l.outcome = ImportOutcome::HaveIt;
         l.detail = why.empty() ? L"imported before: skipped" : why;
     } else if (status == L"needs-rom") {
         l.outcome = ImportOutcome::NeedsRom;
         l.detail = l.needs.empty() ? (why.empty() ? L"needs its stock ROM" : why) : L"needs " + l.needs;
+        // The converter's reason too (aki-roadmap#271): "needs the ROM it was made for" alone hid which ROMs it tried.
+        if (!l.needs.empty() && !why.empty()) l.detail += L" (" + why + L")";
     } else if (status == L"needs-game") {
         l.outcome = ImportOutcome::NeedsGame;
         l.detail = why.empty() ? L"doesn't say which game it is for" : why;
