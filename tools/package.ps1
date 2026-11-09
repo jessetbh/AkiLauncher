@@ -15,7 +15,11 @@
 
 param(
     [string]$Version = "dev",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # aki-roadmap#228: the ROM-hack converter (AkiMods tools/romhack, e.g. a checkout of its release branch). Staged as
+    # tools\romhack next to the exe, where the launcher's Import looks first. Python itself is not packaged: pyfetch.ps1
+    # downloads python.org's embeddable zip (sha256-pinned) the first time a ROM hack is imported.
+    [string]$ConverterTools = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -87,6 +91,16 @@ Notes
   - Custom menu sounds: assets\sounds\{nav,flip,launch}.wav.
   - Settings and play stats live in %LOCALAPPDATA%\AkiLauncher\settings.ini.
 "@ | Set-Content (Join-Path $stage "README.txt") -Encoding utf8
+
+if ($ConverterTools) {
+    if (-not (Test-Path (Join-Path $ConverterTools "aki_import.py"))) { throw "no aki_import.py in $ConverterTools" }
+    $conv = Join-Path $stage "tools\romhack"
+    New-Item -ItemType Directory -Force $conv | Out-Null
+    # Plain files (no packed exe: fewer antivirus false alarms); its tests and caches stay behind.
+    Get-ChildItem $ConverterTools -Force | Where-Object { $_.Name -notin @('tests', '__pycache__', '.pytest_cache') } |
+        Copy-Item -Destination $conv -Recurse -Force
+    Get-ChildItem $conv -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+}
 
 # Hard gate: no ROMs or ROM-derived data in a release, ever.
 $strays = Get-ChildItem $stage -Recurse -Include *.z64, *.n64, *.v64, *.rom, *.bin

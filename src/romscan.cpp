@@ -70,6 +70,32 @@ int rom_match_game(const RomHeader& h, const std::vector<GameEntry>& games) {
     return -1;
 }
 
+int rom_match_other_region(const RomHeader& h, const std::vector<GameEntry>& games) {
+    if (h.order == RomByteOrder::NotARom || h.gameCode.size() != 4) return -1;
+    for (size_t i = 0; i < games.size(); ++i) {
+        const std::wstring& c = games[i].romCode;
+        if (c.size() != 4) continue;
+        if ((wchar_t)(unsigned char)h.gameCode[1] == c[1] && (wchar_t)(unsigned char)h.gameCode[2] == c[2] &&
+            (wchar_t)(unsigned char)h.gameCode[3] != c[3])
+            return (int)i;
+    }
+    return -1;
+}
+
+std::wstring rom_region_name(char r) {
+    switch (r) {
+    case 'E': return L"USA";
+    case 'J': return L"Japanese";
+    case 'P': case 'X': case 'Y': case 'Z': return L"PAL (Europe)";
+    case 'D': return L"PAL (German)";
+    case 'F': return L"PAL (French)";
+    case 'I': return L"PAL (Italian)";
+    case 'S': return L"PAL (Spanish)";
+    case 'U': return L"PAL (Australian)";
+    default: return std::wstring(L"region ") + (wchar_t)(unsigned char)r;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hashing and reading
 // ---------------------------------------------------------------------------
@@ -148,7 +174,16 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
     }
     int gi = rom_match_game(e.header, games);
     if (gi < 0) {
-        e.note = L"not a supported ROM (" + describe(e.header) + L")";
+        int og = rom_match_other_region(e.header, games);
+        if (og >= 0) {
+            e.otherRegionGame = og;
+            const std::wstring& want = games[og].romCode;
+            e.note = games[og].title + L", " + rom_region_name(e.header.gameCode[3]) + L" version (" + describe(e.header) +
+                     L"): the port needs the " + (games[og].romNote.empty() ? rom_region_name((char)want[3]) + L" ROM"
+                                                                             : games[og].romNote);
+            return e;
+        }
+        e.note = L"not one of the AKI games (" + describe(e.header) + L")";
         return e;
     }
     const GameEntry& g = games[gi];

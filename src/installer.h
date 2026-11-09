@@ -19,6 +19,8 @@ struct ReleaseInfo {
 // at startup; results appear in release_for() as they come in.
 void releases_check_start(const std::vector<GameEntry>& games);
 bool release_for(const std::wstring& artKey, ReleaseInfo* out);
+// Screenshot runs: a release as if the check had found it (they make no network calls).
+void release_set(const std::wstring& artKey, const ReleaseInfo& rel);
 
 // One install (download + extract into GameEntry::installDir) at a time, on a
 // worker thread. Poll install_status() each frame; call install_ack() to

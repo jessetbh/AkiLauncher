@@ -29,7 +29,8 @@ static void test_args() {
     CHECK(r.active && r.shots.size() == 1 && r.shots[0].first == ShotPage::QuickMatch &&
           r.shots[0].second == fs::path(L"C:\\out\\q.png") && r.game == L"vpw2" && !r.demo);
     CHECK(parse_shot_args({L"--demo", L"--shot-all", L"D:\\shots"}, &r, &err));
-    CHECK(r.active && r.demo && r.shots.size() == shot_pages().size() && r.shots.size() == 7);
+    CHECK(r.active && r.demo && r.shots.size() == shot_pages().size() && r.shots.size() == 8);
+    CHECK(r.shots[7].first == ShotPage::Import && r.shots[7].second.filename() == L"import.png");
     CHECK(r.shots[3].first == ShotPage::ModelPacks && r.shots[3].second == fs::path(L"D:\\shots\\model-packs.png"));
     CHECK(r.shots[6].first == ShotPage::Dev && r.shots[6].second.filename() == L"dev.png");
     // every page name parses, and only those
@@ -50,6 +51,12 @@ static void test_args() {
     CHECK(!parse_shot_args({L"--shot-all", L"d", L"--size", L"3840x2160x2"}, &r, &err));
     CHECK(!parse_shot_args({L"--shot-all", L"d", L"--size", L"100x100"}, &r, &err));
     CHECK(!parse_shot_args({L"--size", L"1920x1080"}, &r, &err));  // without a shot
+    // aki-roadmap#232: a pad script drives one page
+    CHECK(parse_shot_args({L"--shot", L"home", L"a.png", L"--pad-script", L"DOWN,A"}, &r, &err) && r.padScript == L"DOWN,A");
+    CHECK(parse_shot_args({L"--shot", L"home", L"a.png"}, &r, &err) && r.padScript.empty());
+    CHECK(!parse_shot_args({L"--shot-all", L"d", L"--pad-script", L"A"}, &r, &err));
+    CHECK(!parse_shot_args({L"--pad-script", L"A"}, &r, &err));
+    CHECK(!parse_shot_args({L"--shot", L"home", L"a.png", L"--pad-script"}, &r, &err));
     // a flag is never taken as a value
     CHECK(!parse_shot_args({L"--shot", L"home", L"--game", L"nomercy"}, &r, &err));
     CHECK(!parse_shot_args({L"--shot-all", L"--demo"}, &r, &err));

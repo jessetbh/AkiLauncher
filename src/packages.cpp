@@ -1382,6 +1382,84 @@ bool remove_package(const std::string& id, const fs::path& dataDir, bool gameRun
 
 // --- conversions ----------------------------------------------------------------------------------------------------------
 
+std::wstring conversion_models_refusal(const JsonValue* relink, bool relinkUnreadable) {
+    if (relinkUnreadable || (relink && !relink->is(JsonValue::Type::Object)))
+        return L"its patch's relink.json can't be read, so the memory it uses is unknown";
+    if (!relink) return L"";
+    auto num = [](const JsonValue* v) -> double { return (v && v->is(JsonValue::Type::Number) && v->n >= 0) ? v->n : 0; };
+    auto overlaps = [](double start, double end) {
+        if (end <= start) return false;
+        const uint64_t ps = uint64_t(start) & 0x1FFFFFFFull;
+        const uint64_t pe = ps + uint64_t(end - start);
+        return ps < 0x00800000ull && pe > 0x00400000ull;
+    };
+    double hit = -1;
+    for (const char* key : { "code_ranges", "data_ranges" }) {
+        if (const JsonValue* list = relink->get(key); list && list->is(JsonValue::Type::Array))
+            for (const JsonValue& r : list->items)
+                if (hit < 0 && r.is(JsonValue::Type::Array) && r.items.size() >= 2 && overlaps(num(&r.items[0]), num(&r.items[1])))
+                    hit = num(&r.items[0]);
+    }
+    for (const char* key : { "preload", "zero" }) {
+        if (const JsonValue* list = relink->get(key); list && list->is(JsonValue::Type::Array))
+            for (const JsonValue& r : list->items)
+                if (hit < 0 && r.is(JsonValue::Type::Object) && overlaps(num(r.get("ram")), num(r.get("ram")) + num(r.get("size"))))
+                    hit = num(r.get("ram"));
+    }
+    if (hit < 0) return L"";
+    wchar_t at[16];
+    swprintf(at, 16, L"0x%08X", unsigned(uint64_t(hit)));
+    return std::wstring(L"its patch uses Expansion RAM (from ") + at + L"), where model packs load; custom models in relinked "
+        L"conversions need aki-roadmap#156 (after 0.3.0)";
+}
+
+// The models line for a conversion's row on the Mods page (aki-roadmap#226).
+static void conversion_models(const JsonValue& aki, const fs::path& folder, ConversionInfo& c) {
+    const JsonValue* comps = aki.get("components");
+    const JsonValue* m = comps ? comps->get("models") : nullptr;
+    if (!m || !m->is(JsonValue::Type::Object) || str(*m, "dir").empty()) return;
+    std::wstring why;
+    const JsonValue* fmt = m->get("format");
+    const int format = !fmt ? 1 : (fmt->is(JsonValue::Type::Number) ? int(fmt->n) : -1);
+    if (format < 1) why = L"its models have no usable format";
+    else if (format > kModelsFormat) why = L"its models are format " + std::to_wstring(format) + L": update the game";
+    if (why.empty()) {
+        const JsonValue* patch = comps->get("patch");
+        const std::string pf = (patch && patch->is(JsonValue::Type::Object)) ? str(*patch, "file") : std::string();
+        if (!pf.empty() && pf.find("..") == std::string::npos) {
+            const std::string path = u8((folder / fs::u8path(pf)).wstring());
+            mz_zip_archive za{};
+            if (mz_zip_reader_init_file(&za, path.c_str(), 0)) {
+                size_t sz = 0;
+                if (void* p = mz_zip_reader_extract_file_to_heap(&za, "relink.json", &sz, 0)) {
+                    JsonValue relink;
+                    const bool ok = sz <= kMaxJson && json_parse(std::string((const char*)p, sz), &relink);
+                    mz_free(p);
+                    why = conversion_models_refusal(ok ? &relink : nullptr, !ok);
+                }
+                mz_zip_reader_end(&za);
+            }
+        }
+    }
+    if (!why.empty()) {
+        c.modelsOff = true;
+        c.models = L"Custom models are off for this conversion: " + why + L".";
+        return;
+    }
+    std::wstring names;
+    int count = 0;
+    if (const JsonValue* slots = m->get("slots"); slots && slots->is(JsonValue::Type::Array)) {
+        for (const JsonValue& s : slots->items) {
+            if (!s.is(JsonValue::Type::Object)) continue;
+            ++count;
+            std::wstring n = w(str(s, "name"));
+            if (!n.empty() && count <= 4) names += (names.empty() ? L"" : L", ") + n;
+        }
+    }
+    c.models = count ? L"Custom models for " + std::to_wstring(count) + (count == 1 ? L" wrestler" : L" wrestlers") +
+        (names.empty() ? L"" : L": " + names + (count > 4 ? L", ..." : L"")) : L"Custom models";
+}
+
 std::vector<ConversionInfo> list_conversions(const fs::path& dataDir) {
     std::vector<ConversionInfo> out;
     Registry reg = load_registry(dataDir / L"packages.json");
@@ -1411,8 +1489,20 @@ std::vector<ConversionInfo> list_conversions(const fs::path& dataDir) {
                         if (x.is(JsonValue::Type::String)) c.baseSha1.push_back(lower(x.s));
             }
         }
+        c.description = w(str(v, "description"));
+        if (const JsonValue* sv = v.get("survey"); sv && sv->is(JsonValue::Type::Object)) {
+            std::string tier = str(*sv, "aki_tier");
+            c.tier = conversion_tier_word(tier);
+            c.untested = lower(tier) == "untested";
+            if (const JsonValue* ki = sv->get("known_issues"); ki && ki->is(JsonValue::Type::Array))
+                for (auto& x : ki->items)
+                    if (x.is(JsonValue::Type::String) && !x.s.empty()) c.knownIssues.push_back(w(x.s));
+            c.note = w(str(*sv, "note"));
+            if (c.note.empty()) c.note = w(str(*sv, "tier_note"));
+        }
         c.folder = it->path();
         c.saves = dataDir / L"saves" / it->path().filename();
+        conversion_models(v, c.folder, c);
         if (const RegEntry* e = reg.owner("conversions/" + dir); e && e->kind == "conversion") {
             c.recorded = true;
             if (!e->version.empty()) c.version = w(e->version);
@@ -1423,6 +1513,15 @@ std::vector<ConversionInfo> list_conversions(const fs::path& dataDir) {
     }
     std::sort(out.begin(), out.end(), [](const ConversionInfo& a, const ConversionInfo& b) { return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0; });
     return out;
+}
+
+std::wstring conversion_tier_word(const std::string& tier) {
+    std::string t = lower(tier);
+    if (t == "verified") return L"Verified";
+    if (t == "experimental") return L"Experimental";
+    if (t == "unsupported") return L"Unsupported";
+    if (t == "untested") return L"Untested";
+    return w(tier);
 }
 
 bool conversion_rom_matches(const ConversionInfo& c, const std::vector<std::string>& romSha1) {

@@ -195,6 +195,10 @@ namespace {
             c.texturesNaming = wide(str(comps["textures"], "naming"));
             c.texturesSha256 = wide(str(comps["textures"], "sha256"));
         }
+        if (comps.contains("models") && comps["models"].is_object()) {
+            c.modelsDir = wide(str(comps["models"], "dir"));
+            c.models = !c.modelsDir.empty();
+        }
         if (comps.contains("rt")) {
             c.rt = true;
             c.rtLights = wide(str(comps["rt"], "lights"));
@@ -367,6 +371,11 @@ AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& sr
             std::string f = str(comps["rt"], key);
             if (!f.empty() && !safe_rel(f)) { r.message = L"Unsafe path in aki.json: " + wide(f); return r; }
         }
+    }
+    // The models folder (aki-roadmap#226) is read by the game from inside the conversion.
+    if (comps.contains("models") && comps["models"].is_object()) {
+        std::string d = str(comps["models"], "dir");
+        if (!d.empty() && !safe_rel(d)) { r.message = L"Unsafe path in aki.json: " + wide(d); return r; }
     }
     if (comps.contains("saves") && comps["saves"].is_array()) {
         for (const auto& sv : comps["saves"]) {

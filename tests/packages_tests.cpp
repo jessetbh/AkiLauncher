@@ -341,7 +341,28 @@ static void test_kinds_zip_and_conversions(const fs::path& tmp) {
         CHECK(convs[1].id == "conv-b" && convs[1].recorded && convs[1].version == L"1.1.0" &&
               pkg::conversion_rom_matches(convs[1], {"0123456789ABCDEF0123456789ABCDEF01234567"}));
         CHECK(convs[1].addons.size() == 1 && convs[1].addons[0] == "conv_tex.rtz");
+        CHECK(convs[0].tier.empty() && !convs[0].untested && convs[0].knownIssues.empty());
     }
+    // aki-roadmap#232: the details the player reads before picking one (the #228 converter's survey block).
+    put(data / L"conversions" / L"surveyed" / L"aki.json",
+        R"({"id":"surveyed","name":"Surveyed","description":"A hack.","survey":{"aki_tier":"experimental",)"
+        R"("known_issues":["Titles flicker","","Crowd is grey"],"note":"tested on Rev 1"}})");
+    put(data / L"conversions" / L"fresh" / L"aki.json",
+        R"({"id":"fresh","name":"Fresh","survey":{"aki_tier":"untested","tier_note":"not in the catalog"}})");
+    convs = pkg::list_conversions(data);
+    CHECK(convs.size() == 4);
+    for (const auto& c : convs) {
+        if (c.id == "surveyed") {
+            CHECK(c.tier == L"Experimental" && !c.untested && c.description == L"A hack." && c.note == L"tested on Rev 1");
+            CHECK(c.knownIssues.size() == 2 && c.knownIssues[0] == L"Titles flicker" && c.knownIssues[1] == L"Crowd is grey");
+        } else if (c.id == "fresh") {
+            CHECK(c.tier == L"Untested" && c.untested && c.knownIssues.empty() && c.note == L"not in the catalog");
+        }
+    }
+    CHECK(pkg::conversion_tier_word("VERIFIED") == L"Verified" && pkg::conversion_tier_word("gold") == L"gold");
+    std::error_code cleanEc;
+    fs::remove_all(data / L"conversions" / L"surveyed", cleanEc);
+    fs::remove_all(data / L"conversions" / L"fresh", cleanEc);
     // Remove: its files go, its saves stay.
     std::wstring msg;
     CHECK(pkg::remove_package("conv-b", data, false, &msg));
@@ -510,6 +531,44 @@ static void test_patch_rules(const fs::path& tmp) {
     CHECK(c.ok());
 }
 
+// aki-roadmap#226: a conversion's models line on the Mods page, and the game's refusal rule.
+static void test_conversion_models(const fs::path& tmp) {
+    auto refusal = [](const char* text) {
+        JsonValue v;
+        CHECK(json_parse(text, &v));
+        return pkg::conversion_models_refusal(&v, false);
+    };
+    CHECK(pkg::conversion_models_refusal(nullptr, false).empty());                              // a plain patch
+    CHECK(refusal(R"({"code_ranges": [], "data_ranges": []})").empty());                        // de-relinked, moved nothing
+    std::wstring why = refusal(R"({"code_ranges": [[2151682016, 2152333312]]})");                // BTBW
+    CHECK(has(why, L"0x80400FE0") && has(why, L"#156"));
+    CHECK(!refusal(R"({"zero": [{"ram": 2153775104, "size": 6864}]})").empty());              // Legends: 0x80600000
+    CHECK(refusal(R"({"code_ranges": [[2399141888, 2399146444]]})").empty());                   // above 8 MB
+    CHECK(!refusal(R"({"zero": [{"ram": 2689597440, "size": 16}]})").empty());                // KSEG1
+    CHECK(refusal(R"({"zero": [{"ram": 2147483648, "size": 4194304}]})").empty());              // ends at the window
+    CHECK(!refusal(R"({"code_ranges": [[2155872252, 2155872256]]})").empty());                // its last word
+    CHECK(!pkg::conversion_models_refusal(nullptr, true).empty());                              // unreadable
+
+    fs::path data = tmp / L"data-m";
+    const std::string slots = R"("models": {"dir": "models", "format": 2, "slots": [{"wrestler": "0x0404", "name": "Kenny Omega", "pack": "kenny"},
+        {"wrestler": "0x0405", "name": "Jon Moxley", "pack": "mox"}]})";
+    put(data / L"conversions" / L"a-models" / L"aki.json", R"({"id":"a-models","name":"A","components":{)" + slots + "}}");
+    put(data / L"conversions" / L"b-relinked" / L"aki.json",
+        R"({"id":"b-relinked","name":"B","components":{"patch":{"file":"patch.nrm"},)" + slots + "}}");
+    put(data / L"conversions" / L"b-relinked" / L"patch.nrm", zip_bytes({{"mod.json", mod_json("b-relinked")},
+        {"patch.bps", "BPS1"}, {"relink.json", R"({"code_ranges": [[2151682016, 2152333312]]})"}}));
+    put(data / L"conversions" / L"c-newer" / L"aki.json", R"({"id":"c-newer","name":"C","components":{"models":{"dir":"models","format":9}}})");
+    put(data / L"conversions" / L"d-none" / L"aki.json", R"({"id":"d-none","name":"D","components":{"codes":{"file":"c.txt"}}})");
+    auto convs = pkg::list_conversions(data);
+    CHECK(convs.size() == 4);
+    if (convs.size() == 4) {
+        CHECK(!convs[0].modelsOff && convs[0].models == L"Custom models for 2 wrestlers: Kenny Omega, Jon Moxley");
+        CHECK(convs[1].modelsOff && has(convs[1].models, L"Custom models are off for this conversion") && has(convs[1].models, L"#156"));
+        CHECK(convs[2].modelsOff && has(convs[2].models, L"format 9"));
+        CHECK(convs[3].models.empty() && !convs[3].modelsOff);
+    }
+}
+
 void run_packages_tests(const fs::path& tmp) {
     std::error_code ec;
     fs::remove_all(tmp, ec);
@@ -524,4 +583,5 @@ void run_packages_tests(const fs::path& tmp) {
     test_patch_mod(tmp);
     test_review_fixes(tmp);
     test_patch_rules(tmp);
+    test_conversion_models(tmp);
 }

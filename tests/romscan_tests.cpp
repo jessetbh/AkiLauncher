@@ -104,6 +104,13 @@ void run_romscan_tests(const fs::path& dir) {
     CHECK(rom_match_game(hb, games) == 0);
     RomHeader he = rom_parse_header(euro0.data(), euro0.size());
     CHECK(rom_match_game(he, games) == -1);
+    // aki-roadmap#228: another region is named (PAL), not just "not supported".
+    CHECK(rom_match_other_region(he, games) == 0 && rom_match_other_region(hb, games) == -1);
+    CHECK(rom_region_name('P') == L"PAL (Europe)" && rom_region_name('J') == L"Japanese");
+    write_bytes(dir / L"pal" / L"Test Game (Europe).z64", euro0);
+    RomScanEntry pal = rom_classify(dir / L"pal" / L"Test Game (Europe).z64", games);
+    CHECK(pal.verdict == RomVerdict::NotSupported && pal.otherRegionGame == 0 && pal.gameIndex == -1);
+    CHECK(has(pal.note, L"PAL (Europe) version") && has(pal.note, L"North American release"));
     auto media = fake_rom("TEST GAME", "CTGE", 0, 0x11);  // another media letter, same id + region
     RomHeader hm = rom_parse_header(media.data(), media.size());
     CHECK(rom_match_game(hm, games) == 0);

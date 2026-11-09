@@ -4,6 +4,7 @@
 #include "json.h"
 #include "modelpacks.h"
 #include "launch.h"
+#include "texpacks.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -596,6 +597,72 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
     return install_mod_file_or_folder(src, modsDir, gameId, gameTitle);
 }
 
+// aki-roadmap#228 phase 0: a Rice/GLideN64 or Jabo texture pack (no rt64.json, the author's own file names) in a
+// work folder or as the player's folder: copied to modsDir\<name>, then rt64.json (autoPath) and mod.json written so
+// the game's texture-name provider (aki-roadmap#93) loads it as it is.
+static bool legacy_wrong_game(const TexScan& ts, const std::wstring& gameId, const std::wstring& gameTitle,
+                              const std::wstring& name, std::wstring* msg) {
+    if (ts.naming() != TexNaming::Rice || gameId.empty()) return false;
+    std::wstring rn = ts.rice_name(), owner = rice_name_game(rn);
+    if (owner.empty() || owner == gameId) return false;
+    *msg = name + L" is a texture pack for \"" + rn + L"\" (" + owner + L"), not " + gameTitle +
+           L": install it from that game's Mods page";
+    return true;
+}
+
+static std::wstring legacy_kind_text(const TexScan& ts) {
+    bool rice = ts.naming() == TexNaming::Rice;
+    return std::wstring(rice ? L"a Rice/GLideN64" : L"a Jabo") + L" texture pack (" +
+           std::to_wstring(rice ? ts.rice : ts.jabo) + L" textures), set up to load as it is";
+}
+
+static InstallResult install_legacy_pack(const fs::path& packRoot, const TexScan& ts, const fs::path& modsDir,
+                                         const std::wstring& gameId, const std::wstring& gameTitle,
+                                         const std::wstring& name, bool moveFromWork) {
+    InstallResult r;
+    std::error_code ec;
+    if (legacy_wrong_game(ts, gameId, gameTitle, name, &r.message)) return r;
+    fs::path dest = modsDir / name;
+    if (fs::exists(dest, ec)) {
+        r.message = name + L" is installed already: remove it first to replace it";
+        r.already = true;
+        return r;
+    }
+    fs::path tmp = modsDir / (L".aki-tex-" + name);
+    fs::remove_all(tmp, ec);
+    if (moveFromWork) {
+        fs::rename(packRoot, tmp, ec);
+        if (ec) {
+            r.message = L"can't move the unpacked " + name + L" into the mods folder";
+            return r;
+        }
+    } else if (!copy_tree(packRoot, tmp, &r.message)) {
+        fs::remove_all(tmp, ec);
+        return r;
+    }
+    std::wstring err;
+    if (!wrap_legacy_pack(tmp, ts, gameId, name, &err)) {
+        fs::remove_all(tmp, ec);
+        r.message = name + L": " + err;
+        return r;
+    }
+    fs::rename(tmp, dest, ec);
+    if (ec) {
+        fs::remove_all(tmp, ec);
+        r.message = L"can't write " + dest.wstring();
+        return r;
+    }
+    r.ok = true;
+    r.installed.push_back(dest);
+    r.message = L"Installed " + name + L": " + legacy_kind_text(ts);
+    std::wstring rn = ts.rice_name();
+    if (ts.naming() == TexNaming::Rice && !rn.empty() && rice_name_game(rn).empty())
+        r.message += L" (named for \"" + rn + L"\", maybe a hack: it loads wherever the textures match)";
+    logf(L"mods: installed %s pack %s -> %s", ts.naming() == TexNaming::Rice ? L"Rice" : L"Jabo", packRoot.c_str(),
+         dest.c_str());
+    return r;
+}
+
 static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::path& modsDir, const std::wstring& gameId,
                                                 const std::wstring& gameTitle) {
     InstallResult r;
@@ -618,15 +685,20 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
             r.message = src.wstring() + L" holds the mods folder itself: pick the pack's own folder";
             return r;
         }
+        TexScan ts = scan_texture_folder(src);
+        if (ts.naming() == TexNaming::Rice || ts.naming() == TexNaming::Jabo)
+            return install_legacy_pack(src, ts, modsDir, gameId, gameTitle, name, false);
         ModItem m = inspect_mod(src);
         if (!m.problem.empty()) {
             r.message = name + L": " + m.problem;
+            r.unrecognized = !m.textures && !m.manifest.present;
             return r;
         }
         if (wrong_game(m.manifest, gameId, gameTitle, name, &r.message)) return r;
         fs::path dest = modsDir / name;
         if (fs::exists(dest, ec)) {
             r.message = name + L" is installed already: remove it first to replace it";
+            r.already = true;
             return r;
         }
         if (!copy_tree(src, dest, &r.message)) {
@@ -659,6 +731,7 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
 
     if (ext != L".zip") {
         r.message = name + L": not a mod (.nrm), texture pack (.rtz, .zip or a folder)";
+        r.unrecognized = true;
         return r;
     }
     // A .zip: a texture pack zipped as is (rt64.json at the root) becomes an
@@ -687,6 +760,64 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
                     (replaced ? L"; the older copy is in the Recycle Bin" : L"");
         logf(L"mods: installed %s -> %s", src.c_str(), dest.c_str());
         return r;
+    }
+    // A Rice/Jabo pack zipped (no rt64.json anywhere, no .nrm/.rtz inside): unpacked into a work folder (paths kept,
+    // nothing outside it) and set up like a folder. A single top folder in the zip is the pack's root.
+    {
+        std::vector<std::wstring> names;
+        bool anyRt64Json = false, anyMod = false;
+        int n = (int)mz_zip_reader_get_num_files(&za);
+        for (int i = 0; i < n; ++i) {
+            mz_zip_archive_file_stat st;
+            if (!mz_zip_reader_file_stat(&za, i, &st) || mz_zip_reader_is_file_a_directory(&za, i)) continue;
+            std::wstring nm = u8w(st.m_filename);
+            std::wstring leaf = lower(fs::path(nm).filename().wstring());
+            std::wstring mext = fs::path(leaf).extension().wstring();
+            if (leaf == L"rt64.json") anyRt64Json = true;
+            if (mext == L".nrm" || mext == L".rtz") anyMod = true;
+            names.push_back(nm);
+        }
+        TexScan ts = scan_texture_names(names);
+        if (!anyRt64Json && !anyMod && (ts.naming() == TexNaming::Rice || ts.naming() == TexNaming::Jabo)) {
+            fs::path work = modsDir / L".aki-install-tex";
+            fs::remove_all(work, ec);
+            fs::create_directories(work, ec);
+            struct Cleanup {
+                fs::path d;
+                ~Cleanup() { std::error_code e; fs::remove_all(d, e); }
+            } cleanup{work};
+            for (int i = 0; i < n; ++i) {
+                mz_zip_archive_file_stat st;
+                if (!mz_zip_reader_file_stat(&za, i, &st) || mz_zip_reader_is_file_a_directory(&za, i)) continue;
+                std::string nm = st.m_filename;
+                for (auto& c : nm)
+                    if (c == '\\') c = '/';
+                if (nm.empty() || nm[0] == '/' || nm.find(':') != std::string::npos || nm.find("..") != std::string::npos)
+                    continue;  // never outside the work folder
+                fs::path out = work / fs::path(u8w(nm));
+                fs::create_directories(out.parent_path(), ec);
+                FILE* f = nullptr;
+                if (_wfopen_s(&f, out.c_str(), L"wb") != 0 || !f) {
+                    r.message = name + L": can't unpack " + u8w(nm);
+                    return r;
+                }
+                bool okx = mz_zip_reader_extract_to_cfile(&za, i, f, 0);
+                if (fclose(f) != 0) okx = false;
+                if (!okx) {
+                    r.message = name + L": can't unpack " + u8w(nm);
+                    return r;
+                }
+            }
+            zf.reset();
+            fs::path root = work, only;
+            int entries = 0;
+            for (fs::directory_iterator it(work, ec), end; !ec && it != end; it.increment(ec)) {
+                ++entries;
+                only = it->path();
+            }
+            if (entries == 1 && fs::is_directory(only, ec)) root = only;
+            return install_legacy_pack(root, scan_texture_folder(root), modsDir, gameId, gameTitle, src.stem().wstring(), true);
+        }
     }
     // A package: its .nrm / .rtz files, extracted (to files, not memory: packs
     // can be big) into a work folder and checked like direct installs before
@@ -727,6 +858,7 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
     zf.reset();
     if (members.empty()) {
         r.message = name + L": no rt64.json at its root and no .nrm or .rtz inside: not a mod package";
+        r.unrecognized = true;
         return r;
     }
     for (const auto& probe : members) {

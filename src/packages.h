@@ -189,7 +189,25 @@ struct ConversionInfo {
     bool recorded = false;  // in packages.json (else a folder put there by hand)
     std::filesystem::path folder, saves;
     std::vector<std::string> addons;  // add-on files that came with it (recorded)
+    // aki.json components.models (aki-roadmap#226): a line for the player ("" = no models component), and whether the
+    // game will run the conversion without them (then the line says why).
+    std::wstring models;
+    bool modelsOff = false;
+    // aki-roadmap#232: what the player reads before picking it (aki.json; the #228 converter writes survey.*).
+    std::wstring description;
+    std::wstring tier;                     // Verified / Experimental / Unsupported / Untested ("" = not said)
+    bool untested = false;                 // built on this PC by the converter, not tested by the AKI team
+    std::vector<std::wstring> knownIssues;
+    std::wstring note;                     // the catalog's note, or why the converter chose the tier
 };
+// Why the game runs a conversion without its models, "" when it runs with them: the game's rule (librecomp
+// conversion::models_refusal), kept the same. relink: the patch's relink.json (nullptr: a plain patch or none).
+// Packs load into Expansion RAM, physical 0x00400000-0x00800000; a relinked hack using it needs aki-roadmap#156.
+std::wstring conversion_models_refusal(const JsonValue* relink, bool relinkUnreadable);
+// The newest model pack format (AKP1 version) the games read (librecomp conversion::ModelsFormat).
+constexpr int kModelsFormat = 2;
+// A conversion tier as the player reads it ("verified" -> "Verified"; unknown words are kept as they are).
+std::wstring conversion_tier_word(const std::string& tier);
 // conversions\<id>\ folders with an aki.json, recorded or not, sorted by name.
 std::vector<ConversionInfo> list_conversions(const std::filesystem::path& dataDir);
 // Whether the player's ROM is one the conversion names (no names: any ROM).
