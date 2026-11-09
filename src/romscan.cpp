@@ -8,6 +8,7 @@
 #include <bcrypt.h>
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <fstream>
 #include <functional>
@@ -159,6 +160,7 @@ struct RomZip {
 }  // namespace
 
 static constexpr uintmax_t kMinRomBytes = 64;
+static constexpr uintmax_t kMinUnnamedRomBytes = 4ull << 20;  // a zip entry not named like a ROM is opened from 4 MB
 
 static std::wstring zip_entry_name(const mz_zip_archive_file_stat& st) {
     std::string nm = st.m_filename;
@@ -180,10 +182,12 @@ static std::vector<mz_uint> zip_rom_entries(RomZip& z) {
         if (st.m_uncomp_size < kMinRomBytes || st.m_uncomp_size > kMaxRomBytes) continue;
         // Only entries named like a ROM, or big enough for one, are opened (a texture-pack zip has thousands of files).
         std::string nm = st.m_filename;
-        std::transform(nm.begin(), nm.end(), nm.begin(), ::tolower);
+        std::transform(nm.begin(), nm.end(), nm.begin(), [](unsigned char c) { return (char)std::tolower(c); });
         auto ends = [&](const char* x) { size_t n = strlen(x); return nm.size() >= n && nm.compare(nm.size() - n, n, x) == 0; };
         bool romName = ends(".z64") || ends(".v64") || ends(".n64") || ends(".rom") || ends(".bin");
-        if (!romName && st.m_uncomp_size < (1u << 20)) continue;
+        bool notRom = ends(".png") || ends(".dds") || ends(".jpg") || ends(".jpeg") || ends(".bmp") || ends(".txt") ||
+                      ends(".htc") || ends(".hts") || ends(".rtz") || ends(".nrm") || ends(".json");
+        if (notRom || (!romName && st.m_uncomp_size < kMinUnnamedRomBytes)) continue;
         mz_zip_reader_extract_iter_state* it = mz_zip_reader_extract_iter_new(&z.za, i, 0);
         if (!it) continue;
         unsigned char head[4]{};
@@ -280,6 +284,7 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
         int roms = -1;
         if (!zip_rom_head(file, head, &got, &roms, &inner)) {
             if (roms == 0) {
+                e.zipWithoutRom = true;
                 e.note = L"a zip with no N64 ROM inside";
             } else if (roms > 1) {
                 e.note = L"a zip with " + std::to_wstring(roms) + L" N64 ROMs inside: extract it to scan each one";
@@ -429,11 +434,13 @@ bool romscan_start(const fs::path& dir, const std::vector<GameEntry>& games) {
             ++g_scan.generation;
         }
         std::vector<RomScanEntry> results;
+        size_t scanned = 0;
         for (const auto& f : files) {
             if (g_stop) break;
-            results.push_back(rom_classify(f, games));
+            RomScanEntry r = rom_classify(f, games);
+            if (!r.zipWithoutRom) results.push_back(std::move(r));  // an unrelated zip isn't listed (#280)
             std::lock_guard<std::mutex> lk(g_mu);
-            g_scan.done = results.size();
+            g_scan.done = ++scanned;
             ++g_scan.generation;
         }
         size_t base = 0, other = 0;
@@ -477,6 +484,13 @@ void romscan_shutdown() {
 // ---------------------------------------------------------------------------
 // Provisioning
 // ---------------------------------------------------------------------------
+
+bool rom_read_any_z64(const fs::path& file, std::vector<unsigned char>* z64) {
+    std::vector<unsigned char> data;
+    if (!read_z64(file, data, nullptr)) return false;
+    if (z64) *z64 = std::move(data);
+    return true;
+}
 
 std::wstring rom_z64_sha1(const fs::path& file) {
     std::vector<unsigned char> data;

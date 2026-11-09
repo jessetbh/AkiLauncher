@@ -687,6 +687,23 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
     std::error_code ec;
     std::filesystem::create_directories(g.romInstallPath.parent_path(), ec);
     ec.clear();
+    if (g.romSha1.empty() && rom_is_zip(src)) {
+        // No SHA1 to check (a custom game): the ROM inside the zip, never the zip itself (aki-roadmap#280).
+        std::vector<unsigned char> z64;
+        if (!rom_read_any_z64(src, &z64)) {
+            *errOut = L"That zip doesn't hold exactly one N64 ROM: extract it and select the ROM itself.";
+            return false;
+        }
+        std::ofstream f(g.romInstallPath, std::ios::binary | std::ios::trunc);
+        f.write((const char*)z64.data(), (std::streamsize)z64.size());
+        f.close();
+        if (f.fail()) {
+            *errOut = L"Couldn't write " + g.romInstallPath.wstring() + L" (disk full?)";
+            return false;
+        }
+        logf(L"ROM set for %s from the zip %s (stored as .z64)", g.title.c_str(), src.c_str());
+        return true;
+    }
     std::filesystem::copy_file(src, g.romInstallPath, std::filesystem::copy_options::overwrite_existing,
                                ec);
     auto ov = settings().overrides.find(g.artKey);

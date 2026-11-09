@@ -243,8 +243,36 @@ void run_romscan_tests(const fs::path& dir) {
         std::wstring zerr;
         CHECK(rom_provision(gz, zs, &zerr) && read_bytes(gz.romPath) == base0);  // the scan's Use this ROM
 
+        CHECK(zn.zipWithoutRom && !z2.zipWithoutRom && !zs.zipWithoutRom);
+        // review: an unnamed entry of 4 MB+ is probed (a ROM under another name); image entries never are; a non-ASCII
+        // name; a damaged zip says so.
+        std::vector<unsigned char> big = base0;
+        big.resize(4u << 20, 0x11);  // still the game's header, other SHA1
+        write_bytes(zips / L"unnamed.zip", zip_of({{"ROMFILE", big}, {"cover.png", base0}}));
+        RomScanEntry zu = rom_classify(zips / L"unnamed.zip", games);
+        CHECK(zu.verdict == RomVerdict::OtherBuild && zu.gameIndex == 0);
+        write_bytes(zips / L"png.zip", zip_of({{"shot.png", base0}}));
+        CHECK(rom_classify(zips / L"png.zip", games).zipWithoutRom);
+        write_bytes(zips / L"jp.zip", zip_of({{"\xE3\x83\x90\xE3\x83\xBC\xE3\x83\x81\xE3\x83\xA3\xE3\x83\xAB.Z64", base0}}));
+        RomScanEntry zj = rom_classify(zips / L"jp.zip", games);
+        CHECK(zj.verdict == RomVerdict::BaseDump && has(zj.note, L"\x30D0\x30FC\x30C1\x30E3\x30EB.Z64 in the zip"));
+        std::vector<unsigned char> broken = zip_of({{"Test Game.z64", base0}});
+        broken.resize(broken.size() / 2);
+        write_bytes(zips / L"broken.zip", broken);
+        RomScanEntry zb = rom_classify(zips / L"broken.zip", games);
+        CHECK(zb.verdict == RomVerdict::Unreadable || zb.verdict == RomVerdict::NotSupported);
+        std::vector<unsigned char> any;
+        CHECK(rom_read_any_z64(zips / L"hack.zip", &any) && any == hack0 && !rom_read_any_z64(zips / L"two.zip", &any));
+
         RomCandidates zc = rom_candidates(zips, 100);
-        CHECK(zc.files.size() == 5);
+        CHECK(zc.files.size() == 9);
+        // The background scan leaves zips without a ROM out of its list (none.zip, png.zip).
+        CHECK(romscan_start(zips, games));
+        for (int i = 0; i < 500 && romscan_status().phase == RomScanPhase::Scanning; ++i) Sleep(10);
+        RomScanStatus zst = romscan_status();
+        CHECK(zst.phase == RomScanPhase::Done && zst.done == 9 && zst.results.size() == 7);
+        romscan_clear();
+        romscan_shutdown();  // joins the worker (a joinable std::thread at exit terminates the process)
     }
     err.clear();
     CHECK(b && !rom_provision(g, *b, &err) && has(err, L"already has a ROM"));
