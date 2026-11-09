@@ -135,6 +135,10 @@ std::string pack_hash(const std::filesystem::path& p);
 
 // --- install, upgrade, remove ---------------------------------------------------------------------------------------
 
+// An absolute path with the \\?\ prefix, so file calls on it aren't held to MAX_PATH (260 characters): converted
+// packs nest deep (WWF Legends' menu textures pass 300 characters once staged, aki-roadmap#265).
+std::filesystem::path long_path_of(const std::filesystem::path& p);
+
 struct InstallTarget {
     std::filesystem::path dataDir;  // game_data_dir(g): mods\, conversions\, packages.json
     std::wstring gameTitle;

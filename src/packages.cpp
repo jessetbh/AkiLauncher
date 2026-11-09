@@ -447,21 +447,31 @@ bool Package::read(const std::string& rel, std::string* out, uint64_t limit) con
     return out->size() <= limit;
 }
 
+fs::path long_path_of(const fs::path& p) {
+    if (p.empty()) return {};  // never "\\\\?\\" (a StageGuard whose path was cleared)
+    std::error_code ec;
+    std::wstring s = fs::absolute(p, ec).lexically_normal().wstring();
+    if (s.rfind(L"\\\\?\\", 0) == 0) return s;
+    if (s.rfind(L"\\\\", 0) == 0) return L"\\\\?\\UNC\\" + s.substr(2);
+    return L"\\\\?\\" + s;
+}
+
 bool Package::extract(const std::string& rel, const fs::path& dest) const {
     int i = index(rel);
     if (i < 0) return false;
     std::error_code ec;
-    fs::create_directories(dest.parent_path(), ec);
+    const fs::path out = long_path_of(dest);  // deep converted packs pass 260 characters (aki-roadmap#265)
+    fs::create_directories(out.parent_path(), ec);
     if (zip_) {
         auto* za = (mz_zip_archive*)zip_;
         int zi = mz_zip_reader_locate_file(za, zipNames_[(size_t)i].c_str(), nullptr, 0);
-        FILE* f = zi < 0 ? nullptr : _wfopen(dest.c_str(), L"wb");
+        FILE* f = zi < 0 ? nullptr : _wfopen(out.c_str(), L"wb");
         if (!f) return false;
         bool ok = mz_zip_reader_extract_to_cfile(za, (mz_uint)zi, f, 0);
         ok = fclose(f) == 0 && ok;
         return ok;
     }
-    return fs::copy_file(path_ / fs::u8path(rel), dest, fs::copy_options::overwrite_existing, ec) && !ec;
+    return fs::copy_file(long_path_of(path_ / fs::u8path(rel)), out, fs::copy_options::overwrite_existing, ec) && !ec;
 }
 
 // --- checking a package --------------------------------------------------------------------------------------------
@@ -728,8 +738,9 @@ static bool hash_file(const fs::path& p, bool text, uint64_t* h) {
     return ok;
 }
 
-std::string pack_hash(const fs::path& p) {
+std::string pack_hash(const fs::path& in) {
     std::error_code ec;
+    const fs::path p = long_path_of(in);  // aki-roadmap#265: files under deep folders count too
     std::vector<std::pair<std::string, fs::path>> files;   // (relative '/' path, file)
     if (fs::is_directory(p, ec)) {
         for (auto it = fs::recursive_directory_iterator(p, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
@@ -957,8 +968,9 @@ static fs::path edited_name(const fs::path& dataDir, const fs::path& p, const st
 
 static bool move_path(const fs::path& from, const fs::path& to) {
     std::error_code ec;
-    fs::create_directories(to.parent_path(), ec);
-    return MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH) != 0;
+    const fs::path f = long_path_of(from), t = long_path_of(to);  // aki-roadmap#265: deep folders move too
+    fs::create_directories(t.parent_path(), ec);
+    return MoveFileExW(f.c_str(), t.c_str(), MOVEFILE_WRITE_THROUGH) != 0;
 }
 
 // A recorded file going away: unedited (its hash is the recorded one) to the Recycle Bin, edited kept as .edited-<date>.
@@ -977,8 +989,8 @@ static bool retire(const fs::path& dataDir, const fs::path& p, const std::string
 
 static bool write_zip_from(const Package& pk, const std::vector<std::string>& files, const std::string& prefix, const fs::path& dest) {
     std::error_code ec;
-    fs::create_directories(dest.parent_path(), ec);
-    FILE* f = _wfopen(dest.c_str(), L"wb");
+    fs::create_directories(long_path_of(dest).parent_path(), ec);
+    FILE* f = _wfopen(long_path_of(dest).c_str(), L"wb");
     if (!f) return false;
     mz_zip_archive za{};
     bool ok = mz_zip_writer_init_cfile(&za, f, 0);
@@ -1098,7 +1110,7 @@ PackageInstall install_package(const fs::path& src, const InstallTarget& t, cons
     // Stage every part in the data folder (the same volume, so the moves below are renames).
     std::error_code ec;
     fs::path staging = t.dataDir / (L".aki-staging-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
-    struct StageGuard { fs::path p; ~StageGuard() { std::error_code e; fs::remove_all(p, e); } } guard{staging};
+    struct StageGuard { fs::path p; ~StageGuard() { std::error_code e; fs::remove_all(long_path_of(p), e); } } guard{staging};
     {
         Package pk(src);
         for (auto& p : parts) {
@@ -1139,7 +1151,7 @@ PackageInstall install_package(const fs::path& src, const InstallTarget& t, cons
     auto rollback = [&] {
         for (auto it = placed.rbegin(); it != placed.rend(); ++it) {
             std::error_code e;
-            fs::remove_all(*it, e);
+            fs::remove_all(long_path_of(*it), e);
         }
         for (auto it = aside.rbegin(); it != aside.rend(); ++it) move_path(it->backup, it->original);
     };
