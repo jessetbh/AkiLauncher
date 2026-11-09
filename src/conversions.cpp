@@ -10,6 +10,7 @@
 #include "installer.h"
 #include "launch.h"
 #include "packages.h"
+#include "selfupdate.h"
 #include "miniz.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -225,6 +226,7 @@ namespace {
         if (auto r = j.find("requires"); r != j.end() && r->is_object() && r->contains("patch") && (*r)["patch"].is_object()) {
             c.requiresPatchBase = wide(str((*r)["patch"], "base"));
         }
+        if (auto r = j.find("requires"); r != j.end() && r->is_object()) c.minimumGame = wide(str(*r, "minimum_recomp_version"));
         return c;
     }
 
@@ -243,6 +245,11 @@ namespace {
         c.notes = std::move(n.notes);
         c.texturesInstalled = n.texturesInstalled;
         c.codesRunnable = n.codesRunnable;
+        // aki-roadmap#264: a game too old for conversions would silently play the original.
+        c.needsGame = conversion_needs_newer_game(g.installedTag, c.minimumGame);
+        if (!c.needsGame.empty())
+            c.notes.insert(c.notes.begin(), L"Needs " + g.title + L": Recompiled " + c.needsGame + L" or newer (you have " +
+                           g.installedTag + L"): update the game to play this conversion");
     }
 }
 

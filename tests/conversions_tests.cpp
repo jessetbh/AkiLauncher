@@ -193,6 +193,28 @@ namespace {
             if (c.id == L"wc2") { seen2++; CHECK(c.codesRunnable && c.notes.empty()); }
         }
         CHECK(seen2 == 2);
+
+        // aki-roadmap#264: a launcher-installed game older than 0.3.0 ignores AKI_CONVERSION and plays the original;
+        // the conversion says what it needs (and the launch is refused with that), a 0.3.0 install or a depot build
+        // (no version.txt) runs it, and an aki.json requires.minimum_recomp_version above 0.3.0 counts too.
+        put(data / L"conversions" / L"needs" / L"aki.json",
+            R"({"format":"aki-conversion","format_version":1,"game":"nomercy","id":"needs","name":"Needs","requires":{"minimum_recomp_version":"0.4.1"}})");
+        GameEntry old = g;
+        old.installedTag = L"v0.2.0";
+        int seen3 = 0;
+        for (const auto& c : list_conversions(old)) {
+            if (c.id == L"wc2") { seen3++; CHECK(c.needsGame == L"0.3.0" && !c.notes.empty() &&
+                                                c.notes[0].find(L"Recompiled 0.3.0 or newer (you have v0.2.0)") != std::wstring::npos); }
+            if (c.id == L"needs") { seen3++; CHECK(c.needsGame == L"0.4.1"); }
+        }
+        CHECK(seen3 == 2);
+        GameEntry current = g;
+        current.installedTag = L"v0.3.0";
+        for (const auto& c : list_conversions(current)) {
+            if (c.id == L"wc2") CHECK(c.needsGame.empty() && c.notes.empty());
+            if (c.id == L"needs") CHECK(c.needsGame == L"0.4.1");
+        }
+        for (const auto& c : list_conversions(g)) CHECK(c.needsGame.empty());  // a depot / dev build: no version
     }
 }
 

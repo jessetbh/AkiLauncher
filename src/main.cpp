@@ -4334,8 +4334,23 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                     g_session.conversion = widen(c->id);
                     g_session.conversionName = c->name;
                     // Its RT rig and materials files from its aki.json (aki-roadmap#57).
-                    for (const ConversionInfo& fc : list_conversions(games[launchIdx]))
-                        if (fc.id == g_session.conversion) { convEnv = conversion_env(fc); break; }
+                    for (const ConversionInfo& fc : list_conversions(games[launchIdx])) {
+                        if (fc.id != g_session.conversion) continue;
+                        // aki-roadmap#264: an older game ignores AKI_CONVERSION and plays the original: say so instead.
+                        if (!fc.needsGame.empty()) {
+                            ready = false;
+                            g_session.statusNote = fc.name + L" needs " + games[launchIdx].title + L": Recompiled " +
+                                                   fc.needsGame + L" or newer; this one is " +
+                                                   games[launchIdx].installedTag + L". Update the game first.";
+                            logf(L"play: %s refused: the game is %s, the conversion needs %s", fc.id.c_str(),
+                                 games[launchIdx].installedTag.c_str(), fc.needsGame.c_str());
+                            g_session.conversion.clear();
+                            g_session.conversionName.clear();
+                        } else {
+                            convEnv = conversion_env(fc);
+                        }
+                        break;
+                    }
                 }
             }
             bool launched = ready && g_session.launch(games[launchIdx], &err, convEnv.empty() ? nullptr : &convEnv);

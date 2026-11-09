@@ -91,6 +91,18 @@ static void test_game_update_offered() {
     CHECK(!game_update_offered(L"", L"v0.3.0"));        // nothing installed by the launcher: no update line
 }
 
+// aki-roadmap#264: conversions need a 0.3.0+ game (older ones ignore AKI_CONVERSION), or the package's own minimum.
+static void test_conversion_needs_newer_game() {
+    CHECK(conversion_needs_newer_game(L"v0.2.0", L"") == L"0.3.0");
+    CHECK(conversion_needs_newer_game(L"v0.3.0-rc.1", L"") == L"0.3.0");
+    CHECK(conversion_needs_newer_game(L"v0.3.0", L"").empty());
+    CHECK(conversion_needs_newer_game(L"v0.4.0", L"0.3.5").empty());
+    CHECK(conversion_needs_newer_game(L"v0.3.0", L"0.3.5") == L"0.3.5");
+    CHECK(conversion_needs_newer_game(L"v0.2.0", L"0.1.0") == L"0.3.0");  // never below the first conversion game
+    CHECK(conversion_needs_newer_game(L"", L"0.9.0").empty());             // a depot / dev build: nothing to compare
+    CHECK(conversion_needs_newer_game(L"hand-made", L"").empty());
+}
+
 static void test_feed() {
     auto rels = parse_launcher_releases(kFeed);
     CHECK(rels.size() == 3);  // beta, 0.2.1, 0.1.4 (no draft, no zip-less, no non-version tag)
@@ -131,6 +143,7 @@ static void test_entries() {
 
 void run_selfupdate_tests(const fs::path& dir) {
     test_versions();
+    test_conversion_needs_newer_game();
     test_game_update_offered();
     test_feed();
     test_dev_rule(dir / L"dev");
