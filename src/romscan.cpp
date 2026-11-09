@@ -349,7 +349,7 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
         e.verdict = RomVerdict::OtherBuild;
         // A hack or translation: players bring it in through Import, which converts it (aki-roadmap#278).
         e.note = g.title + L": a hack, translation or other build (" + describe(e.header) +
-                 L"). To play it, import it: Mods page > Import... turns it into a conversion of " + g.title +
+                 L"). To play it, import it: Mods page > Import a mod... turns it into a conversion of " + g.title +
                  L", which needs the " + g.romNote + L".";
     }
     return e;

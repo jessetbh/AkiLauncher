@@ -131,10 +131,11 @@ except the ports' own GitHub releases, which contain no game data.
 **How do I add mods and texture packs?** Select the game and press `M`
 (`Start` on a controller) for its Mods page. It lists what is in the game's
 mods folder: name, version, authors, type (code mod, texture pack or both)
-and thumbnail. *Install files...* takes `.nrm` mods, `.rtz` texture packs and
-`.zip` files (a texture pack zipped as is becomes an `.rtz`; a mod package
-installs the `.nrm`/`.rtz` files inside it). *Install a pack folder...* copies
-a texture-pack folder. You can also drop any of these on the launcher window.
+and thumbnail. *Import a mod...* takes one file: an `.nrm` mod, an `.rtz` texture
+pack or a `.zip` (a texture pack zipped as is becomes an `.rtz`; a mod package
+installs the `.nrm`/`.rtz` files inside it). *Import a folder...* takes a texture-pack
+folder, or a folder of mods, packs and hacks (each item on its own). You can also drop
+any of these on the launcher window.
 - A mod whose `mod.json` names another game is refused.
 - Replacing a file moves the old copy to the Recycle Bin, and *Remove* does
   the same, so both can be undone.
@@ -143,6 +144,8 @@ a texture-pack folder. You can also drop any of these on the launcher window.
   where you turn mods on and off and set their order.
 - The mods folder is `%LOCALAPPDATA%\<Game>Recompiled\mods\`, or `mods\` in
   the game's folder when it runs portable. *Open mods folder* opens it.
+
+**How do I add mods, texture packs, ROM hacks and patches?** On the game's Mods page: **Import a mod...** takes one file (a mod, a texture pack, a ROM hack, a patch, a Project64 bundle zip), **Import a folder...** takes everything in a folder you pick (each item on its own; a texture pack or a Project64 bundle folder counts as one item, a folder of them is opened up). Dropping a file or a folder on the window does the same. Hacks and patches are converted into conversions of the game they belong to, whichever game's page you import them from. Importing uses a mouse and keyboard (file dialogs); your originals are never changed.
 
 **And model packs (imported 3D models)?** For No Mercy and VPW2, the Mods page has a **Model packs** section. It lists
 the packs in the game's `mods\models\` with their preview, name, author and license, plus a warning when a pack has no
@@ -163,7 +166,7 @@ file is replaced in one step, so the game never reads half of it. Wrestler names
 `assets\rosters\<game>-roster.json` next to the launcher, or AkiTools' `model-templates\profiles\` in a depot. Without
 one, a wrestler line is shown but can only be changed in `models.txt` (**Open models.txt**).
 
-Installing packs: the Mods page's **Install files...**, **Install a pack folder...** or a drop on the window takes a
+Installing packs: the Mods page's **Import a mod...**, **Import a folder...** or a drop on the window takes a
 model pack too. It accepts an `<id>.akimodel` folder, a folder of them, or a zip of either.
 - The pack goes into `mods\models\`, and its `<id>-hd.rtz` (inside the pack, or next to it) into `mods\`.
 - A pack built for another game is refused.
@@ -203,7 +206,7 @@ Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
   byte-swapped dump is saved as `.z64`);
 - another build of a supported game (a hack, translation or other revision)
   is named as such, with how to play it: import it on the Mods page
-  (*Import...*), which converts it into a conversion of that game;
+  (*Import a mod...*), which converts it into a conversion of that game;
 - everything else is listed as not supported.
 
 Only files whose header names one of the games are read in full and

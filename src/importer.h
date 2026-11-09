@@ -113,6 +113,20 @@ inline const wchar_t* kNeedsAttentionFolder = L"Needs attention";
 // hidden/dot entries and the reason .txt files the launcher writes. Sorted by name.
 std::vector<std::filesystem::path> import_folder_items(const std::filesystem::path& importDir);
 
+// aki-roadmap#290: what a picked folder (Import a folder..., a folder dropped on the window or sitting in the Import
+// folder) imports. A folder that IS one item stays one: mod.json / rt64.json / aki.json / aki-package.json /
+// model.bin at its top, a folder of model packs, a Project64 bundle or user-folder export ("Project64 - Save", a
+// GLideN64 cache), a Rice/Jabo texture pack (its textures at its top, or its parts below it), or a folder with nothing
+// importable in it. A collection (ROMs, archives, patches, .nrm/.rtz/.akimodel files at its top; a collection or a
+// one-item folder among its subfolders; two texture packs side by side that replace the same textures) imports each
+// entry on its own, subfolders the same way; loose readmes, images and saves in it are not items. Links aren't
+// followed. A texture pack nested in a collection is never taken for the collection itself.
+std::vector<std::filesystem::path> import_expand_folder(const std::filesystem::path& dir);
+// A Project64 bundle's marker files (Project64.exe / .cht / .cfg / .rdb) within three levels of dir.
+bool import_folder_holds_pj64_bundle(const std::filesystem::path& dir);
+// A ROM file anywhere in dir (.z64 / .n64 / .v64), so a folder holding ROMs is never copied into a mods folder.
+bool import_folder_holds_rom(const std::filesystem::path& dir);
+
 // Where an Import folder entry goes when its batch is done, from the outcomes of every line it produced:
 // all done fine (converted, installed, have it, stock) -> Imported\; any NeedsRom / NeedsGame / Waiting / Working /
 // Stopped -> stays (retried next time); otherwise (unsupported, failed) -> Needs attention\.

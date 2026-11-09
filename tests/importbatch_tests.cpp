@@ -96,6 +96,27 @@ static void test_local_batch(const fs::path& dir) {
     CHECK(fs::exists(dir / L"picked" / L"other pack.zip") && p.lines.size() == 1 && p.lines[0].outcome == ImportOutcome::Installed);
 }
 
+// aki-roadmap#290: a folder in the Import folder (or picked) imports each item inside it; the Import folder moves and
+// undoes the folder as one entry.
+static void test_folder_batch(const fs::path& dir) {
+    std::vector<std::wstring> un;
+    ImportEnv env = base_env(dir, &un);
+    fs::path coll = env.importDir / L"my downloads";
+    put(coll / L"one pack.zip", "x");
+    put(coll / L"two pack.nrm", "x");
+    ImportBatch b;
+    b.start(env, import_folder_items(env.importDir), true);
+    CHECK(b.lines.size() == 2 && b.lines[0].outcome == ImportOutcome::Installed && b.lines[1].outcome == ImportOutcome::Installed);
+    CHECK(b.lines[0].name == L"one pack.zip" && b.lines[1].name == L"two pack.nrm");
+    CHECK(fs::exists(env.importDir / L"Imported" / L"my downloads" / L"one pack.zip") && !fs::exists(coll));
+    std::wstring msg;
+    CHECK(b.undo(&msg) && un.size() == 2 && fs::exists(coll / L"two pack.nrm"));
+    // Picked with Import a folder...: the same lines, nothing moves.
+    ImportBatch p;
+    p.start(env, {coll}, false);
+    CHECK(p.lines.size() == 2 && fs::exists(coll / L"one pack.zip"));
+}
+
 static fs::path find_python() {
     wchar_t buf[MAX_PATH]{};
     if (GetEnvironmentVariableW(L"AKI_TEST_PYTHON", buf, MAX_PATH)) return buf;
@@ -160,6 +181,7 @@ static void test_stub_worker(const fs::path& dir) {
     put(env.importDir / L"hack.z64", "x");
     put(env.importDir / L"patch.bps", "x");
     put(env.importDir / L"bundle" / L"a.z64", "x");
+    put(env.importDir / L"bundle" / L"Project64.exe", "x");  // a Project64 bundle: one item (aki-roadmap#290)
     put(env.importDir / L"z pack", "x");
     put(env.importDir / L"again.z64", "x");
     put(env.importDir / L"kept.z64", "x");
@@ -216,6 +238,7 @@ void run_importbatch_tests(const fs::path& tmp) {
     fs::remove_all(tmp, ec);
     test_local_batch(tmp / L"local");
     test_stub_worker(tmp / L"stub");
+    test_folder_batch(tmp / L"folderbatch");
     CHECK(has(converter_missing(tmp / L"nowhere"), L"converter folder"));
     CHECK(quote_arg(L"C:\\a b\\") == L"\"C:\\a b\\\\\"" && quote_arg(L"plain") == L"plain" && quote_arg(L"a\"b") == L"\"a\\\"b\"");
 }

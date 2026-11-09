@@ -1,12 +1,14 @@
 #include "importer.h"
 
 #include "json.h"
+#include "texpacks.h"
 
 #include <windows.h>
 
 #include <algorithm>
 #include <cwctype>
 #include <fstream>
+#include <map>
 #include <set>
 
 namespace fs = std::filesystem;
@@ -316,6 +318,256 @@ std::vector<fs::path> import_folder_items(const fs::path& importDir) {
     std::sort(out.begin(), out.end(), [](const fs::path& a, const fs::path& b) {
         return lower(a.filename().wstring()) < lower(b.filename().wstring());
     });
+    return out;
+}
+
+// --- picked folders (aki-roadmap#290) -------------------------------------------------------------------------------
+
+static bool is_rom_ext(const std::wstring& ext) { return ext == L".z64" || ext == L".n64" || ext == L".v64"; }
+
+// A file that is an import item of its own (not a texture image, a save, text or the like).
+static bool is_item_file(const fs::path& p) {
+    std::wstring e = lower(p.extension().wstring());
+    static const wchar_t* kExts[] = {L".z64", L".n64", L".v64", L".zip", L".7z", L".rar", L".ips", L".bps", L".ups",
+                                     L".xdelta", L".vcdiff", L".aps", L".ppf", L".nrm", L".rtz", L".akimodel"};
+    for (const wchar_t* k : kExts)
+        if (e == k) return true;
+    return false;
+}
+
+static bool is_image_file(const fs::path& p) {
+    std::wstring e = lower(p.extension().wstring());
+    return e == L".png" || e == L".dds" || e == L".bmp";
+}
+
+static bool is_link(const fs::path& p) {
+    DWORD a = GetFileAttributesW(p.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
+static bool is_pj64_marker(const std::wstring& leafLower) {
+    return leafLower == L"project64.exe" || leafLower == L"project64.cht" || leafLower == L"project64.cfg" ||
+           leafLower == L"project64.rdb";
+}
+
+bool import_folder_holds_pj64_bundle(const fs::path& dir) {
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (it.depth() > 3) { it.disable_recursion_pending(); continue; }  // a bundle's markers sit near its top
+        std::error_code fec;
+        if (it->is_regular_file(fec) && is_pj64_marker(lower(it->path().filename().wstring()))) return true;
+    }
+    return false;
+}
+
+bool import_folder_holds_rom(const fs::path& dir) {
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::error_code fec;
+        if (it->is_regular_file(fec) && is_rom_ext(lower(it->path().extension().wstring()))) return true;
+    }
+    return false;
+}
+
+// A texture's key: a Rice name without its game name and format suffix ("#CRC#fmt#size[#pal]"), a Jabo name's hash.
+static std::wstring texture_key(const std::wstring& leaf) {
+    size_t h = leaf.find(L'#');
+    std::wstring k;
+    if (h != std::wstring::npos) {
+        k = leaf.substr(h);
+        size_t u = k.rfind(L'_');
+        k = u != std::wstring::npos ? k.substr(0, u) : fs::path(k).stem().wstring();
+    } else {
+        k = fs::path(leaf).stem().wstring();
+    }
+    return lower(k);
+}
+
+namespace {
+enum class FolderKind { One, Pack, Collection };
+
+// What a folder is, built from its children (each folder walked once).
+struct FolderInfo {
+    FolderKind kind = FolderKind::One;
+    bool markedItem = false;          // One because of a marker (not just "nothing importable here")
+    std::set<std::wstring> keys;      // its textures' keys (texture_key), for telling packs apart
+    std::set<std::wstring> games;     // its Rice names' games (rice_name_game), else the raw name (VPW's Shift-JIS)
+};
+
+// Two packs side by side are separate when they replace the same textures (a real share, not one stray texture two
+// attire folders of one pack have in common) or belong to different games.
+constexpr size_t kPackShareMin = 32;
+
+static bool separate_packs(const FolderInfo& a, const FolderInfo& b) {
+    if (!a.games.empty() && !b.games.empty()) {
+        bool common = false;
+        for (const auto& g : a.games) common = common || b.games.count(g) > 0;
+        if (!common) return true;
+    }
+    const auto& small_ = a.keys.size() <= b.keys.size() ? a.keys : b.keys;
+    const auto& big_ = a.keys.size() <= b.keys.size() ? b.keys : a.keys;
+    size_t both = 0;
+    for (const auto& k : small_) both += big_.count(k);
+    return both >= kPackShareMin && both * 20 >= small_.size();
+}
+
+struct FolderClassifier {
+    std::map<fs::path, FolderInfo> memo;
+
+    // Entries at dir's top, as the Import folder lists them (hidden, Thumbs.db, ... skipped), links left out.
+    static std::vector<fs::path> entries(const fs::path& dir) {
+        std::vector<fs::path> v;
+        for (const auto& e : import_folder_items(dir))
+            if (!is_link(e)) v.push_back(e);
+        return v;
+    }
+
+    static bool has_pj64_markers(const fs::path& dir) {
+        std::error_code ec;
+        for (const auto& e : entries(dir)) {
+            std::wstring leaf = lower(e.filename().wstring());
+            if (!fs::is_directory(e, ec) && is_pj64_marker(leaf)) return true;
+            if (leaf == L"config" && fs::is_directory(e, ec))
+                for (const auto& c : entries(e))
+                    if (is_pj64_marker(lower(c.filename().wstring()))) return true;
+        }
+        return false;
+    }
+
+    // One item by what sits at its top: a mod, an rt64 texture pack, a conversion source, a package, a model pack, a
+    // Project64 bundle (Project64.exe, or Config\Project64.*, here or in a "Project64..." folder right inside it) or a
+    // Project64 user-folder export ("Project64 - Save", "Project64 - Plugin - GFX - GLideN64 - Cache", .hts/.htc).
+    static bool marked(const fs::path& dir) {
+        std::error_code ec;
+        for (const wchar_t* m : {L"mod.json", L"rt64.json", L"aki.json", L"aki-package.json", L"model.bin"})
+            if (fs::is_regular_file(dir / m, ec)) return true;
+        if (has_pj64_markers(dir)) return true;
+        for (const auto& e : entries(dir)) {
+            std::wstring leaf = lower(e.filename().wstring());
+            if (fs::is_directory(e, ec)) {
+                if (leaf.rfind(L"project64 - ", 0) == 0) return true;                        // its user folders
+                if (leaf.rfind(L"project64", 0) == 0 && has_pj64_markers(e)) return true;  // the emulator beside
+            } else {
+                std::wstring ext = lower(e.extension().wstring());
+                if (ext == L".hts" || ext == L".htc") return true;
+            }
+        }
+        return false;
+    }
+
+    // A folder of model packs (subfolders with model.bin) whose only loose items are their -hd.rtz files: one item,
+    // install_model_packs_from takes the lot.
+    static bool model_pack_folder(const fs::path& dir) {
+        std::error_code ec;
+        bool packs = false;
+        for (const auto& e : entries(dir)) {
+            if (fs::is_directory(e, ec)) {
+                if (fs::is_regular_file(e / L"model.bin", ec)) packs = true;
+            } else if (is_item_file(e) && lower(e.extension().wstring()) != L".rtz") {
+                return false;
+            }
+        }
+        return packs;
+    }
+
+    const FolderInfo& classify(const fs::path& dir, int depth) {
+        auto hit = memo.find(dir);
+        if (hit != memo.end()) return hit->second;
+        FolderInfo info = classify_uncached(dir, depth);
+        return memo.emplace(dir, std::move(info)).first->second;
+    }
+
+    FolderInfo classify_uncached(const fs::path& dir, int depth) {
+        FolderInfo info;
+        std::error_code ec;
+        if (marked(dir) || model_pack_folder(dir)) {
+            info.markedItem = true;
+            return info;
+        }
+        bool topItems = false, topArchivesOnly = true, topSmallArchives = true, topTextures = false;
+        std::vector<fs::path> subs;
+        for (const auto& e : entries(dir)) {
+            if (fs::is_directory(e, ec)) {
+                subs.push_back(e);
+            } else if (is_item_file(e)) {
+                topItems = true;
+                std::wstring x = lower(e.extension().wstring());
+                if (x != L".zip" && x != L".7z" && x != L".rar") topArchivesOnly = false;  // a ROM, patch or mod
+                std::error_code sec;
+                if (fs::file_size(e, sec) >= (1u << 20) || sec) topSmallArchives = false;     // readmes are KBs, hacks MBs
+            } else if (is_image_file(e)) {
+                std::wstring leaf = e.filename().wstring(), riceName;
+                TexNaming n = texture_name_kind(leaf, &riceName);
+                if (n == TexNaming::Rice || n == TexNaming::Jabo) {  // the textures' own names, not any .png
+                    topTextures = true;
+                    info.keys.insert(texture_key(leaf));
+                    if (n == TexNaming::Rice) {
+                        std::wstring g = rice_name_game(riceName);
+                        if (g.empty() && !riceName.empty()) g = L"raw:" + lower(riceName);  // a VPW (Shift-JIS) or hack name
+                        if (!g.empty()) info.games.insert(g);
+                    }
+                }
+            }
+        }
+        std::vector<const FolderInfo*> packs;
+        bool childCollection = false;
+        if (depth < 8) {
+            for (const auto& sdir : subs) {
+                const FolderInfo& c = classify(sdir, depth + 1);
+                if (c.kind == FolderKind::Collection || c.markedItem) childCollection = true;
+                if (c.kind == FolderKind::Pack) packs.push_back(&c);
+                info.keys.insert(c.keys.begin(), c.keys.end());
+                info.games.insert(c.games.begin(), c.games.end());
+            }
+        }
+        bool separate = false;
+        for (size_t i = 0; i < packs.size() && !separate; ++i)
+            for (size_t j = i + 1; j < packs.size() && !separate; ++j) separate = separate_packs(*packs[i], *packs[j]);
+        bool packLike = topTextures || !packs.empty();
+        if (childCollection || separate) {
+            info.kind = FolderKind::Collection;
+        } else if (topItems) {
+            // A readme or extras archive inside a pack rides along with it: beside the pack's own textures, or (small,
+            // under 1 MB) beside its parts. Anything else beside packs (a ROM, a patch, a mod, a hack zip) is a collection.
+            info.kind = topArchivesOnly && (topTextures || (packs.size() >= 2 && topSmallArchives)) ? FolderKind::Pack
+                                                                                                    : FolderKind::Collection;
+        } else {
+            info.kind = packLike ? FolderKind::Pack : FolderKind::One;
+        }
+        if (info.kind == FolderKind::Collection) {  // a collection's textures aren't one pack's: don't pass them up
+            info.keys.clear();
+            info.games.clear();
+        }
+        return info;
+    }
+
+    void expand(const fs::path& dir, int depth, std::vector<fs::path>* out) {
+        if (classify(dir, depth).kind != FolderKind::Collection) {
+            out->push_back(dir);
+            return;
+        }
+        std::error_code ec;
+        for (const auto& e : entries(dir)) {
+            if (fs::is_directory(e, ec)) {
+                const FolderInfo& c = classify(e, depth + 1);
+                if (c.kind == FolderKind::One && !c.markedItem) continue;  // nothing importable in it (plugins, docs)
+                expand(e, depth + 1, out);
+            } else if (is_item_file(e)) {
+                out->push_back(e);  // loose readmes, images, saves, exes: not items of their own
+            }
+        }
+    }
+};
+}  // namespace
+
+std::vector<fs::path> import_expand_folder(const fs::path& dir) {
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return {dir};
+    FolderClassifier fc;
+    std::vector<fs::path> out;
+    fc.expand(dir, 0, &out);
     return out;
 }
 
