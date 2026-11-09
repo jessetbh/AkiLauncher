@@ -19,6 +19,7 @@ const std::vector<std::pair<std::wstring, ShotPage>>& shot_pages() {
         {L"quick-match", ShotPage::QuickMatch},
         {L"history-tour", ShotPage::HistoryTour},
         {L"dev", ShotPage::Dev},
+        {L"import", ShotPage::Import},
     };
     return pages;
 }

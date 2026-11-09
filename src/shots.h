@@ -16,7 +16,7 @@
 // --game: a games.json id (default nomercy when the registry has it). --demo: demo data even where real data exists.
 // --size: the frame in pixels (default 1600x900; 3840x2160 for a 4K screen), 320x240 to 7680x4320.
 
-enum class ShotPage { Home, Settings, Mods, ModelPacks, QuickMatch, HistoryTour, Dev };
+enum class ShotPage { Home, Settings, Mods, ModelPacks, QuickMatch, HistoryTour, Dev, Import };
 
 // The pages in --shot-all order, with their command-line names.
 const std::vector<std::pair<std::wstring, ShotPage>>& shot_pages();
