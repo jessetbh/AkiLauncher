@@ -1064,11 +1064,16 @@ static void draw_model_packs(const GameEntry& g, float panelW, float thumb) {
 
 static std::filesystem::path conversions_data_dir(const GameEntry& g);
 
+// A game's mods folder as the Mods page uses it (the import sandbox and the screenshot tool have their own).
+static std::filesystem::path mods_dir_for(const GameEntry& g) {
+    return !g_importSandbox.empty() ? g_importSandbox / L"data" / g.artKey / L"mods"
+           : g_shotModsDir.empty() ? game_mods_dir(g) : g_shotModsDir;
+}
+
 static void refresh_mods(const std::vector<GameEntry>& games) {
     release_mod_thumbs();
     const GameEntry& g = games[g_ui.modsGame];
-    g_ui.modsDir = !g_importSandbox.empty() ? g_importSandbox / L"data" / g.artKey / L"mods"
-                   : g_shotModsDir.empty() ? game_mods_dir(g) : g_shotModsDir;
+    g_ui.modsDir = mods_dir_for(g);
     // Bundled mods sit in assets\mods next to the exe (none known without one).
     std::filesystem::path bundled = g.exeFound && g_shotModsDir.empty() ? g.exePath.parent_path() / L"assets" / L"mods"
                                                                          : std::filesystem::path();
@@ -1309,12 +1314,26 @@ static ImportLine install_local(const std::vector<GameEntry>& games, const std::
         for (wchar_t& ch : l.detail) if (ch == L'\n') ch = L' ';
     } else {
         InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title, g.modelProfile);
+        const GameEntry* into = &g;
+        if (!r.ok && !r.otherGameId.empty()) {
+            // A Rice texture pack named for another of the games: an import is one way in for every game, so it goes
+            // to that game's mods folder, like the hacks of a mixed batch (aki-roadmap#279).
+            int og = game_index_for_mod_id(games, r.otherGameId);
+            if (og >= 0 && games[og].exeFound) {
+                into = &games[og];
+                r = install_mod(src, mods_dir_for(*into), into->modGameId, into->title, into->modelProfile);
+                l.gameKey = engine_game_key(into->modGameId);
+            } else if (og >= 0) {
+                r.message = l.name + L" is a texture pack for " + games[og].title + L": install " + games[og].title +
+                            L" first, then import it again";
+            }
+        }
         l.detail = r.message;
         if (r.ok) {
             l.outcome = ImportOutcome::Installed;
             l.kind = L"mod";
             for (const auto& p : r.installed) {
-                l.installed.push_back({g.artKey, {}, p});
+                l.installed.push_back({into->artKey, {}, p});
                 if (inspect_mod(p).kind_text() == L"Texture pack") l.kind = L"texture pack";
             }
         } else if (r.already) {

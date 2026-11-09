@@ -218,6 +218,13 @@ static std::string read_file(const fs::path& p) {
     return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 }
 
+int game_index_for_mod_id(const std::vector<GameEntry>& games, const std::wstring& modGameId) {
+    if (modGameId.empty()) return -1;
+    for (size_t i = 0; i < games.size(); ++i)
+        if (games[i].modGameId == modGameId) return (int)i;
+    return -1;
+}
+
 std::vector<GameEntry> load_registry(const fs::path& file) {
     std::error_code ec;
     if (!file.empty() && fs::is_regular_file(file, ec)) {
