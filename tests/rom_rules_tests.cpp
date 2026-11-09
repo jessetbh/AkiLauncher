@@ -158,7 +158,21 @@ static void rom_field_saves_an_override_only_for_another_file() {
     CHECK(rom_override_from_field(L"mine.z64", L"checkout\\wm2k.z64") == L"mine.z64");
 }
 
+// aki-roadmap#263: closing Settings compared the EXE field with the registry's depot path (<install>\build-msvc\X.exe),
+// which a launcher-installed game never has (its exe is at the install folder's root), so every installed game got an
+// absolute exe= override and a portable launcher folder couldn't move. The default is the resolved install exe.
+static void settings_saves_no_exe_override_for_an_untouched_installed_game() {
+    const std::wstring installExe = L"C:\\Games\\AKI\\games\\nomercy\\NoMercyRecompiled.exe";
+    CHECK(exe_field_reset(installExe) == installExe);
+    CHECK(exe_override_from_field(exe_field_reset(installExe), installExe).empty());
+    CHECK(exe_override_from_field(L"c:/games/aki/GAMES/nomercy/NoMercyRecompiled.exe", installExe).empty());
+    CHECK(exe_override_from_field(L"", installExe).empty());
+    CHECK(exe_override_from_field(L"D:\\dev\\NoMercyRecomp\\build-msvc\\NoMercyRecompiled.exe", installExe) ==
+          L"D:\\dev\\NoMercyRecomp\\build-msvc\\NoMercyRecompiled.exe");
+}
+
 int main() {
+    settings_saves_no_exe_override_for_an_untouched_installed_game();
     settings_reset_saves_no_override_when_an_imported_copy_is_used();
     rom_field_saves_an_override_only_for_another_file();
     imported_retail_beats_the_main_checkouts_hack();

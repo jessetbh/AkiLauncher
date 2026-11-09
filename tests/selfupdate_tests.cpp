@@ -77,6 +77,20 @@ static void test_versions() {
     CHECK(version_text(ver(L"v0.3.0-rc.1")) == L"0.3.0-rc.1");
 }
 
+// aki-roadmap#262: a game installed at v0.3.0 was offered GitHub's v0.2.0 as an update (any other tag was one).
+static void test_game_update_offered() {
+    CHECK(game_update_offered(L"v0.2.0", L"v0.3.0"));
+    CHECK(!game_update_offered(L"v0.3.0", L"v0.2.0"));  // the downgrade the 0.3.0 test hit
+    CHECK(!game_update_offered(L"v0.3.0", L"v0.3.0"));
+    CHECK(!game_update_offered(L"v0.3.0", L"0.3.0"));   // same version, other spelling
+    CHECK(game_update_offered(L"v0.3.0-rc.1", L"v0.3.0"));
+    CHECK(!game_update_offered(L"v0.3.0", L"v0.3.0-rc.1"));
+    CHECK(game_update_offered(L"v0.9.0", L"v0.10.0"));  // numbers, not text
+    CHECK(!game_update_offered(L"v0.3.0", L"nightly")); // a release tag that isn't a version: never
+    CHECK(game_update_offered(L"hand-made", L"v0.3.0")); // an installed tag that isn't one: as before
+    CHECK(!game_update_offered(L"", L"v0.3.0"));        // nothing installed by the launcher: no update line
+}
+
 static void test_feed() {
     auto rels = parse_launcher_releases(kFeed);
     CHECK(rels.size() == 3);  // beta, 0.2.1, 0.1.4 (no draft, no zip-less, no non-version tag)
@@ -117,6 +131,7 @@ static void test_entries() {
 
 void run_selfupdate_tests(const fs::path& dir) {
     test_versions();
+    test_game_update_offered();
     test_feed();
     test_dev_rule(dir / L"dev");
     test_entries();

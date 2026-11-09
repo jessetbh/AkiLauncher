@@ -61,6 +61,13 @@ std::wstring rom_override_from_field(const std::wstring& field, const std::wstri
     return field;
 }
 
+std::wstring exe_field_reset(const std::wstring& registryExe) { return registryExe; }
+
+std::wstring exe_override_from_field(const std::wstring& field, const std::wstring& registryExe) {
+    if (field.empty() || path_key(field) == path_key(registryExe)) return L"";
+    return field;
+}
+
 bool log_says_rom_refused(const std::vector<std::string>& logLines) {
     for (const std::string& line : logLines) {
         if (line.find("ROM validation failed") != std::string::npos) return true;
