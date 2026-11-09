@@ -16,6 +16,8 @@
 //
 // --game: a games.json id (default nomercy when the registry has it). --demo: demo data even where real data exists.
 // --size: the frame in pixels (default 1600x900; 3840x2160 for a 4K screen), 320x240 to 7680x4320.
+// AKI_SHOT_CARD (home and dev shots): the card's optional lines for layout checks, a comma list of update, played,
+// note and wrongrom (aki-roadmap#240), e.g. AKI_SHOT_CARD=update,played,note,wrongrom.
 
 enum class ShotPage { Home, Settings, Mods, ModelPacks, QuickMatch, HistoryTour, Dev, Import };
 
