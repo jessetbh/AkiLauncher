@@ -541,7 +541,7 @@ static void test_conversion_models(const fs::path& tmp) {
     CHECK(pkg::conversion_models_refusal(nullptr, false).empty());                              // a plain patch
     CHECK(refusal(R"({"code_ranges": [], "data_ranges": []})").empty());                        // de-relinked, moved nothing
     std::wstring why = refusal(R"({"code_ranges": [[2151682016, 2152333312]]})");                // BTBW
-    CHECK(has(why, L"0x80400FE0") && has(why, L"#156"));
+    CHECK(has(why, L"0x80400FE0") && has(why, L"aren't supported yet") && !has(why, L"#"));
     CHECK(!refusal(R"({"zero": [{"ram": 2153775104, "size": 6864}]})").empty());              // Legends: 0x80600000
     CHECK(refusal(R"({"code_ranges": [[2399141888, 2399146444]]})").empty());                   // above 8 MB
     CHECK(!refusal(R"({"zero": [{"ram": 2689597440, "size": 16}]})").empty());                // KSEG1
@@ -563,7 +563,7 @@ static void test_conversion_models(const fs::path& tmp) {
     CHECK(convs.size() == 4);
     if (convs.size() == 4) {
         CHECK(!convs[0].modelsOff && convs[0].models == L"Custom models for 2 wrestlers: Kenny Omega, Jon Moxley");
-        CHECK(convs[1].modelsOff && has(convs[1].models, L"Custom models are off for this conversion") && has(convs[1].models, L"#156"));
+        CHECK(convs[1].modelsOff && has(convs[1].models, L"Custom models are off for this conversion") && !has(convs[1].models, L"#"));
         CHECK(convs[2].modelsOff && has(convs[2].models, L"format 9"));
         CHECK(convs[3].models.empty() && !convs[3].modelsOff);
     }
