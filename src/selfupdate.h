@@ -24,7 +24,7 @@ std::wstring version_text(const Version& v);                  // "0.2.0" / "0.2.
 bool game_update_offered(const std::wstring& installedTag, const std::wstring& releaseTag);
 // A conversion on a game too old to run it (aki-roadmap#264): games before 0.3.0 don't know AKI_CONVERSION and
 // silently play the original game. Returns the version the game needs ("0.3.0", or the conversion's own
-// minimum_recomp_version when that is newer), or "" when it can run it. A game without a version (a depot or dev
+// minimum_recomp_version when that is newer), or "" when it can run it. 0.3.0 pre-releases count as 0.3.0. A game without a version (a depot or dev
 // build) or with one that isn't a version can: nothing to compare.
 extern const wchar_t* const kFirstConversionGameVersion;
 std::wstring conversion_needs_newer_game(const std::wstring& installedTag, const std::wstring& minimumVersion);

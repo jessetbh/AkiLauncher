@@ -1059,7 +1059,7 @@ static void refresh_mods(const std::vector<GameEntry>& games) {
     g_ui.modIsHack.clear();
     for (const auto& m : g_ui.modItems)
         g_ui.modIsHack.push_back(m.kind == ModKind::Nrm && !m.code && !m.bundled && pkg::is_patch_mod(m.path));
-    g_ui.convs = pkg::list_conversions(conversions_data_dir(g), narrow(port_rom_tag(g)));
+    g_ui.convs = pkg::list_conversions(conversions_data_dir(g), narrow(port_rom_tag(g)), game_run_version(g), g.title);
     g_ui.convCache.clear();
 }
 
@@ -1096,7 +1096,8 @@ static const std::vector<pkg::ConversionInfo>& game_conversions(const std::vecto
     auto it = g_ui.convCache.find(games[i].artKey);
     if (it == g_ui.convCache.end()) {
         std::vector<pkg::ConversionInfo> v;
-        if (g_shot ? !g_shotModsDir.empty() : games[i].exeFound) v = pkg::list_conversions(conversions_data_dir(games[i]), narrow(port_rom_tag(games[i])));
+        if (g_shot ? !g_shotModsDir.empty() : games[i].exeFound) v = pkg::list_conversions(conversions_data_dir(games[i]), narrow(port_rom_tag(games[i])),
+                                                                                         game_run_version(games[i]), games[i].title);
         it = g_ui.convCache.emplace(games[i].artKey, std::move(v)).first;
     }
     return it->second;
@@ -3293,6 +3294,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                                                               : "C Changes It (Shift+C Back)      V Or Down Details And Known Issues");
             if (pick && !pkg::conversion_rom_matches(*pick, rom_sha1_of(s)))
                 text_centered_colored(palette::warn, narrow(pick->name) + " is made for another ROM than yours");
+            if (pick && !pick->needsGame.empty())  // aki-roadmap#264: said before Play, not only after the cart goes in
+                text_centered_colored(palette::warn, narrow(pick->name) + " needs " + narrow(s.title) + ": Recompiled " +
+                                                         narrow(pick->needsGame) + " or newer: update the game, or play the original");
             ImGui::PopFont();
         }
     }
@@ -4329,6 +4333,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             g_session.conversion.clear();
             g_session.conversionName.clear();
             std::vector<std::pair<std::wstring, std::wstring>> convEnv;
+            bool convRefused = false;
             if (!quick && tourStop < 0) {
                 if (const pkg::ConversionInfo* c = play_as(games, launchIdx)) {
                     g_session.conversion = widen(c->id);
@@ -4339,11 +4344,14 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                         // aki-roadmap#264: an older game ignores AKI_CONVERSION and plays the original: say so instead.
                         if (!fc.needsGame.empty()) {
                             ready = false;
+                            convRefused = true;
+                            const std::wstring have = game_run_version(games[launchIdx]);
                             g_session.statusNote = fc.name + L" needs " + games[launchIdx].title + L": Recompiled " +
-                                                   fc.needsGame + L" or newer; this one is " +
-                                                   games[launchIdx].installedTag + L". Update the game first.";
+                                                   fc.needsGame + L" or newer; this one is " + have +
+                                                   L". Update the game, or switch Play as to the original game (" +
+                                                   (g_ui.padInput ? L"LB" : L"C") + L").";
                             logf(L"play: %s refused: the game is %s, the conversion needs %s", fc.id.c_str(),
-                                 games[launchIdx].installedTag.c_str(), fc.needsGame.c_str());
+                                 have.c_str(), fc.needsGame.c_str());
                             g_session.conversion.clear();
                             g_session.conversionName.clear();
                         } else {
@@ -4352,6 +4360,11 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                         break;
                     }
                 }
+            }
+            if (convRefused && testLaunch >= 0) {  // --test-launch: a refused conversion is a failed launch
+                logf(L"test-launch: refused: %s", g_session.statusNote.c_str());
+                exitCodeOut = 2;
+                break;
             }
             bool launched = ready && g_session.launch(games[launchIdx], &err, convEnv.empty() ? nullptr : &convEnv);
             if (launched) g_ui.tourRunning = tourStop;

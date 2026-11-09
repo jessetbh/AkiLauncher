@@ -105,13 +105,14 @@ bool game_update_offered(const std::wstring& installedTag, const std::wstring& r
 const wchar_t* const kFirstConversionGameVersion = L"0.3.0";
 
 std::wstring conversion_needs_newer_game(const std::wstring& installedTag, const std::wstring& minimumVersion) {
-    Version have, need, first;
+    Version have, first, own;
     if (!parse_version(installedTag, &have)) return L"";
     parse_version(kFirstConversionGameVersion, &first);
-    need = first;
-    Version own;
-    if (parse_version(minimumVersion, &own) && compare_versions(own, need) > 0) need = own;
-    return compare_versions(have, need) < 0 ? version_text(need) : L"";
+    if (parse_version(minimumVersion, &own) && compare_versions(own, first) > 0)
+        return compare_versions(have, own) < 0 ? version_text(own) : L"";
+    Version release = have;
+    release.pre.clear();  // a 0.3.0 pre-release (an RC) already runs conversions
+    return compare_versions(release, first) < 0 ? version_text(first) : L"";
 }
 
 std::wstring version_text(const Version& v) {

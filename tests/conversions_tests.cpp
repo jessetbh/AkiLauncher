@@ -201,6 +201,8 @@ namespace {
             R"({"format":"aki-conversion","format_version":1,"game":"nomercy","id":"needs","name":"Needs","requires":{"minimum_recomp_version":"0.4.1"}})");
         GameEntry old = g;
         old.installedTag = L"v0.2.0";
+        old.installDir = g.repoPath;
+        old.exePath = g.repoPath / L"NoMercyRecompiled.exe";
         int seen3 = 0;
         for (const auto& c : list_conversions(old)) {
             if (c.id == L"wc2") { seen3++; CHECK(c.needsGame == L"0.3.0" && !c.notes.empty() &&
@@ -208,7 +210,22 @@ namespace {
             if (c.id == L"needs") { seen3++; CHECK(c.needsGame == L"0.4.1"); }
         }
         CHECK(seen3 == 2);
-        GameEntry current = g;
+        // The UI's list (pkg::list_conversions: Conversions page, card, Play as) says the same.
+        int seen4 = 0;
+        for (const auto& c : pkg::list_conversions(data, "nomercy-rev1", game_run_version(old), old.title)) {
+            if (c.id == "wc2") { seen4++; CHECK(c.needsGame == L"0.3.0" && has_note(c.notes, L"Recompiled 0.3.0 or newer")); }
+            if (c.id == "needs") { seen4++; CHECK(c.needsGame == L"0.4.1"); }
+        }
+        CHECK(seen4 == 2);
+        // An exe= override or a depot build next to the old install runs another exe: the install's version says nothing.
+        GameEntry overridden = old;
+        overridden.exePath = tmp / L"depot" / L"NoMercyRecomp" / L"build-msvc" / L"NoMercyRecompiled.exe";
+        CHECK(game_run_version(overridden).empty());
+        for (const auto& c : list_conversions(overridden)) CHECK(c.needsGame.empty());
+        GameEntry otherCase = old;
+        otherCase.exePath = fs::path(old.installDir.wstring() + L"/NOMERCYRECOMPILED.EXE");
+        CHECK(game_run_version(otherCase) == L"v0.2.0");
+        GameEntry current = old;
         current.installedTag = L"v0.3.0";
         for (const auto& c : list_conversions(current)) {
             if (c.id == L"wc2") CHECK(c.needsGame.empty() && c.notes.empty());

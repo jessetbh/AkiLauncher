@@ -240,16 +240,15 @@ namespace {
         f.codesFile = c.codes ? c.codesFile : std::string();
         f.manifestCodesRom = narrow(c.codesRom);
         f.portTag = narrow(port_rom_tag(g));
+        f.gameVersion = game_run_version(g);
+        f.minimumGame = c.minimumGame;
+        f.gameTitle = g.title;
         pkg::read_conversion_note_files(game_data_dir(g), c.folder, f);
         pkg::ConversionNotes n = pkg::conversion_notes(f);
         c.notes = std::move(n.notes);
         c.texturesInstalled = n.texturesInstalled;
         c.codesRunnable = n.codesRunnable;
-        // aki-roadmap#264: a game too old for conversions would silently play the original.
-        c.needsGame = conversion_needs_newer_game(g.installedTag, c.minimumGame);
-        if (!c.needsGame.empty())
-            c.notes.insert(c.notes.begin(), L"Needs " + g.title + L": Recompiled " + c.needsGame + L" or newer (you have " +
-                           g.installedTag + L"): update the game to play this conversion");
+        c.needsGame = n.needsGame;  // aki-roadmap#264
     }
 }
 

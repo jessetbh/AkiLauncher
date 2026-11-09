@@ -94,7 +94,8 @@ static void test_game_update_offered() {
 // aki-roadmap#264: conversions need a 0.3.0+ game (older ones ignore AKI_CONVERSION), or the package's own minimum.
 static void test_conversion_needs_newer_game() {
     CHECK(conversion_needs_newer_game(L"v0.2.0", L"") == L"0.3.0");
-    CHECK(conversion_needs_newer_game(L"v0.3.0-rc.1", L"") == L"0.3.0");
+    CHECK(conversion_needs_newer_game(L"v0.3.0-rc.1", L"").empty());     // an RC of 0.3.0 runs conversions
+    CHECK(conversion_needs_newer_game(L"v0.2.9-rc.1", L"") == L"0.3.0");
     CHECK(conversion_needs_newer_game(L"v0.3.0", L"").empty());
     CHECK(conversion_needs_newer_game(L"v0.4.0", L"0.3.5").empty());
     CHECK(conversion_needs_newer_game(L"v0.3.0", L"0.3.5") == L"0.3.5");
