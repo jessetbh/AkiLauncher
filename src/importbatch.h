@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -67,6 +68,9 @@ private:
     ImportEnv env_;
     Phase phase_ = Phase::Idle;
     std::vector<std::filesystem::path> inputs_, workerInputs_;
+    // aki-roadmap#290: an item found inside a picked folder -> that folder (the input the Import folder moves).
+    std::map<std::filesystem::path, std::filesystem::path> topOf_;
+    std::filesystem::path top_of(const std::filesystem::path& source) const;
     bool fromImportFolder_ = false, undone_ = false;
     std::unique_ptr<LineProcess> proc_;
     std::filesystem::path stderrLog_;

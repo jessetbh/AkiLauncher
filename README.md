@@ -144,6 +144,8 @@ a texture-pack folder. You can also drop any of these on the launcher window.
 - The mods folder is `%LOCALAPPDATA%\<Game>Recompiled\mods\`, or `mods\` in
   the game's folder when it runs portable. *Open mods folder* opens it.
 
+**How do I add mods, texture packs, ROM hacks and patches?** On the game's Mods page: **Import a mod...** takes one file (a mod, a texture pack, a ROM hack, a patch, a Project64 bundle zip), **Import a folder...** takes everything in a folder you pick (each item on its own; a texture pack or a Project64 bundle folder counts as one item, a folder of them is opened up). Dropping a file or a folder on the window does the same. Hacks and patches are converted into conversions of the game they belong to, whichever game's page you import them from. Importing uses a mouse and keyboard (file dialogs); your originals are never changed.
+
 **And model packs (imported 3D models)?** For No Mercy and VPW2, the Mods page has a **Model packs** section. It lists
 the packs in the game's `mods\models\` with their preview, name, author and license, plus a warning when a pack has no
 license. Each pack has two controls, saved to `models\models.txt` straight away:
@@ -203,7 +205,7 @@ Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
   byte-swapped dump is saved as `.z64`);
 - another build of a supported game (a hack, translation or other revision)
   is named as such, with how to play it: import it on the Mods page
-  (*Import...*), which converts it into a conversion of that game;
+  (*Import a mod...*), which converts it into a conversion of that game;
 - everything else is listed as not supported.
 
 Only files whose header names one of the games are read in full and

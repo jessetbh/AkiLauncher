@@ -218,7 +218,6 @@ struct UiState {
     bool modsNoteOk = true;
     std::vector<ImportLine> modsResults;  // aki-roadmap#228: one line per item of the last multi-item install
     bool showImport = false;              // the Import results screen (over the Mods page)
-    int importNew = 0;                    // entries waiting in the Import folder
     std::string importLog;                // the [Log] popup's text
     bool importLogOpen = false;
     int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
@@ -1385,7 +1384,6 @@ static ImportLine install_local(const std::vector<GameEntry>& games, const std::
 static std::filesystem::path launcher_data_dir() {
     return g_importSandbox.empty() ? settings_path().parent_path() : g_importSandbox;
 }
-static std::filesystem::path import_dir() { return launcher_data_dir() / L"Import"; }
 static std::filesystem::path converted_dir() { return launcher_data_dir() / L"Converted"; }
 
 // The converter (AkiMods tools/romhack): AKI_CONVERTER_TOOLS, else tools\romhack next to the launcher (0.3.0 ships it
@@ -1408,9 +1406,9 @@ static int game_by_engine_key(const std::vector<GameEntry>& games, const std::ws
     return -1;
 }
 
-static void refresh_import_count() {
-    g_ui.importNew = (int)import_folder_items(import_dir()).size();
-}
+// aki-roadmap#296: no Import drop-box folder any more (an old Import\ stays on disk, unread). Two ways in: Import a
+// mod... (one item) and Import a folder... (everything inside it, #290); drag and drop takes the same routes.
+static void refresh_import_count() {}
 
 // A Converted line's package zip(s) installed through the #154 installer into the game it was built for.
 static void install_converted(const std::vector<GameEntry>& games, ImportLine& l) {
@@ -1479,7 +1477,6 @@ static void start_import(const std::vector<GameEntry>& games, const std::vector<
 
 static ImportEnv make_import_env(const std::vector<GameEntry>& games) {
     ImportEnv env;
-    env.importDir = import_dir();
     env.convertedDir = converted_dir();
     env.toolsDir = converter_tools_dir();
     env.logDir = converted_dir() / L".logs";
@@ -1520,7 +1517,7 @@ static void install_into_mods(const std::vector<GameEntry>& games, const std::ve
     start_import(games, srcs, false);
 }
 
-// Multi-select picker for mod files; empty on cancel.
+// The one-item picker (Import a mod..., aki-roadmap#296): empty on cancel.
 static std::vector<std::filesystem::path> pick_mod_files() {
     std::vector<std::filesystem::path> out;
     IFileOpenDialog* dlg = nullptr;
@@ -1531,8 +1528,8 @@ static std::vector<std::filesystem::path> pick_mod_files() {
     dlg->SetFileTypes(2, types);
     DWORD opts = 0;
     dlg->GetOptions(&opts);
-    dlg->SetOptions(opts | FOS_ALLOWMULTISELECT | FOS_FORCEFILESYSTEM);
-    dlg->SetTitle(L"Import mods, texture packs, ROM hacks or patches");
+    dlg->SetOptions(opts | FOS_FORCEFILESYSTEM);
+    dlg->SetTitle(L"Import a mod, texture pack, ROM hack or patch");
     if (SUCCEEDED(dlg->Show(g_hwnd))) {
         IShellItemArray* items = nullptr;
         if (SUCCEEDED(dlg->GetResults(&items))) {
@@ -1854,33 +1851,22 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     // aki-roadmap#228: one way in for everything (mods, texture packs, packages, ROM hacks, patches, Project64 bundles).
     bool gameRuns = g_session.active();
     ImGui::BeginDisabled(gameRuns || g_import.busy());
-    // A file dialog is a dead end for a controller (aki-roadmap#232): with a pad these two are off, and the Import
-    // folder (Convert my Import folder) is the way in.
-    ImGui::BeginDisabled(g_ui.padInput);
-    if (ImGui::Button("Import...")) {
-        auto files = pick_mod_files();
-        if (!files.empty()) start_import(games, files, false);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Import a folder...")) {
-        std::filesystem::path dir = pick_folder(L"");
-        if (!dir.empty()) start_import(games, {dir}, false);
-    }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    std::string convLabel = "Convert my Import folder (" + std::to_string(g_ui.importNew) + " new)";
-    ImGui::BeginDisabled(g_ui.importNew == 0);
-    if (ImGui::Button(convLabel.c_str())) start_import(games, import_folder_items(import_dir()), true);
-    ImGui::EndDisabled();
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Open Import folder")) {
-        std::error_code ec;
-        std::filesystem::create_directories(import_dir(), ec);
-        ShellExecuteW(nullptr, L"explore", import_dir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    }
-    if (!g_import.lines.empty()) {
+    // aki-roadmap#296: two ways in, both file dialogs, so a pad gets a hint instead of buttons it can't use (#232).
+    bool importButtons = !g_ui.padInput;
+    if (importButtons) {
+        if (ImGui::Button("Import a mod...")) {
+            auto files = pick_mod_files();
+            if (!files.empty()) start_import(games, files, false);
+        }
         ImGui::SameLine();
+        if (ImGui::Button("Import a folder...")) {
+            std::filesystem::path dir = pick_folder(L"");
+            if (!dir.empty()) start_import(games, {dir}, false);
+        }
+    }
+    ImGui::EndDisabled();
+    if (!g_import.lines.empty()) {
+        if (importButtons) ImGui::SameLine();
         if (ImGui::Button(g_import.busy() ? "Import running..." : "Last import")) g_ui.showImport = true;
     }
     if (ImGui::Button("Open mods folder")) {
@@ -1896,8 +1882,8 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     ImGui::PushFont(g_ui.fontSmall);
     if (gameRuns) ImGui::TextColored(palette::warn, "Import is off while a game runs: close the game first.");
     else if (g_ui.padInput)
-        ImGui::TextColored(palette::faint, "With a controller: put files in the Import folder, then Convert my Import folder.");
-    ImGui::TextColored(palette::faint, "%s   -   or drop any mix of mods, texture packs, ROM hacks, patches and folders on this window",
+        ImGui::TextColored(palette::faint, "Importing needs a mouse and keyboard: Import a mod... or Import a folder... (or drop them on this window).");
+    ImGui::TextColored(palette::faint, "%s   -   or drop a mod, a texture pack, a ROM hack, a patch or a folder of them on this window",
                        narrow(g_ui.modsDir.wstring()).c_str());
     if (!g_ui.modsNote.empty()) {
         ImGui::PushTextWrapPos(0.0f);
@@ -1995,7 +1981,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         ImGui::TextColored(palette::accent, "Conversions");
         ImGui::PushFont(g_ui.fontSmall);
         if (g_ui.convs.empty())
-            ImGui::TextColored(palette::dim, "None installed. A conversion package, or a ROM-hack .nrm, installs here through Import...");
+            ImGui::TextColored(palette::dim, "None installed. A conversion package, or a ROM-hack .nrm, installs here through Import a mod...");
         const pkg::ConversionInfo* pick = play_as(games, g_ui.modsGame);
         bool focusNow = g_ui.convFocusFrames > 0;
         if (focusNow) --g_ui.convFocusFrames;
@@ -2872,7 +2858,7 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
 
 // Returns the index of a game to launch this frame, or -1.
 // The Needs ROM prompt by controller (aki-roadmap#232): no file dialog, the game's accepted dump is looked for in the
-// ROM scan's folder, the other games' ROM folders, the folders Find it... used, the Import folder and the usual
+// ROM scan's folder, the other games' ROM folders, the folders Find it... used and the usual
 // Windows folders (Downloads, Desktop, Documents; 3 folders deep), and set up when found. False with *err naming
 // where it looked.
 static bool pad_find_rom(std::vector<GameEntry>& games, int index, std::wstring* err) {
@@ -2882,7 +2868,6 @@ static bool pad_find_rom(std::vector<GameEntry>& games, int index, std::wstring*
     for (const auto& o : games)
         if (o.romFound) cands.push_back(o.romPath.parent_path());
     for (const auto& d : g_importRomDirs) cands.push_back(d);
-    cands.push_back(import_dir());
     wchar_t home[MAX_PATH]{};
     if (GetEnvironmentVariableW(L"USERPROFILE", home, MAX_PATH))
         for (const wchar_t* sub : {L"Downloads", L"Desktop", L"Documents"}) cands.push_back(std::filesystem::path(home) / sub);
@@ -3927,9 +3912,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         g_importSandbox = std::filesystem::absolute(importSandbox);
         g_ui.modsGame = gi;
         g_ui.modsDir = g_importSandbox / L"data" / ig[gi].artKey / L"mods";
-        bool fromFolder = importPaths.size() == 1 && importPaths[0] == L"--import-folder";
-        if (fromFolder) importPaths = import_folder_items(import_dir());
-        g_import.start(make_import_env(ig), importPaths, fromFolder);
+        g_import.start(make_import_env(ig), importPaths, false);  // a picked folder imports what it holds (#290); no Import folder (#296)
         while (g_import.busy()) {
             g_import.tick();
             Sleep(100);

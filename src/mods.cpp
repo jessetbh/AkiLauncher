@@ -1,6 +1,7 @@
 #include "mods.h"
 
 #include "games.h"
+#include "importer.h"
 #include "json.h"
 #include "modelpacks.h"
 #include "launch.h"
@@ -564,16 +565,7 @@ static bool names_hold_pj64_bundle(const std::vector<std::wstring>& names) {
     return false;
 }
 
-static bool folder_holds_pj64_bundle(const fs::path& dir) {
-    std::error_code ec;
-    std::vector<std::wstring> names;
-    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
-         it.increment(ec)) {
-        if (it.depth() > 3) { it.disable_recursion_pending(); continue; }  // a bundle's markers sit near its top
-        if (it->is_regular_file(ec)) names.push_back(it->path().filename().wstring());
-    }
-    return names_hold_pj64_bundle(names);
-}
+static bool folder_holds_pj64_bundle(const fs::path& dir) { return import_folder_holds_pj64_bundle(dir); }
 
 InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const std::wstring& gameId,
                           const std::wstring& gameTitle, const std::string& modelProfile) {
@@ -727,6 +719,13 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
         }
         if (folder_holds_pj64_bundle(src)) {  // aki-roadmap#265: the converter's
             r.message = name + L": a Project64 bundle";
+            r.unrecognized = true;
+            return r;
+        }
+        // aki-roadmap#290: a folder with ROMs in it is never copied into a mods folder (as a texture pack or a mod):
+        // the converter looks at it instead.
+        if (import_folder_holds_rom(src)) {
+            r.message = name + L" holds ROM files: not a mod or texture pack folder";
             r.unrecognized = true;
             return r;
         }

@@ -41,9 +41,17 @@ void ImportBatch::start(const ImportEnv& env, const std::vector<fs::path>& input
     badLines_.clear();
     workerLog.clear();
     phase_ = Phase::Converting;
-    status = L"Looking at " + std::to_wstring(inputs.size()) + L" item(s)...";
+    // aki-roadmap#290: a picked folder imports what it holds, each item on its own (a folder that is one item stays one).
+    topOf_.clear();
+    std::vector<fs::path> items;
+    for (const auto& in : inputs)
+        for (const auto& it : import_expand_folder(in)) {
+            items.push_back(it);
+            if (it != in) topOf_[it] = in;
+        }
+    status = L"Looking at " + std::to_wstring(items.size()) + L" item(s)...";
     // The launcher's own installers first: mods, texture packs (Rice/Jabo wrapped), packages, stock/PAL ROMs.
-    for (const auto& in : inputs) {
+    for (const auto& in : items) {
         ImportLine l = env_.installLocal(in);
         l.source = in;
         if (l.viaWorker) {
@@ -61,6 +69,11 @@ void ImportBatch::start(const ImportEnv& env, const std::vector<fs::path>& input
         return;
     }
     begin_worker();
+}
+
+fs::path ImportBatch::top_of(const fs::path& source) const {
+    auto it = topOf_.find(source);
+    return it == topOf_.end() ? source : it->second;
 }
 
 void ImportBatch::fail_placeholders(const std::wstring& why) {
@@ -242,7 +255,7 @@ void ImportBatch::finish() {
             std::vector<ImportOutcome> outs;
             std::vector<const ImportLine*> mine;
             for (const auto& l : lines)
-                if (l.source == in) {
+                if (top_of(l.source) == in) {
                     outs.push_back(l.outcome);
                     mine.push_back(&l);
                 }
@@ -333,6 +346,7 @@ bool ImportBatch::undo(std::wstring* message) {
     std::wstring err;
     if (!keys.empty() && !ledger_remove(ledger, keys, &err)) problems += (problems.empty() ? L"" : L"; ") + err;
     for (const auto& p : packages) fs::remove(p, ec);
+    const bool hadMoves = !moved_.empty();
     for (auto it = moved_.rbegin(); it != moved_.rend(); ++it) {
         fs::path back = fs::exists(it->first, ec) ? import_free_name(it->first.parent_path(), it->first.filename()) : it->first;
         fs::rename(it->second, back, ec);
@@ -342,7 +356,7 @@ bool ImportBatch::undo(std::wstring* message) {
     reasonFiles_.clear();
     undone_ = true;
     status = L"Undone: " + std::to_wstring(removed) + L" install(s) removed (saves stay), " + std::to_wstring(packages.size()) +
-             L" converted package(s) deleted, the Import folder put back as it was." +
+             L" converted package(s) deleted" + (!hadMoves ? std::wstring(L".") : L", the Import folder put back as it was.") +
              (problems.empty() ? L"" : L" Not everything: " + problems);
     if (message) *message = status;
     return problems.empty();

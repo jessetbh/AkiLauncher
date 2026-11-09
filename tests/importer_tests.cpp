@@ -7,6 +7,8 @@
 #include "../src/texpacks.h"
 #include "check.h"
 
+#include <algorithm>
+
 #include <windows.h>
 
 #include <fstream>
@@ -365,6 +367,100 @@ static void test_results_file() {
     CHECK(!import_lines_from_json("{}", &back, &st) && !import_lines_from_json("nope", &back, &st));
 }
 
+// aki-roadmap#290: a picked folder like the test library's nomercy-only (hacks, zips, a Project64 bundle, two Rice packs)
+// imports each item; it is never one Rice pack because packs are nested in it, and its ROMs never go into mods.
+static void test_expand_folder(const fs::path& dir) {
+    auto leaves = [](const std::vector<fs::path>& v) {
+        std::vector<std::wstring> out;
+        for (const auto& p : v) out.push_back(p.filename().wstring());
+        return out;
+    };
+    auto has = [](const std::vector<std::wstring>& v, const wchar_t* x) { return std::find(v.begin(), v.end(), x) != v.end(); };
+    fs::path mixed = dir / L"nomercy-only";
+    put_text(mixed / L"ECW Born to be Wired.z64", "rom");
+    put_text(mixed / L"WWF No Mercy (Unlocked).zip", "zip");
+    put_text(mixed / L"2026.06.16 Ch64 - Public v2.zip", "zip");
+    put_text(mixed / L"Thumbs.db", "x");
+    put_text(mixed / L"WWF No Mercy (Rice pack, TNA vs ROH)" / L"TNA vs ROH" / L"4LK" / kRice1, "png");
+    put_text(mixed / L"WWF No Mercy (Rice pack, TNA vs ROH)" / L"TNA vs ROH" / L"BG James" / kRice2, "png");
+    put_text(mixed / L"WWF No Mercy (Rice pack, Forever Indy)" / kRice3, "png");
+    put_text(mixed / L"Legends bundle" / L"Config" / L"Project64.cht", "codes");
+    put_text(mixed / L"Legends bundle" / L"Legends.z64", "rom");
+    std::vector<fs::path> got = import_expand_folder(mixed);
+    std::vector<std::wstring> l = leaves(got);
+    CHECK(got.size() == 6);
+    CHECK(has(l, L"ECW Born to be Wired.z64") && has(l, L"WWF No Mercy (Unlocked).zip") && has(l, L"2026.06.16 Ch64 - Public v2.zip"));
+    CHECK(has(l, L"WWF No Mercy (Rice pack, TNA vs ROH)") && has(l, L"WWF No Mercy (Rice pack, Forever Indy)"));
+    CHECK(has(l, L"Legends bundle"));  // a Project64 bundle stays one item (the converter's), ROM and all
+    CHECK(!has(l, L"nomercy-only") && !has(l, L"Thumbs.db") && !has(l, L"TNA vs ROH"));
+    // A library: collections inside collections are opened too, down to the items.
+    fs::path lib = dir / L"library";
+    put_text(lib / L"hacks" / L"Wrestlemania X 64.zip", "zip");
+    put_text(lib / L"stock" / L"nomercy.z64", "rom");
+    put_text(lib / L"patches" / L"wzbb.xdelta", "patch");
+    put_text(lib / L"patches" / L"wzbb_readme.txt", "text");  // a loose readme in a collection is not an item
+    l = leaves(import_expand_folder(lib));
+    CHECK(l.size() == 3 && has(l, L"Wrestlemania X 64.zip") && has(l, L"nomercy.z64") && has(l, L"wzbb.xdelta"));
+    // Folders that are one item stay one: a Rice pack, a mod with mod.json (even with a zip inside), an empty folder.
+    fs::path pack = mixed / L"WWF No Mercy (Rice pack, TNA vs ROH)";
+    CHECK(import_expand_folder(pack).size() == 1 && import_expand_folder(pack)[0] == pack);
+    fs::path mod = dir / L"a mod";
+    put_text(mod / L"mod.json", "{}");
+    put_text(mod / L"extras.zip", "zip");
+    CHECK(import_expand_folder(mod).size() == 1 && import_expand_folder(mod)[0] == mod);
+    fs::create_directories(dir / L"empty");
+    CHECK(import_expand_folder(dir / L"empty").size() == 1);
+    // A folder holding only texture packs that replace the same textures: each pack on its own, never one merged pack.
+    fs::path packsOnly = dir / L"texture-packs";
+    put_text(packsOnly / L"Pack A" / L"Wrestlers" / kRice1, "png");
+    put_text(packsOnly / L"Pack A" / L"Arenas" / kRice2, "png");
+    put_text(packsOnly / L"Pack B" / L"Inner" / L"Wrestlers" / kRice1, "png");
+    put_text(packsOnly / L"Pack B" / L"Inner" / L"Arenas" / kRice3, "png");
+    put_text(packsOnly / L"Formula.txt", "x");
+    l = leaves(import_expand_folder(packsOnly));
+    CHECK(l.size() == 2 && has(l, L"Pack A") && has(l, L"Pack B"));
+    // One pack's own parts (no shared textures) stay one pack, and so does a pack with a readme zip at its top or deep in.
+    CHECK(import_expand_folder(packsOnly / L"Pack A").size() == 1);
+    fs::path zipPack = dir / L"zip pack";
+    put_text(zipPack / kRice1, "png");
+    put_text(zipPack / L"readme.zip", "zip");
+    CHECK(import_expand_folder(zipPack).size() == 1 && import_expand_folder(zipPack)[0] == zipPack);
+    fs::path deepZip = dir / L"deep zip pack";
+    put_text(deepZip / L"Arenas" / kRice2, "png");
+    put_text(deepZip / L"Arenas" / L"extras.zip", "zip");
+    put_text(deepZip / L"Wrestlers" / kRice1, "png");
+    CHECK(import_expand_folder(deepZip).size() == 1);
+    // A Project64 user-folder export (n64modderz: GLideN64 cache + saves, a .pj.zip in the save folder): one item.
+    fs::path pjx = dir / L"WWF MOD";
+    put_text(pjx / L"Project64 - Plugin - GFX - GLideN64 - Cache" / L"WWF No Mercy_HIRESTEXTURES.hts", "x");
+    put_text(pjx / L"Project64 - Save" / L"WWF No Mercy-D2D1" / L"WWF No Mercy (U) (V1.0).pj.zip", "zip");
+    put_text(pjx / L"Project64 - Save" / L"WWF No Mercy-D2D1" / L"WWF No Mercy.fla", "x");
+    CHECK(import_expand_folder(pjx).size() == 1 && import_expand_folder(pjx)[0] == pjx);
+    // Model packs with their -hd.rtz beside them: one item (install_model_packs_from); a single pack with its rtz too.
+    fs::path models = dir / L"models";
+    put_text(models / L"q-hogan" / L"model.bin", "x");
+    put_text(models / L"q-hogan" / L"q-hogan-hd.rtz", "x");
+    put_text(models / L"q-rock" / L"model.bin", "x");
+    put_text(models / L"q-rock-hd.rtz", "x");
+    CHECK(import_expand_folder(models).size() == 1);
+    CHECK(import_expand_folder(models / L"q-hogan").size() == 1);
+    // A collection with that export and a hack: the export stays whole, the hack is its own item.
+    fs::path coll = dir / L"downloads";
+    put_text(coll / L"WWF MOD" / L"Project64 - Save" / L"x.fla", "x");
+    put_text(coll / L"hack.zip", "zip");
+    l = leaves(import_expand_folder(coll));
+    CHECK(l.size() == 2 && has(l, L"WWF MOD") && has(l, L"hack.zip"));
+    // A file stays itself.
+    CHECK(import_expand_folder(mixed / L"ECW Born to be Wired.z64").size() == 1);
+    // ROM guard: a folder with ROMs inside is never copied into a mods folder, even when it also has Rice textures.
+    CHECK(import_folder_holds_rom(mixed) && !import_folder_holds_rom(pack));
+    fs::path mods = dir / L"mods";
+    InstallResult r = install_mod(mixed, mods, L"wwfnomercy", L"WWF No Mercy");
+    CHECK(!r.ok && r.unrecognized && !fs::exists(mods / L"nomercy-only"));
+    r = install_mod(pack, mods, L"wwfnomercy", L"WWF No Mercy");  // the pack itself still installs as one
+    CHECK(r.ok && fs::exists(mods / L"WWF No Mercy (Rice pack, TNA vs ROH)" / L"rt64.json"));
+}
+
 void run_importer_tests(const fs::path& tmp) {
     test_results_file();
     std::error_code ec;
@@ -376,4 +472,5 @@ void run_importer_tests(const fs::path& tmp) {
     test_counts();
     test_sources_and_folder(tmp / L"folder");
     test_ledger(tmp / L"ledger");
+    test_expand_folder(tmp / L"expand");
 }
