@@ -23,7 +23,7 @@ struct ConversionInfo {
     std::wstring minimumGame;       // aki.json requires.minimum_recomp_version ("" = none)
     std::wstring needsGame;         // the game version it needs when the installed one is older ("" = it runs; #264)
     std::wstring texturesSha256;    // the package zip it was made with ("" = not pinned)
-    std::wstring rtLights, rtMaterials;
+    std::wstring rtLights;
     bool models = false;            // aki.json components.models (aki-roadmap#226): its own model packs
     std::wstring modelsDir;         // the folder in the conversion ("models")
     std::filesystem::path folder;   // installed folder

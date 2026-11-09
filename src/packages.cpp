@@ -1422,7 +1422,7 @@ std::wstring conversion_models_refusal(const JsonValue* relink, bool relinkUnrea
     wchar_t at[16];
     swprintf(at, 16, L"0x%08X", unsigned(uint64_t(hit)));
     return std::wstring(L"its patch uses Expansion RAM (from ") + at + L"), where model packs load; custom models in relinked "
-        L"conversions need aki-roadmap#156 (after 0.3.0)";
+        L"conversions aren't supported yet";
 }
 
 // The models line for a conversion's row on the Mods page (aki-roadmap#226).

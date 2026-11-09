@@ -218,7 +218,6 @@ namespace {
         if (comps.contains("rt")) {
             c.rt = true;
             c.rtLights = wide(str(comps["rt"], "lights"));
-            c.rtMaterials = wide(str(comps["rt"], "materials"));
         }
         c.folder = folder;
         std::error_code ec;
@@ -465,6 +464,5 @@ AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& sr
 std::vector<std::pair<std::wstring, std::wstring>> conversion_env(const ConversionInfo& c) {
     std::vector<std::pair<std::wstring, std::wstring>> env{ { L"AKI_CONVERSION", c.id } };
     if (!c.rtLights.empty()) env.push_back({ L"WCW_RT_LIGHTS_FILE", (c.folder / c.rtLights).wstring() });
-    if (!c.rtMaterials.empty()) env.push_back({ L"WCW_RT_MATERIALS_FILE", (c.folder / c.rtMaterials).wstring() });
     return env;
 }
