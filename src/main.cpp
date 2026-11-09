@@ -634,10 +634,38 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
             return false;
         }
         if (h != g.romSha1) {
+            // A byte-swapped (.v64 / .n64) copy of the accepted dump is set up as .z64, as the ROM scan does (#274).
+            std::vector<unsigned char> z64;
+            if (rom_read_matching_z64(src, g.romSha1, &z64)) {
+                std::error_code wec;
+                std::filesystem::create_directories(g.romInstallPath.parent_path(), wec);
+                std::filesystem::path tmp = g.romInstallPath;
+                tmp += L".new";
+                bool wrote = false;
+                {
+                    std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+                    f.write((const char*)z64.data(), (std::streamsize)z64.size());
+                    f.close();
+                    wrote = !f.fail() && std::filesystem::file_size(tmp, wec) == z64.size() && !wec;
+                }
+                if (wrote) std::filesystem::rename(tmp, g.romInstallPath, wec);
+                if (!wrote || wec) {
+                    std::filesystem::remove(tmp, wec);
+                    *errOut = L"Couldn't write " + g.romInstallPath.wstring() + L" (disk full?)";
+                    return false;
+                }
+                auto ov = settings().overrides.find(g.artKey);
+                if (ov != settings().overrides.end() && !ov->second.romPath.empty()) {
+                    ov->second.romPath.clear();
+                    settings_save();
+                }
+                logf(L"ROM set for %s from %s (byte-swapped, stored as .z64)", g.title.c_str(), src.c_str());
+                return true;
+            }
             *errOut = L"That file isn't the accepted " + g.title +
                       L" ROM. This port needs exactly one dump: the " + g.romNote +
-                      L", as an unmodified big-endian .z64 file. Patched/translated"
-                      L" or byte-swapped (.n64/.v64) dumps won't match.\n"
+                      L" (.z64, or the same dump byte-swapped as .v64 / .n64). Patched or translated"
+                      L" dumps won't match: those go in through Import.\n"
                       L"Required SHA1: " + g.romSha1 + L"\n"
                       L"Your file's SHA1: " + h;
             if (!g.romHint.empty()) *errOut += L"\n" + g.romHint;

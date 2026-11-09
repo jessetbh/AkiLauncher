@@ -188,6 +188,15 @@ void run_romscan_tests(const fs::path& dir) {
     g2.romPath = dir / L"game2" / L"test.z64";
     CHECK(le.verdict == RomVerdict::BaseDump && rom_provision(g2, le, &err) && read_bytes(g2.romPath) == base0);
     CHECK(!fs::exists(dir / L"game" / L"test.z64.new"));
+    // aki-roadmap#274: the card's Select ROM reads any byte order of the accepted dump (the scan already did).
+    {
+        std::vector<unsigned char> z;
+        CHECK(rom_read_matching_z64(roms / L"le" / L"Test Game.n64", games[0].romSha1, &z) && z == base0);
+        write_bytes(roms / L"bs" / L"Test Game.v64", swapped(base0, RomByteOrder::V64));
+        CHECK(rom_read_matching_z64(roms / L"bs" / L"Test Game.v64", games[0].romSha1, &z) && z == base0);
+        CHECK(!rom_read_matching_z64(roms / L"bs" / L"Test Game.v64", L"0000000000000000000000000000000000000000", &z));
+        CHECK(!rom_read_matching_z64(roms / L"bs" / L"Test Game.v64", L"", &z));
+    }
     err.clear();
     CHECK(b && !rom_provision(g, *b, &err) && has(err, L"already has a ROM"));
     // A file that changed after the scan is refused.
