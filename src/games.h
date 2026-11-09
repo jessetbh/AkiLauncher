@@ -107,3 +107,8 @@ bool wants_portable_game(const GameEntry& g, bool launcherPortable, bool portabl
 // when every copy worked. Returns how many files it copied, or -1 (not made
 // portable: the next start tries again).
 int make_game_portable(const GameEntry& g, const std::filesystem::path& appDataDir);
+// aki-roadmap#276: before the launcher installs a package or conversion into a game (an import, which can target a
+// game that never started and whose Mods page was never opened), it carries that game to portable first when it
+// qualifies (wants_portable_game); otherwise the install lands in %LOCALAPPDATA% and stays there after the game's first
+// start copies it. Never for a sandboxed headless import, which mustn't touch a real game's folder.
+bool carry_before_install(const GameEntry& g, bool launcherPortable, bool portableGames, bool sandboxed);

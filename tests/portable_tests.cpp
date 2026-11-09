@@ -39,6 +39,12 @@ void run_portable_tests(const fs::path& dir) {
     missing.installDir = missing.repoPath = dir / L"games" / L"notinstalled";
     CHECK(!wants_portable_game(missing, true, true));
 
+    // aki-roadmap#276: an install into it carries it first; a sandboxed headless import never does.
+    CHECK(carry_before_install(inst, true, true, false));
+    CHECK(!carry_before_install(inst, true, true, true));
+    CHECK(!carry_before_install(inst, false, true, false));
+    CHECK(!carry_before_install(depot, true, true, false));
+
     // Not portable yet: the data folder is AppData.
     CHECK(!game_is_portable(inst));
     CHECK(game_data_dir(inst).filename() == L"NoMercyRecompiled" && game_data_dir(inst) != inst.repoPath);
@@ -63,8 +69,9 @@ void run_portable_tests(const fs::path& dir) {
     CHECK(!fs::exists(inst.repoPath / L"NoMercyRecompiled.log"));
     CHECK(!fs::exists(inst.repoPath / L"texture_dump"));
     CHECK(get(appData / L"graphics.json") == "{\"from\":\"appdata\"}");  // AppData left as it was
-    // Once portable, it no longer qualifies: the copy happens only once.
+    // Once portable, it no longer qualifies: the copy happens only once, and an install goes straight to the game folder.
     CHECK(!wants_portable_game(inst, true, true));
+    CHECK(!carry_before_install(inst, true, true, false));
 
     // A copy that fails leaves the game on AppData (no portable.txt), and a later try finishes it.
     GameEntry partial = inst;

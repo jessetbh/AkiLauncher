@@ -91,6 +91,10 @@ bool wants_portable_game(const GameEntry& g, bool launcherPortable, bool portabl
            fs::is_directory(g.installDir, ec) && !game_is_portable(g);
 }
 
+bool carry_before_install(const GameEntry& g, bool launcherPortable, bool portableGames, bool sandboxed) {
+    return !sandboxed && wants_portable_game(g, launcherPortable, portableGames);
+}
+
 int make_game_portable(const GameEntry& g, const fs::path& appDataDir) {
     // Copy first, portable.txt last: if anything fails the game stays on its
     // AppData data (nothing looks lost) and the next start tries again;
