@@ -589,6 +589,14 @@ static void test_install_deep_paths(const fs::path& tmp) {
     std::error_code ec;
     CHECK(fs::exists(pkg::long_path_of(data / L"conversions" / L"deep-conv" / fs::u8path(deep.substr(11))), ec));
     CHECK(pkg::long_path_of(L"C:\\x\\y") == fs::path(L"\\\\?\\C:\\x\\y"));
+    CHECK(pkg::long_path_of(L"C:\\x\\..\\y\\.\\z") == fs::path(L"\\\\?\\C:\\y\\z"));
+    CHECK(pkg::long_path_of(L"\\\\srv\\share\\a") == fs::path(L"\\\\?\\UNC\\srv\\share\\a"));
+    CHECK(pkg::long_path_of(L"\\\\?\\C:\\x") == fs::path(L"\\\\?\\C:\\x"));
+    CHECK(pkg::long_path_of(fs::path()).empty());
+    // Removing the deep conversion works too (test mode deletes for real).
+    std::wstring rmMsg;
+    CHECK(pkg::remove_package("deep-conv", data, false, &rmMsg));
+    CHECK(!fs::exists(pkg::long_path_of(data / L"conversions" / L"deep-conv"), ec));
 }
 
 void run_packages_tests(const fs::path& tmp) {

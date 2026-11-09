@@ -448,6 +448,7 @@ bool Package::read(const std::string& rel, std::string* out, uint64_t limit) con
 }
 
 fs::path long_path_of(const fs::path& p) {
+    if (p.empty()) return {};  // never "\\\\?\\" (a StageGuard whose path was cleared)
     std::error_code ec;
     std::wstring s = fs::absolute(p, ec).lexically_normal().wstring();
     if (s.rfind(L"\\\\?\\", 0) == 0) return s;
@@ -988,7 +989,7 @@ static bool retire(const fs::path& dataDir, const fs::path& p, const std::string
 
 static bool write_zip_from(const Package& pk, const std::vector<std::string>& files, const std::string& prefix, const fs::path& dest) {
     std::error_code ec;
-    fs::create_directories(dest.parent_path(), ec);
+    fs::create_directories(long_path_of(dest).parent_path(), ec);
     FILE* f = _wfopen(long_path_of(dest).c_str(), L"wb");
     if (!f) return false;
     mz_zip_archive za{};

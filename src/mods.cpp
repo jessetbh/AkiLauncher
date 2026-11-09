@@ -5,6 +5,7 @@
 #include "modelpacks.h"
 #include "launch.h"
 #include "texpacks.h"
+#include "packages.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -235,7 +236,7 @@ bool recycle_path(const fs::path& p, std::wstring* errorOut) {
     wchar_t test[4]{};
     if (GetEnvironmentVariableW(L"AKI_LAUNCHER_TEST_NO_RECYCLE", test, 4) == 1 && test[0] == L'1') {
         std::error_code ec;
-        fs::remove_all(p, ec);
+        fs::remove_all(pkg::long_path_of(p), ec);  // deep converted packs (aki-roadmap#265)
         if (ec && errorOut) *errorOut = L"can't delete " + p.wstring();
         return !ec;
     }
@@ -252,6 +253,19 @@ bool recycle_path(const fs::path& p, std::wstring* errorOut) {
     int r = SHFileOperationW(&op);
     std::error_code ec;
     if (r != 0 || op.fAnyOperationsAborted || fs::exists(p, ec)) {
+        // A converted pack nests past 260 characters (aki-roadmap#265); on a PC without long paths the shell can't
+        // take such a tree. It is deleted for good instead (through \\?\ paths), only when that is the reason.
+        if (fs::is_directory(p, ec)) {
+            const fs::path lp = pkg::long_path_of(p);
+            bool deep = false;
+            for (auto it = fs::recursive_directory_iterator(lp, ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
+                if (it->path().wstring().size() - 4 >= MAX_PATH) { deep = true; break; }
+            if (deep) {
+                std::error_code rec;
+                fs::remove_all(lp, rec);
+                if (!rec) return true;
+            }
+        }
         if (errorOut) *errorOut = L"couldn't move " + p.filename().wstring() + L" to the Recycle Bin (in use? close the game)";
         return false;
     }
