@@ -202,6 +202,8 @@ const LauncherRelease* pick_launcher_update(const std::vector<LauncherRelease>& 
     return best;
 }
 
+bool launcher_prerelease_channel(const Version& current) { return !current.pre.empty(); }
+
 bool is_dev_build(const fs::path& exeDir) {
     std::error_code ec;
     if (fs::exists(exeDir / L"CMakeCache.txt", ec)) return true;
@@ -488,7 +490,7 @@ void update_check_start() {
     }
     // Settings are read here, on the UI thread; the worker gets copies.
     std::wstring etag = settings().updateEtag, skip = settings().updateSkip;
-    bool prerelease = settings().updatePrerelease;
+    bool prerelease = launcher_prerelease_channel(g_st.current);  // aki-roadmap#292
     fs::path cache = cache_file();
     std::thread([etag, skip, prerelease, cache]() {
         std::string body;

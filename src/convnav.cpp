@@ -163,9 +163,20 @@ CardOpen card_open(const CardKeys& k, int conversions) {
     return CardOpen::None;
 }
 
+std::string home_hint_line(bool padInput, bool quickMatch, const std::string& returnKey) {
+    if (padInput)
+        return std::string("D-Pad Browse      A Play      X Flip Box      Y Settings      ") +
+               (quickMatch ? "Back Quick Match      " : "") + "In Game:  Hold " + returnKey + "  To Return";
+    return std::string("Left/Right Browse      Enter Play      F Flip Box      S / Esc Settings      ") +
+           (quickMatch ? "Q Quick Match      H History Tour      " : "") + "In Game:  " + returnKey + "  To Return";
+}
+
+std::string mods_hint_line(bool padInput, const std::string& title) {
+    return std::string(padInput ? "Start" : "M") + "  Manage " + title + " Mods";
+}
+
 std::string play_as_hint(bool padInput) {
-    return padInput ? "LB Changes It      Start Details And Known Issues"
-                    : "C Changes It (Shift+C Back)      V Details And Known Issues";
+    return padInput ? "LB Changes It      Start Details" : "C Changes It (Shift+C Back)      V Details";  // #289 #295
 }
 
 }  // namespace convnav

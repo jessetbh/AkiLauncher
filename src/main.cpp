@@ -175,6 +175,7 @@ static bool g_shotScrollPacks = false;       // the model-packs shot: the Mods p
 // once the session ends (empty = none).
 static std::filesystem::path g_qmRunDir;
 static bool g_quickBackRequested = false;
+static bool g_quitRequested = false;  // aki-roadmap#291: Settings' Quit button
 static constexpr int HOTKEY_QUICKBACK = 1;
 
 struct BoxArt {
@@ -237,7 +238,7 @@ struct UiState {
     std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
     std::vector<pkg::ConversionInfo> convs;
     int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
-    // aki-roadmap#232: opened from the card's Play as... line (Down): the controller lands on this conversion's row
+    // aki-roadmap#232/#289: opened with Start / M (V) on a card with conversions: the controller lands on this conversion's row
     // (-1 = the original game's) for the first frames, after ImGui's own first focus.
     int convFocus = -1;
     int convFocusFrames = 0;
@@ -1988,7 +1989,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     // Conversions (aki-roadmap#154): one at a time, each with its own saves. Play starts the game as it (and Play as...
     // on the home page remembers it); Remove takes what it installed, never its saves.
     // aki-roadmap#232: every row is a stop for the D-pad (the original game first): A on a row picks it for Play as...,
-    // Play starts it with the cart insert; its tier, Untested label and known issues are on the row.
+    // Play starts it with the cart insert; its tier and Untested label are on the row.
     {
         int playConv = -1, removeConv = -1;
         ImGui::Spacing();
@@ -2039,10 +2040,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
             else if (!badge.text.empty())
                 ImGui::TextColored(badge.warn ? palette::warn : palette::ready, "%s", narrow(badge.text).c_str());
             if (!c.description.empty()) ImGui::TextColored(palette::faint, "%s", narrow(c.description).c_str());
-            if (!c.knownIssues.empty()) {
-                ImGui::TextColored(palette::dim, "Known issues:");
-                for (const auto& k : c.knownIssues) ImGui::TextColored(palette::dim, "  -  %s", narrow(k).c_str());
-            }
+            // aki-roadmap#295: knownIssues stays in the package format but isn't listed here (the tier and note say it).
             if (!c.note.empty()) ImGui::TextColored(palette::faint, "%s", narrow(c.note).c_str());
             std::string line = c.authors.empty() ? std::string() : "by " + narrow(c.authors) + "  -  ";
             line += c.recorded ? "installed as a package" : "added by hand";
@@ -2516,12 +2514,6 @@ static void draw_update_settings() {
         settings().updateChecks = checks;
         settings_save();
     }
-    ImGui::SameLine();
-    bool pre = settings().updatePrerelease;
-    if (ImGui::Checkbox("Include pre-releases", &pre)) {
-        settings().updatePrerelease = pre;
-        settings_save();
-    }
     if (u.phase != UpdatePhase::Off) {
         ImGui::SameLine();
         if (ImGui::Button("Check now")) update_check_start();
@@ -2815,6 +2807,12 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     ImGui::Spacing();
     draw_rom_scan(games);
 
+    // aki-roadmap#291: Quit lives here, below ROM Folder (Esc on the home page opens Settings, not quit).
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+    if (ImGui::Button("Quit AKI Launcher")) g_quitRequested = true;
+
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -3025,7 +3023,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         if (pad & XINPUT_GAMEPAD_DPAD_RIGHT) move = +1;
         if (pad & XINPUT_GAMEPAD_A) actLaunch = true;
         if (pad & XINPUT_GAMEPAD_X) actFlip = true;
-        if (ImGui::IsKeyPressed(ImGuiKey_S) || (pad & XINPUT_GAMEPAD_Y)) {
+        // aki-roadmap#291: Esc opens Settings too (Quit is a button there).
+        if (ImGui::IsKeyPressed(ImGuiKey_S) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) || (pad & XINPUT_GAMEPAD_Y)) {
             play_flip();
             open_settings(games);
             ImGui::End();
@@ -3039,14 +3038,17 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             return -1;
         }
         {
-            // aki-roadmap#289: M / Start open the Mods page, on the Conversions section (details, known issues) when
+            // aki-roadmap#289: M / Start open the Mods page, on the Conversions section (its details) when
             // the game has conversions; Down opens nothing (V, the keyboard's details shortcut, is on the Play as line).
             convnav::CardKeys ck;
             ck.keyM = ImGui::IsKeyPressed(ImGuiKey_M, false);
             ck.padStart = (pad & XINPUT_GAMEPAD_START) != 0;
             if (ck.keyM || ck.padStart) {
                 const GameEntry& mg = games[g_ui.selected];
-                int nconv = mg.exeFound || !g_shotModsDir.empty() ? (int)game_conversions(games, g_ui.selected).size() : 0;
+                const InstallStatus is = install_status();
+                const bool installing = (is.phase == InstallPhase::Downloading || is.phase == InstallPhase::Extracting) &&
+                                        is.gameIndex == g_ui.selected;
+                int nconv = (mg.exeFound || !g_shotModsDir.empty()) && !installing ? (int)game_conversions(games, g_ui.selected).size() : 0;
                 play_flip();
                 open_mods(games, g_ui.selected, convnav::card_open(ck, nconv) == convnav::CardOpen::ModsOnConversions);
                 ImGui::End();
@@ -3364,7 +3366,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     // Play as... (aki-roadmap#154): the original game or one of its conversions, remembered per game. A launch
     // choice: nothing in the game's files changes.
     // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it; Start / M (V on a keyboard) opens the
-    // Mods page on its Conversions section with its details (tier, known issues, Untested) on the picked one. Shown also while the game needs its ROM.
+    // Mods page on its Conversions section with its details (tier, Untested) on the picked one. Shown also while the game needs its ROM.
     bool lbPlayAs = false;
     if ((s.exeFound || !g_shotModsDir.empty()) && !installingSel) {
         const auto& convs = game_conversions(games, g_ui.selected);
@@ -3447,7 +3449,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // This frame's lines and button, for next frame's placement.
     s_cardLast[g_ui.selected].stackH = ImGui::GetCursorPosY() - infoY;
-    s_cardLast[g_ui.selected].btnH = action != CardAction::None ? vh * 0.048f : 0.0f;
+    s_cardLast[g_ui.selected].btnH = action != CardAction::None ? vh * (s.exeFound ? 0.048f + 0.034f : 0.048f) : 0.0f;  // + #294's line
 
     // Action button (mouse users; keyboard/pad use Enter/A)
     if (action != CardAction::None) {
@@ -3469,6 +3471,12 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         bool trigger = ImGui::Button(label, bsz);
         ImGui::PopStyleColor(4);
         ImGui::PopFont();
+        if (s.exeFound) {  // aki-roadmap#294: the Mods page is this game's: said under its button, not in the hint bar
+            ImGui::PushFont(g_ui.fontSmall);
+            ImGui::SetCursorPosY(btnY + bsz.y + vh * 0.010f);
+            text_centered_colored(palette::dim, convnav::mods_hint_line(g_ui.padInput, narrow(s.title)));
+            ImGui::PopFont();
+        }
         if (actLaunch) trigger = true;
         if (trigger && !inserting) {
             if (action == CardAction::Play) {
@@ -3587,17 +3595,11 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     ImGui::SetCursorPosY(vh * 0.945f);
     // No depot is the normal end-user state (games install via download);
     // the per-card status already says what each game needs.
-    const bool quickHints = quick_match_ui_enabled(dev_mode());  // aki-roadmap#287
-    if (g_ui.padInput)
-        text_centered_colored(palette::faint,
-                              std::string("D-Pad Browse      A Play      X Flip Box      Y Settings      Start Mods      ") +
-                                  (quickHints ? "Back Quick Match      " : "") + "In Game:  Hold " +
-                                  chord_to_string(settings().chordMask) + "  To Return");
-    else
-        text_centered_colored(palette::faint,
-                              std::string("Left/Right Browse      Enter Play      F Flip Box      S Settings      M Mods      ") +
-                                  (quickHints ? "Q Quick Match      H History Tour      " : "") + "Esc Quit      In Game:  " +
-                                  hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk) + "  To Return");
+    // One key map (aki-roadmap#287 #289 #291 #293 #294): Mods is on the card ("M  Manage <game> Mods" under Play),
+    // Esc / Y open Settings (Quit is there), Quick match and the History Tour only in dev mode.
+    text_centered_colored(palette::faint, convnav::home_hint_line(g_ui.padInput, quick_match_ui_enabled(dev_mode()),
+                                                         g_ui.padInput ? chord_to_string(settings().chordMask)
+                                                                       : hotkey_to_string(settings().hotkeyMods, settings().hotkeyVk)));
     ImGui::PopFont();
 
     // ------------------------------------------------------------------ cart insert
@@ -4383,10 +4385,8 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         if (g_shot && g_padScript.active()) ImGui::GetIO().DeltaTime = 1.0f / 60.0f;  // script frames are 1/60 s
         ImGui::NewFrame();
 
-        if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && !g_ui.showUpdate && !g_ui.showQuick && !g_ui.showTour &&
-            g_ui.insertIndex < 0 &&
-            ImGui::IsKeyPressed(ImGuiKey_Escape) && testLaunch < 0)
-            done = true;
+        // aki-roadmap#291: Esc on the home page opens Settings (draw_ui); the launcher quits from Settings' Quit button.
+        if (g_quitRequested) done = true;
 
         // F11 / Alt+Enter toggle windowed <-> fullscreen from any screen.
         if (!smoke && (ImGui::IsKeyPressed(ImGuiKey_F11, false) ||

@@ -59,14 +59,14 @@ timing, and file-backed saves.
 | Enter, A | play / download / select ROM |
 | F, X | flip the box art |
 | U, RB | install an available update |
-| M, Start | the game's Mods page (install / remove mods, texture packs, model packs and conversions); with conversions installed it opens on the Conversions section, on the Play as... pick |
+| M, Start | the selected game's Mods page ("M  Manage <game> Mods" under its Play button): install / remove mods, texture packs, model packs and conversions; with conversions installed it opens on the Conversions section, on the Play as... pick |
 | C, LB | Play as...: the original game or one of its installed conversions (shown when it has some) |
-| V | that game's conversion details and known issues (the Mods page's Conversions section; Start / M opens there too when the game has conversions) |
+| V | that game's conversion details (the Mods page's Conversions section; Start / M opens there too when the game has conversions) |
 | Q, Back (developer mode only in 0.3.0) | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
 | H (or History Tour... on the Quick match page; developer mode only in 0.3.0) | the History Tour: stops through wrestling history, played in order |
-| S, Y | settings (Return to Launcher binding, per-game paths) |
+| S, Esc, Y | settings (Return to Launcher binding, ROM folder, per-game paths) and **Quit AKI Launcher** (below ROM Folder) |
 | F11, Alt+Enter | windowed / fullscreen |
-| Esc | quit |
+| Esc (on a sub-page), B | back |
 | Shift+F12, hold View (in game) | quit prompt → back to launcher |
 
 ## FAQ
@@ -239,8 +239,9 @@ SHA256SUMS (an update without them is refused), swaps the files and restarts.
 - The replaced files are kept in `.update\previous\`. If the new version
   doesn't start within 30 seconds, the old one puts everything back and keeps
   running.
-- Settings: *Check for launcher updates* (off: `update_checks=0`) and
-  *Include pre-releases*. A launcher run from a build folder says "dev build,
+- Settings: *Check for launcher updates* (off: `update_checks=0`). The
+  channel follows the running launcher: a release build is offered releases
+  only, a pre-release build newer pre-releases too; drafts never. A launcher run from a build folder says "dev build,
   updates off" and never checks.
 - `AKI_UPDATE_FEED=<file>` reads the release list from a local JSON file
   instead of GitHub (for trying the notice).

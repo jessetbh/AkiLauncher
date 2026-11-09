@@ -97,7 +97,7 @@ void settings_load() {
             else if (key == "rom_scan_dir") g_settings.romScanDir = u8_to_w(val);
             else if (key == "portable_games") g_settings.portableGames = atoi(val.c_str()) != 0;
             else if (key == "update_checks") g_settings.updateChecks = atoi(val.c_str()) != 0;
-            else if (key == "update_prerelease") g_settings.updatePrerelease = atoi(val.c_str()) != 0;
+            // update_prerelease (0.2.x): ignored since aki-roadmap#292 (the channel follows the launcher's own build)
             else if (key == "update_skip") g_settings.updateSkip = u8_to_w(val);
             else if (key == "update_etag") g_settings.updateEtag = u8_to_w(val);
             else if (key == "tour_stop") g_settings.tourStop = atoi(val.c_str()) > 0 ? atoi(val.c_str()) : 0;
@@ -143,7 +143,6 @@ void settings_save() {
     if (g_settings.devMode) f << "dev_mode=1\n";
     if (!g_settings.portableGames) f << "portable_games=0\n";
     if (!g_settings.updateChecks) f << "update_checks=0\n";
-    if (g_settings.updatePrerelease) f << "update_prerelease=1\n";
     if (!g_settings.updateSkip.empty()) f << "update_skip=" << w_to_u8(g_settings.updateSkip) << "\n";
     if (!g_settings.updateEtag.empty()) f << "update_etag=" << w_to_u8(g_settings.updateEtag) << "\n";
     if (!g_settings.romScanDir.empty()) f << "rom_scan_dir=" << w_to_u8(g_settings.romScanDir) << "\n";

@@ -46,6 +46,10 @@ std::vector<LauncherRelease> parse_launcher_releases(const std::string& json);
 // that channel), unless it is the skipped tag. nullptr = nothing to offer.
 const LauncherRelease* pick_launcher_update(const std::vector<LauncherRelease>& releases, const Version& current,
                                             bool prerelease, const std::wstring& skippedTag);
+// aki-roadmap#292: the channel self-update follows is the running launcher's own: a release build (0.3.0) takes
+// releases only, a pre-release build (0.3.1-beta.1) newer pre-releases too. Drafts never (parse_launcher_releases).
+// No setting: the old update_prerelease=1 in settings.ini is ignored. Game installs count pre-releases regardless.
+bool launcher_prerelease_channel(const Version& current);
 // A build-folder exe (CMakeCache.txt beside it, or a checkout above it): no updates.
 bool is_dev_build(const std::filesystem::path& exeDir);
 
