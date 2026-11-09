@@ -139,14 +139,15 @@ void ImportBatch::reinstall_have_it(ImportLine& l) {
     probe.detail = L"imported before, installed again from the Converted folder";
     probe.installed.clear();
     env_.installPackages(probe);
-    if (!probe.installed.empty()) {
+    if (probe.outcome == ImportOutcome::Failed) {  // any package failed, as for a Converted line
+        l.outcome = ImportOutcome::Failed;
+        l.detail = probe.detail;
+        l.installed = std::move(probe.installed);    // what did go in is still undone by Undo
+    } else if (!probe.installed.empty()) {
         l.outcome = ImportOutcome::Installed;
         l.detail = probe.detail;
         l.installed = std::move(probe.installed);
         if (l.kind != L"texture pack") l.kind = L"conversion";
-    } else if (probe.outcome == ImportOutcome::Failed) {
-        l.outcome = ImportOutcome::Failed;
-        l.detail = probe.detail;
     }
 }
 
