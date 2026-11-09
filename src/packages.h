@@ -189,7 +189,17 @@ struct ConversionInfo {
     bool recorded = false;  // in packages.json (else a folder put there by hand)
     std::filesystem::path folder, saves;
     std::vector<std::string> addons;  // add-on files that came with it (recorded)
+    // aki.json components.models (aki-roadmap#226): a line for the player ("" = no models component), and whether the
+    // game will run the conversion without them (then the line says why).
+    std::wstring models;
+    bool modelsOff = false;
 };
+// Why the game runs a conversion without its models, "" when it runs with them: the game's rule (librecomp
+// conversion::models_refusal), kept the same. relink: the patch's relink.json (nullptr: a plain patch or none).
+// Packs load into Expansion RAM, physical 0x00400000-0x00800000; a relinked hack using it needs aki-roadmap#156.
+std::wstring conversion_models_refusal(const JsonValue* relink, bool relinkUnreadable);
+// The newest model pack format (AKP1 version) the games read (librecomp conversion::ModelsFormat).
+constexpr int kModelsFormat = 2;
 // conversions\<id>\ folders with an aki.json, recorded or not, sorted by name.
 std::vector<ConversionInfo> list_conversions(const std::filesystem::path& dataDir);
 // Whether the player's ROM is one the conversion names (no names: any ROM).

@@ -20,6 +20,8 @@ struct ConversionInfo {
     std::wstring requiresPatchBase; // aki.json requires.patch.base: a ROM patch left out until the player supplies that ROM
     std::wstring texturesSha256;    // the package zip it was made with ("" = not pinned)
     std::wstring rtLights, rtMaterials;
+    bool models = false;            // aki.json components.models (aki-roadmap#226): its own model packs
+    std::wstring modelsDir;         // the folder in the conversion ("models")
     std::filesystem::path folder;   // installed folder
     std::filesystem::path icon;     // icon.png in it ("" = none)
     bool texturesInstalled = true;
