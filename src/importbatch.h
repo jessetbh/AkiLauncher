@@ -39,8 +39,8 @@ public:
     void start(const ImportEnv& env, const std::vector<std::filesystem::path>& inputs, bool fromImportFolder);
     void tick();
     void stop();
-    // Runs the worker again for the Needs ROM lines, with romDir added to the folders it finds stock ROMs in.
-    bool retry_needs_rom(const std::filesystem::path& romDir, std::wstring* errorOut);
+    // Runs the worker again for the Needs ROM lines, with these folders added to where it finds stock ROMs.
+    bool retry_needs_rom(const std::vector<std::filesystem::path>& romDirs, std::wstring* errorOut);
     // Removes what this batch installed (saves stay), the packages it wrote and their ledger entries, and moves the
     // Import folder's entries back. Lines become Stopped-looking "Undone" (outcome Stopped, detail says so).
     bool undo(std::wstring* message);

@@ -1405,7 +1405,8 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
     ImGuiViewport* vp = ImGui::GetMainViewport();
     float vw = vp->WorkSize.x, vh = vp->WorkSize.y;
     ImGuiIO& io = ImGui::GetIO();
-    if ((ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) && !io.WantTextInput && !g_ui.importLogOpen) {
+    if ((ImGui::IsKeyPressed(ImGuiKey_Escape) || (pad & XINPUT_GAMEPAD_B)) && !io.WantTextInput && !g_ui.importLogOpen &&
+        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
         g_ui.showImport = false;  // a running batch keeps going (the main loop ticks it)
         return -1;
     }
@@ -1424,8 +1425,10 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
     ImGui::BeginChild("##import", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_None);
     ImGui::PushFont(g_ui.fontBase);
+    const bool appearing = ImGui::IsWindowAppearing();
     if (g_import.busy()) {
         if (ImGui::Button("Stop")) g_import.stop();
+        if (appearing) ImGui::SetItemDefaultFocus();
         ImGui::SameLine();
     } else {
         bool anyInstalled = false;
@@ -1443,6 +1446,7 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
         ImGui::SameLine();
     }
     if (ImGui::Button("Back to Mods")) g_ui.showImport = false;
+    if (appearing && !g_import.busy()) ImGui::SetItemDefaultFocus();
     ImGui::SameLine();
     if (ImGui::Button("Open Converted folder")) {
         std::error_code ec;
@@ -1478,7 +1482,15 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
             ImGui::PushID(i);
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::TextColored(outcome_color(l.outcome), "%s", narrow(import_outcome_word(l.outcome)).c_str());
+            // A row-wide selectable: the D-pad visits every line (also those without buttons) and scrolls the list.
+            ImGui::PushStyleColor(ImGuiCol_Text, outcome_color(l.outcome));
+            bool rowPicked = ImGui::Selectable(narrow(import_outcome_word(l.outcome)).c_str(), false,
+                                               ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
+            ImGui::PopStyleColor();
+            if (rowPicked && (!l.log.empty() || !l.detail.empty())) {
+                g_ui.importLog = narrow(l.name + L"\n" + l.detail + (l.log.empty() ? L"" : L"\n\n" + l.log));
+                g_ui.importLogOpen = true;
+            }
             ImGui::TableNextColumn();
             ImGui::PushTextWrapPos(0.0f);
             ImGui::TextUnformatted(narrow(l.name).c_str());
@@ -1527,6 +1539,11 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
     if (g_ui.importLogOpen) ImGui::OpenPopup("Import log");
     ImGui::SetNextWindowSize(ImVec2(panelW * 0.8f, vh * 0.6f), ImGuiCond_Appearing);
     if (ImGui::BeginPopupModal("Import log", &g_ui.importLogOpen)) {
+        if ((pad & XINPUT_GAMEPAD_B) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            g_ui.importLogOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+
         ImGui::PushFont(g_ui.fontSmall);
         ImGui::InputTextMultiline("##log", &g_ui.importLog, ImVec2(-1, -ImGui::GetFrameHeightWithSpacing() * 1.4f),
                                   ImGuiInputTextFlags_ReadOnly);
@@ -1537,6 +1554,7 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
             g_ui.importLogOpen = false;
             ImGui::CloseCurrentPopup();
         }
+        if (ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
         ImGui::EndPopup();
     }
     ImGui::PopFont();
@@ -1554,12 +1572,26 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
         g_ui.convCache.clear();
     }
     if (!findRomFor.empty()) {
-        std::filesystem::path dir = pick_folder(L"");
-        if (!dir.empty()) {
-            if (std::find(g_importRomDirs.begin(), g_importRomDirs.end(), dir) == g_importRomDirs.end()) g_importRomDirs.push_back(dir);
-            std::wstring err;
-            if (!g_import.retry_needs_rom(dir, &err)) logf(L"import: Find it...: %s", err.c_str());
+        std::vector<std::filesystem::path> dirs;
+        if (g_ui.padInput) {
+            // The ROM scan's folder, every game's ROM folder, the folders picked before.
+            auto add = [&](const std::filesystem::path& d) {
+                std::error_code ec;
+                if (!d.empty() && std::filesystem::is_directory(d, ec) && std::find(dirs.begin(), dirs.end(), d) == dirs.end())
+                    dirs.push_back(d);
+            };
+            add(settings().romScanDir);
+            for (const auto& g : games)
+                if (g.romFound) add(g.romPath.parent_path());
+            for (const auto& d : g_importRomDirs) add(d);
+        } else {
+            std::filesystem::path dir = pick_folder(settings().romScanDir);
+            if (!dir.empty()) dirs.push_back(dir);
         }
+        for (const auto& d : dirs)
+            if (std::find(g_importRomDirs.begin(), g_importRomDirs.end(), d) == g_importRomDirs.end()) g_importRomDirs.push_back(d);
+        std::wstring err;
+        if (!dirs.empty() && !g_import.retry_needs_rom(dirs, &err)) logf(L"import: Find it...: %s", err.c_str());
     }
     if (launch >= 0) {
         g_ui.showImport = false;
@@ -1567,7 +1599,8 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
     }
     ImGui::PushFont(g_ui.fontSmall);
     ImGui::SetCursorPosY(vh * 0.92f);
-    text_centered_colored(palette::faint, g_ui.padInput ? "B Back to Mods      Your originals are never changed"
+    text_centered_colored(palette::faint, g_ui.padInput ? "A Select (a line opens its details)      B Back to Mods      "
+                                                          "Find it... looks in your ROM folders"
                                                         : "Esc Back to Mods      Your originals are never changed");
     ImGui::PopFont();
     return launch;

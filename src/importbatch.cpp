@@ -242,7 +242,7 @@ void ImportBatch::finish() {
     status = import_summary(count_import(lines));
 }
 
-bool ImportBatch::retry_needs_rom(const fs::path& romDir, std::wstring* errorOut) {
+bool ImportBatch::retry_needs_rom(const std::vector<fs::path>& romDirs, std::wstring* errorOut) {
     if (busy()) {
         if (errorOut) *errorOut = L"the import is still running";
         return false;
@@ -256,8 +256,9 @@ bool ImportBatch::retry_needs_rom(const fs::path& romDir, std::wstring* errorOut
         if (errorOut) *errorOut = L"nothing is waiting for a ROM";
         return false;
     }
-    if (std::find(env_.job.romDirs.begin(), env_.job.romDirs.end(), romDir) == env_.job.romDirs.end())
-        env_.job.romDirs.push_back(romDir);
+    for (const auto& romDir : romDirs)
+        if (std::find(env_.job.romDirs.begin(), env_.job.romDirs.end(), romDir) == env_.job.romDirs.end())
+            env_.job.romDirs.push_back(romDir);
     // Each source's lines collapse into one placeholder again; the worker's lines replace it.
     std::vector<ImportLine> kept;
     for (auto& l : lines) {

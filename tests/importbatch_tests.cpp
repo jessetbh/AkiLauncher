@@ -162,13 +162,13 @@ static void test_stub_worker(const fs::path& dir) {
     CHECK(fs::exists(env.importDir / L"patch.bps"));  // waits for its ROM
     // Find it...: the needs-ROM line goes back to the worker with the folder.
     std::wstring err;
-    CHECK(b.retry_needs_rom(dir / L"roms", &err) && b.busy());
+    CHECK(b.retry_needs_rom({dir / L"roms"}, &err) && b.busy());
     for (int i = 0; i < 300 && b.busy(); ++i) {
         b.tick();
         Sleep(50);
     }
     CHECK(b.lines.size() == 5 && b.lines.back().outcome == ImportOutcome::Converted && b.lines.back().tier == L"Verified");
-    CHECK(!b.retry_needs_rom(dir / L"roms", &err));  // nothing left waiting
+    CHECK(!b.retry_needs_rom({dir / L"roms"}, &err));  // nothing left waiting
     // Undo: both packages' installs removed, the stub's package deleted.
     std::wstring msg;
     b.undo(&msg);
