@@ -341,7 +341,28 @@ static void test_kinds_zip_and_conversions(const fs::path& tmp) {
         CHECK(convs[1].id == "conv-b" && convs[1].recorded && convs[1].version == L"1.1.0" &&
               pkg::conversion_rom_matches(convs[1], {"0123456789ABCDEF0123456789ABCDEF01234567"}));
         CHECK(convs[1].addons.size() == 1 && convs[1].addons[0] == "conv_tex.rtz");
+        CHECK(convs[0].tier.empty() && !convs[0].untested && convs[0].knownIssues.empty());
     }
+    // aki-roadmap#232: the details the player reads before picking one (the #228 converter's survey block).
+    put(data / L"conversions" / L"surveyed" / L"aki.json",
+        R"({"id":"surveyed","name":"Surveyed","description":"A hack.","survey":{"aki_tier":"experimental",)"
+        R"("known_issues":["Titles flicker","","Crowd is grey"],"note":"tested on Rev 1"}})");
+    put(data / L"conversions" / L"fresh" / L"aki.json",
+        R"({"id":"fresh","name":"Fresh","survey":{"aki_tier":"untested","tier_note":"not in the catalog"}})");
+    convs = pkg::list_conversions(data);
+    CHECK(convs.size() == 4);
+    for (const auto& c : convs) {
+        if (c.id == "surveyed") {
+            CHECK(c.tier == L"Experimental" && !c.untested && c.description == L"A hack." && c.note == L"tested on Rev 1");
+            CHECK(c.knownIssues.size() == 2 && c.knownIssues[0] == L"Titles flicker" && c.knownIssues[1] == L"Crowd is grey");
+        } else if (c.id == "fresh") {
+            CHECK(c.tier == L"Untested" && c.untested && c.knownIssues.empty() && c.note == L"not in the catalog");
+        }
+    }
+    CHECK(pkg::conversion_tier_word("VERIFIED") == L"Verified" && pkg::conversion_tier_word("gold") == L"gold");
+    std::error_code cleanEc;
+    fs::remove_all(data / L"conversions" / L"surveyed", cleanEc);
+    fs::remove_all(data / L"conversions" / L"fresh", cleanEc);
     // Remove: its files go, its saves stay.
     std::wstring msg;
     CHECK(pkg::remove_package("conv-b", data, false, &msg));
