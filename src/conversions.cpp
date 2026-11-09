@@ -295,7 +295,9 @@ AddResult add_conversion(const std::vector<GameEntry>& games, const fs::path& sr
         return r;
     }
     json j = json::parse(text, nullptr, false);
-    if (j.is_discarded() || !j.is_object() || j.value("format_version", 0) != 1) {
+    // Type-checked: value("format_version", 0) throws on a string ("1") and ended the launcher (aki-roadmap#243).
+    const auto fv = j.is_object() ? j.find("format_version") : j.end();
+    if (j.is_discarded() || !j.is_object() || fv == j.end() || !fv->is_number_integer() || fv->get<int64_t>() != 1) {
         r.message = L"aki.json isn't a valid v1 manifest.";
         return r;
     }
