@@ -1350,6 +1350,10 @@ static ImportLine install_local(const std::vector<GameEntry>& games, const std::
             int og = game_index_for_mod_id(games, r.otherGameId);
             if (og >= 0 && games[og].exeFound) {
                 into = &games[og];
+                // aki-roadmap#285: like install_one_package (#276), carry a game that hasn't started yet to portable
+                // first, so the pack goes into games\<id>\mods, not %LOCALAPPDATA%.
+                if (carry_before_install(*into, launcher_portable(), settings().portableGames, !g_importSandbox.empty()))
+                    carry_portable(*into);
                 r = install_mod(src, mods_dir_for(*into), into->modGameId, into->title, into->modelProfile);
                 l.gameKey = engine_game_key(into->modGameId);
                 if (r.ok) r.message += L" (installed for " + into->title + L")";  // not the page it was imported from
