@@ -29,7 +29,8 @@ static void test_args() {
     CHECK(r.active && r.shots.size() == 1 && r.shots[0].first == ShotPage::QuickMatch &&
           r.shots[0].second == fs::path(L"C:\\out\\q.png") && r.game == L"vpw2" && !r.demo);
     CHECK(parse_shot_args({L"--demo", L"--shot-all", L"D:\\shots"}, &r, &err));
-    CHECK(r.active && r.demo && r.shots.size() == shot_pages().size() && r.shots.size() == 7);
+    CHECK(r.active && r.demo && r.shots.size() == shot_pages().size() && r.shots.size() == 8);
+    CHECK(r.shots[7].first == ShotPage::Import && r.shots[7].second.filename() == L"import.png");
     CHECK(r.shots[3].first == ShotPage::ModelPacks && r.shots[3].second == fs::path(L"D:\\shots\\model-packs.png"));
     CHECK(r.shots[6].first == ShotPage::Dev && r.shots[6].second.filename() == L"dev.png");
     // every page name parses, and only those

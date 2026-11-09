@@ -45,6 +45,7 @@ struct ImportLine {
     std::wstring log;           // the full text behind [Log] (the worker's why, the converter's output)
     bool viaWorker = false;     // the worker handles it (a ROM hack, patch, bundle, unknown archive)
     bool installAsIs = false;   // the worker found a mod or package file in a picked folder: the launcher installs it
+    bool placeholder = false;   // stands for a worker input until the worker's own lines for it arrive
 
     // Undo: what installing it put in place.
     struct Installed {
@@ -126,3 +127,7 @@ bool ledger_remove(const std::filesystem::path& ledger, const std::vector<std::s
 // The ledger keys whose entry records one of these package zips (as the worker wrote them), for Undo.
 std::vector<std::string> ledger_keys_for_packages(const std::filesystem::path& ledger,
                                                   const std::vector<std::filesystem::path>& packages);
+
+// --- results file (the headless --import-batch run writes it; --shot import reads it) ------------------------------
+std::string import_lines_json(const std::vector<ImportLine>& lines, const std::wstring& status);
+bool import_lines_from_json(const std::string& text, std::vector<ImportLine>* lines, std::wstring* status);

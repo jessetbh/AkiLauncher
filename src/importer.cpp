@@ -98,7 +98,7 @@ std::wstring import_summary(const ImportCounts& c) {
     part(s, c.stopped, L"stopped", L"stopped");
     if (s.empty()) s = L"Nothing to import";
     s += L". Your originals weren't changed.";
-    if (c.untested) s += L" " + std::to_wstring(c.untested) + L" Untested: built here, not tested by the AKI team.";
+    if (c.untested) s += L" " + std::to_wstring(c.untested) + L" Untested.";
     return s;
 }
 
@@ -129,7 +129,9 @@ std::wstring engine_game_key(const std::wstring& modGameId) {
 }
 
 static std::wstring kind_word(const std::wstring& k) {
-    if (k == L"rom" || k == L"patch" || k == L"pj64-bundle") return L"conversion";
+    if (k == L"rom") return L"ROM hack";
+    if (k == L"patch") return L"patch";
+    if (k == L"pj64-bundle") return L"Project64 bundle";
     if (k == L"texture-pack") return L"texture pack";
     if (k == L"nrm") return L"mod";
     return k;
@@ -183,6 +185,7 @@ WorkerEvent parse_worker_line(const std::string& text) {
             }
     if (status == L"converted") {
         l.outcome = ImportOutcome::Converted;
+        if (kind == L"rom" || kind == L"patch" || kind == L"pj64-bundle") l.kind = L"conversion";
         std::wstring conv = j.wstr("converter");
         if (l.kind == L"texture pack") {
             int images = j.integer("images", 0);
@@ -408,4 +411,68 @@ std::vector<std::string> ledger_keys_for_packages(const fs::path& ledger, const 
         if (hit) out.push_back(e->keys[k]);
     }
     return out;
+}
+
+// --- results file ---------------------------------------------------------------------------------------------------
+
+std::string import_lines_json(const std::vector<ImportLine>& lines, const std::wstring& status) {
+    JsonValue root;
+    root.type = JsonValue::Type::Object;
+    put(root, "format", json_string("aki-import-results"));
+    put(root, "status", json_string(u8(status)));
+    JsonValue arr;
+    arr.type = JsonValue::Type::Array;
+    for (const auto& l : lines) {
+        JsonValue o;
+        o.type = JsonValue::Type::Object;
+        put(o, "item", json_string(u8(l.item)));
+        put(o, "source", json_string(u8(l.source.wstring())));
+        put(o, "outcome", json_number((double)(int)l.outcome));
+        put(o, "name", json_string(u8(l.name)));
+        put(o, "game", json_string(u8(l.gameKey)));
+        put(o, "kind", json_string(u8(l.kind)));
+        put(o, "tier", json_string(u8(l.tier)));
+        put(o, "untested", json_bool(l.untested));
+        put(o, "detail", json_string(u8(l.detail)));
+        put(o, "needs", json_string(u8(l.needs)));
+        put(o, "log", json_string(u8(l.log)));
+        JsonValue pk;
+        pk.type = JsonValue::Type::Array;
+        for (const auto& p : l.packages) pk.items.push_back(json_string(u8(p.wstring())));
+        put(o, "packages", pk);
+        arr.items.push_back(std::move(o));
+    }
+    put(root, "lines", arr);
+    return json_write(root);
+}
+
+bool import_lines_from_json(const std::string& text, std::vector<ImportLine>* lines, std::wstring* status) {
+    JsonValue j;
+    if (!json_parse(text, &j) || !j.is(JsonValue::Type::Object) || j.wstr("format") != L"aki-import-results") return false;
+    if (status) *status = j.wstr("status");
+    lines->clear();
+    const JsonValue* arr = j.get("lines");
+    if (!arr || !arr->is(JsonValue::Type::Array)) return false;
+    for (const auto& o : arr->items) {
+        if (!o.is(JsonValue::Type::Object)) continue;
+        ImportLine l;
+        l.item = o.wstr("item");
+        l.source = o.wstr("source");
+        int oc = o.integer("outcome", (int)ImportOutcome::Failed);
+        if (oc < 0 || oc > (int)ImportOutcome::Stopped) oc = (int)ImportOutcome::Failed;
+        l.outcome = (ImportOutcome)oc;
+        l.name = o.wstr("name");
+        l.gameKey = o.wstr("game");
+        l.kind = o.wstr("kind");
+        l.tier = o.wstr("tier");
+        l.untested = o.boolean("untested", false);
+        l.detail = o.wstr("detail");
+        l.needs = o.wstr("needs");
+        l.log = o.wstr("log");
+        if (const JsonValue* pk = o.get("packages"); pk && pk->is(JsonValue::Type::Array))
+            for (const auto& p : pk->items)
+                if (p.is(JsonValue::Type::String)) l.packages.push_back(json_utf8_to_wide(p.s));
+        lines->push_back(std::move(l));
+    }
+    return true;
 }

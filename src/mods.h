@@ -54,6 +54,7 @@ struct InstallResult {
     bool ok = false;
     std::vector<std::filesystem::path> installed;
     std::wstring message;  // for the UI, success or not
+    bool already = false;       // not ok because the same pack folder is installed already
     bool unrecognized = false;  // not ok because it isn't a mod, pack or package at all (the importer's worker may know it)
 };
 // Installs an .nrm, .rtz, a zip (rt64.json at its root -> an .rtz; a package

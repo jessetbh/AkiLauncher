@@ -625,6 +625,7 @@ static InstallResult install_legacy_pack(const fs::path& packRoot, const TexScan
     fs::path dest = modsDir / name;
     if (fs::exists(dest, ec)) {
         r.message = name + L" is installed already: remove it first to replace it";
+        r.already = true;
         return r;
     }
     fs::path tmp = modsDir / (L".aki-tex-" + name);
@@ -697,6 +698,7 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
         fs::path dest = modsDir / name;
         if (fs::exists(dest, ec)) {
             r.message = name + L" is installed already: remove it first to replace it";
+            r.already = true;
             return r;
         }
         if (!copy_tree(src, dest, &r.message)) {

@@ -120,7 +120,7 @@ static void test_wrap_installs(const fs::path& dir) {
     CHECK(m.textures && m.problem.empty() && m.kind_text() == L"Texture pack" && m.manifest.gameId == L"wwfnomercy");
     // Again: refused, the installed copy kept.
     r = install_mod(rice, mods, L"wwfnomercy", L"WWF No Mercy");
-    CHECK(!r.ok && contains(r.message, L"installed already"));
+    CHECK(!r.ok && r.already && contains(r.message, L"installed already"));
     // From another game's page: refused by its Rice name.
     r = install_mod(rice, dir / L"mods-vpw2", L"wcwnworevenge", L"WCW/nWo Revenge");
     CHECK(!r.ok && contains(r.message, L"WWF No Mercy") && !fs::exists(dir / L"mods-vpw2" / L"No Mercy HD"));
@@ -196,6 +196,7 @@ static void test_worker_lines() {
 
     e = parse_worker_line(R"({"event":"item","item":"C:\\dl\\BL.xdelta","status":"needs-rom","kind":"patch","needs":"WWF No Mercy (USA) 1.0"})");
     CHECK(e.line.outcome == ImportOutcome::NeedsRom && e.line.needs == L"WWF No Mercy (USA) 1.0" && contains(e.line.detail, L"needs WWF No Mercy"));
+    CHECK(e.line.kind == L"patch");  // "conversion" only once it is one
     e = parse_worker_line(R"({"event":"item","item":"x","status":"unsupported","why":"PAL version"})");
     CHECK(e.line.outcome == ImportOutcome::Unsupported && e.line.detail == L"PAL version");
     e = parse_worker_line(R"({"event":"item","item":"x","status":"failed","why":"derelink: cannot resolve symbol"})");
@@ -319,7 +320,25 @@ static void test_ledger(const fs::path& dir) {
     CHECK(ledger_keys_for_packages(dir / L"missing.json", {L"x"}).empty());
 }
 
+static void test_results_file() {
+    std::vector<ImportLine> v = {line(ImportOutcome::Converted, L"conversion", true), line(ImportOutcome::NeedsRom)};
+    v[0].name = L"Caf\u00e9 Hack";
+    v[0].gameKey = L"nomercy";
+    v[0].tier = L"Untested";
+    v[0].packages = {L"C:\\c\\nomercy\\x-1.0.0.zip"};
+    v[1].needs = L"WWF No Mercy (USA) 1.0";
+    v[1].source = L"C:\\dl\\a.bps";
+    std::vector<ImportLine> back;
+    std::wstring st;
+    CHECK(import_lines_from_json(import_lines_json(v, L"1 converted"), &back, &st) && st == L"1 converted");
+    CHECK(back.size() == 2 && back[0].outcome == ImportOutcome::Converted && back[0].untested && back[0].name == v[0].name &&
+          back[0].packages.size() == 1 && back[0].packages[0] == v[0].packages[0] && back[0].gameKey == L"nomercy");
+    CHECK(back[1].outcome == ImportOutcome::NeedsRom && back[1].needs == v[1].needs && back[1].source == v[1].source);
+    CHECK(!import_lines_from_json("{}", &back, &st) && !import_lines_from_json("nope", &back, &st));
+}
+
 void run_importer_tests(const fs::path& tmp) {
+    test_results_file();
     std::error_code ec;
     fs::remove_all(tmp, ec);
     fs::create_directories(tmp);
