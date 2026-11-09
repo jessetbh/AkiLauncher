@@ -4383,7 +4383,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                 if (const pkg::ConversionInfo* c = play_as(games, launchIdx)) {
                     g_session.conversion = widen(c->id);
                     g_session.conversionName = c->name;
-                    // Its RT rig and materials files from its aki.json (aki-roadmap#57).
+                    // Its RT rig file from its aki.json (aki-roadmap#57); the game reads no materials file yet (#281).
                     for (const ConversionInfo& fc : list_conversions(games[launchIdx])) {
                         if (fc.id != g_session.conversion) continue;
                         // aki-roadmap#264: an older game ignores AKI_CONVERSION and plays the original: say so instead.
