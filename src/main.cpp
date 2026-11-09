@@ -1323,9 +1323,11 @@ static ImportLine install_local(const std::vector<GameEntry>& games, const std::
                 into = &games[og];
                 r = install_mod(src, mods_dir_for(*into), into->modGameId, into->title, into->modelProfile);
                 l.gameKey = engine_game_key(into->modGameId);
+                if (r.ok) r.message += L" (installed for " + into->title + L")";  // not the page it was imported from
             } else if (og >= 0) {
-                r.message = l.name + L" is a texture pack for " + games[og].title + L": install " + games[og].title +
-                            L" first, then import it again";
+                l.gameKey = engine_game_key(games[og].modGameId);
+                r.message = l.name + L" is a texture pack for " + games[og].title + L", which isn't installed: install " +
+                            games[og].title + L", then import the pack again";
             }
         }
         l.detail = r.message;
