@@ -786,6 +786,7 @@ static void close_settings(std::vector<GameEntry>& games) {
         o.exePath = rom_rules::exe_override_from_field(widen(g_ui.exeEdit[i]), g.exeRegistryPath.wstring());
         o.romPath = rom_rules::rom_override_from_field(widen(g_ui.romEdit[i]), g.romAutoPath.wstring());
     }
+    g_ui.convCache.clear();  // the card's Play-as warnings follow an exe= change at once (aki-roadmap#264)
     settings_save();
     apply_overrides(games);
     g_ui.showSettings = false;
