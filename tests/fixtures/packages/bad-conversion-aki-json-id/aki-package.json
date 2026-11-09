@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "kind": "conversion",
+  "id": "fixture-conversion",
+  "version": "1.0.0",
+  "game_id": "wwfnomercy",
+  "display_name": "Fixture conversion",
+  "authors": [
+    "Fixture"
+  ],
+  "license": "CC0-1.0",
+  "thumb": "thumb.png",
+  "payload": {
+    "folder": "conversion/",
+    "addons": [
+      "fixture-tex.rtz"
+    ]
+  },
+  "base_rom": {
+    "sha1": [
+      "231b50fff9a4a6c67d48dbe0ba1181153e879060"
+    ],
+    "name": "Fixture ROM (not a ROM)"
+  }
+}
