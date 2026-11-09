@@ -139,7 +139,28 @@ static void the_ports_refusal_line_is_recognised() {
     CHECK(!log_says_rom_refused({}));
 }
 
+// aki-roadmap#219: an imported retail copy is in use and the checkout's own ROM file is the hack. Reset, then
+// closing Settings, must save no rom= override (it used to save the checkout's file, which the port refused).
+static void settings_reset_saves_no_override_when_an_imported_copy_is_used() {
+    Disk d;
+    d.files = {{L"checkout\\wm2k.z64", HACK}, {L"data\\wwf.wm2k.us.z64", RETAIL}};
+    RomResolution r = d.resolve(L"", CANDIDATES);
+    CHECK(r.autoRom.path == L"data\\wwf.wm2k.us.z64");
+    const std::wstring field = rom_field_reset(r.autoRom.path);
+    CHECK(rom_override_from_field(field, r.autoRom.path).empty());
+    // The old Reset value is another file, so it would have become the override.
+    CHECK(rom_override_from_field(L"checkout\\wm2k.z64", r.autoRom.path) == L"checkout\\wm2k.z64");
+}
+
+static void rom_field_saves_an_override_only_for_another_file() {
+    CHECK(rom_override_from_field(L"", L"checkout\\wm2k.z64").empty());
+    CHECK(rom_override_from_field(L"Checkout/WM2K.z64", L"checkout\\wm2k.z64").empty());
+    CHECK(rom_override_from_field(L"mine.z64", L"checkout\\wm2k.z64") == L"mine.z64");
+}
+
 int main() {
+    settings_reset_saves_no_override_when_an_imported_copy_is_used();
+    rom_field_saves_an_override_only_for_another_file();
     imported_retail_beats_the_main_checkouts_hack();
     a_wrong_file_early_in_the_list_doesnt_hide_the_right_one();
     first_right_file_wins_and_later_ones_arent_read();
