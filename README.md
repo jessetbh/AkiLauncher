@@ -45,9 +45,9 @@ timing, and file-backed saves.
   play-time stats, and controller-aware button hints.
 - **Windowed or fullscreen** (`F11` / `Alt+Enter`); running games follow the
   launcher window live.
-- **Quick match** (`Q` / `Back`): the game starts straight into a CPU-vs-CPU
+- **Quick match** (developer mode only in 0.3.0: `--dev`, `AKI_DEV=1` or `dev_mode=1`; `Q` / `Back`): the game starts straight into a CPU-vs-CPU
   match in the venue you pick, through the Quick Match mod the games bundle.
-- **History Tour** (`H`): a run of stops through wrestling history, each one a
+- **History Tour** (developer mode only in 0.3.0; `H`): a run of stops through wrestling history, each one a
   quick match in that event's venue and match type (first slice: five No Mercy
   stops from WWF 2000).
 
@@ -61,8 +61,8 @@ timing, and file-backed saves.
 | U, RB | install an available update |
 | M, Start | the game's Mods page (install / remove mods, texture packs, model packs and conversions) |
 | C, LB | Play as...: the original game or one of its installed conversions (shown when it has some) |
-| Q, Back | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
-| H (or History Tour... on the Quick match page) | the History Tour: stops through wrestling history, played in order |
+| Q, Back (developer mode only in 0.3.0) | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
+| H (or History Tour... on the Quick match page; developer mode only in 0.3.0) | the History Tour: stops through wrestling history, played in order |
 | S, Y | settings (Return to Launcher binding, per-game paths) |
 | F11, Alt+Enter | windowed / fullscreen |
 | Esc | quit |
@@ -70,7 +70,7 @@ timing, and file-backed saves.
 
 ## FAQ
 
-**What is the History Tour?** A list of stops, walked in order. Each stop has a year, a title, a two-line blurb, and a
+**What is the History Tour?** (Developer mode only in 0.3.0, like Quick match.) A list of stops, walked in order. Each stop has a year, a title, a two-line blurb, and a
 game with a Quick match venue and match set. **Play this stop** launches it through Quick match, with the same
 one-run-only mod settings. When the game closes, the tour marks the stop done (`tour_stop` in the launcher's settings),
 and its page comes back on the next stop. A crash or a forced close doesn't count. Stops go in order: the next one
