@@ -32,6 +32,7 @@
 #include "mods.h"
 #include "modelpacks.h"
 #include "packages.h"
+#include "cardlayout.h"
 #include "convnav.h"
 #include "quickmatch.h"
 #include "tour.h"
@@ -3123,6 +3124,33 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     bool soon = s.comingSoon && !s.launchable() && !release_for(s.artKey, &selRelProbe);
     float infoY = vh * 0.60f;
 
+    // The status note's top line (drawn over the footer, below): multi-line notes (the wrong-ROM error) grow upward.
+    auto statusNoteY = [&]() {
+        std::string note = narrow(g_session.statusNote);
+        int lines = 1 + (int)std::count(note.begin(), note.end(), '\n');
+        ImGui::PushFont(g_ui.fontSmall);
+        float y = vh * 0.935f - lines * ImGui::GetTextLineHeightWithSpacing();
+        ImGui::PopFont();
+        return y < vh * 0.905f ? y : vh * 0.905f;
+    };
+
+    // aki-roadmap#240: the title, the info lines and the action button as one block (cardlayout::place). The button
+    // goes under the lines, never over them (the update-available line was the one covered); a tall block (wrong ROM
+    // + SHA1 lines + Play as... + update + dev) moves up clear of the status note and the footer, no higher than the
+    // carousel's year captions. The lines' height is last frame's, per game: the block settles in one frame.
+    static std::vector<cardlayout::Input> s_cardLast;
+    if ((int)s_cardLast.size() != n) s_cardLast.assign(n, cardlayout::Input{});
+    cardlayout::Input cardIn = s_cardLast[g_ui.selected];
+    cardIn.infoY = infoY;
+    cardIn.btnAnchor = vh * 0.115f;
+    cardIn.gap = vh * 0.012f;
+    ImGui::PushFont(g_ui.fontSmall);
+    cardIn.ceilY = vh * 0.365f + baseW * selScale * aspect * 0.5f + 10 + ImGui::GetFontSize() + vh * 0.012f;
+    ImGui::PopFont();
+    cardIn.floorY = (g_session.statusNote.empty() ? vh * 0.945f : statusNoteY()) - vh * 0.012f;
+    const cardlayout::Result card = cardlayout::place(cardIn);
+    infoY = card.infoY;
+
     // The crash panel, or the dev-mode rebuild panel, replaces this whole zone
     // until dismissed.
     if (g_session.logTail.empty() && !rebuildPanel) {
@@ -3305,6 +3333,10 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         ImGui::PopFont();
     }
 
+    // This frame's lines and button, for next frame's placement.
+    s_cardLast[g_ui.selected].stackH = ImGui::GetCursorPosY() - infoY;
+    s_cardLast[g_ui.selected].btnH = action != CardAction::None ? vh * 0.048f : 0.0f;
+
     // Action button (mouse users; keyboard/pad use Enter/A)
     if (action != CardAction::None) {
         const char* label = action == CardAction::Play       ? "PLAY"
@@ -3312,11 +3344,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                                                              : g_ui.padInput ? "FIND MY ROM" : "SELECT ROM...";
         ImGui::PushFont(g_ui.fontBase);
         ImVec2 bsz(vw * (action == CardAction::Play ? 0.10f : 0.13f), vh * 0.048f);
-        // Keep the button at a stable anchor, but never let it ride up over the
-        // stacked info lines above it (status + optional last-played + update-
-        // available line). When those flow past the anchor, drop below them so the
-        // button can't paint over the "Update available" text.
-        float btnY = infoY + vh * 0.115f;
+        // At the block's place (above), and in any case under this frame's lines: a line that appeared this
+        // frame (a pick, the update check coming in) is never covered for the one frame before the block settles.
+        float btnY = card.btnY;
         float belowText = ImGui::GetCursorPosY() + vh * 0.012f;
         if (belowText > btnY) btnY = belowText;
         ImGui::SetCursorPos(ImVec2((vw - bsz.x) * 0.5f, btnY));
@@ -3427,13 +3457,10 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                                                    : "Backspace / B to dismiss");
         ImGui::PopFont();
     } else if (!g_session.statusNote.empty()) {
-        ImGui::PushFont(g_ui.fontSmall);
         // Multi-line notes (the wrong-ROM error) grow upward, clear of the footer.
-        std::string note = narrow(g_session.statusNote);
-        int lines = 1 + (int)std::count(note.begin(), note.end(), '\n');
-        float noteY = vh * 0.935f - lines * ImGui::GetTextLineHeightWithSpacing();
-        ImGui::SetCursorPosY(noteY < vh * 0.905f ? noteY : vh * 0.905f);
-        text_centered_colored(palette::error, note);
+        ImGui::SetCursorPosY(statusNoteY());
+        ImGui::PushFont(g_ui.fontSmall);
+        text_centered_colored(palette::error, narrow(g_session.statusNote));
         ImGui::PopFont();
     }
 
@@ -3640,9 +3667,36 @@ static bool shot_setup(ShotPage page, std::vector<GameEntry>& games, int gameInd
         }
         case ShotPage::HistoryTour: open_tour(); break;
         case ShotPage::Home:
+        case ShotPage::Dev:  // home with the dev line
             if (demo) g_shotModsDir = demoDir;  // its conversions: Play as... (aki-roadmap#154)
             break;
         default: break;
+    }
+    // The home card's optional lines, for layout checks: AKI_SHOT_CARD = a comma list of update (a newer release than
+    // the installed one), played (a last-played line), note (a status note) and wrongrom (the wrong-ROM status with
+    // its SHA1 lines). A shot run has none of them on its own: it checks no releases, plays nothing and sets no note.
+    // In memory only, like the rest of a shot run.
+    wchar_t card[256]{};
+    if ((page == ShotPage::Home || page == ShotPage::Dev) && GetEnvironmentVariableW(L"AKI_SHOT_CARD", card, 256)) {
+        std::wstring want = L"," + std::wstring(card) + L",";
+        GameEntry& g = games[gameIndex];
+        if (want.find(L",update,") != std::wstring::npos) {
+            if (!g.exeFound) {
+                *why = g.title + L" isn't installed here: no update line to show";
+                return false;
+            }
+            if (g.installedTag.empty()) g.installedTag = L"v0.1.0";
+            release_set(g.artKey, ReleaseInfo{L"v9.9.9", L"", L""});
+        }
+        if (want.find(L",played,") != std::wstring::npos)
+            settings().stats[g.artKey] = GameStats{(long long)time(nullptr) - 2 * 86400, 4 * 3600 + 12 * 60};
+        if (want.find(L",note,") != std::wstring::npos)
+            g_session.statusNote = L"Demo status note: the last launch didn't start";
+        if (want.find(L",wrongrom,") != std::wstring::npos) {
+            g.romWrong = true;
+            if (g.romSha1.empty()) g.romSha1 = L"0123456789ABCDEF0123456789ABCDEF01234567";
+            g.romHaveSha1 = L"FEDCBA9876543210FEDCBA9876543210FEDCBA98";
+        }
     }
     if (!g_shotModsDir.empty() && !demoOk) {
         *why = L"the demo mods folder couldn't be made";
