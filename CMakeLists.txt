@@ -36,6 +36,8 @@ add_library(imgui_lib STATIC
 target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends
                            ${imgui_SOURCE_DIR}/misc/cpp)
 target_compile_definitions(imgui_lib PUBLIC UNICODE _UNICODE NOMINMAX)
+# The launcher feeds ImGui's gamepad itself, from every XInput pad (the backend reads only the first; aki-roadmap#232).
+target_compile_definitions(imgui_lib PRIVATE IMGUI_IMPL_WIN32_DISABLE_GAMEPAD)
 
 # assets/games.json (the game registry, aki-roadmap#24) is built in as the
 # fallback: its bytes as a char array in games_json.inc (no string-literal size
@@ -74,6 +76,12 @@ add_executable(AkiLauncher WIN32
     src/shots.cpp
     src/gameipc.cpp
     src/packages.cpp
+    src/texpacks.cpp
+    src/importer.cpp
+    src/importrun.cpp
+    src/importbatch.cpp
+    src/convnav.cpp
+    src/cardlayout.cpp
 )
 target_include_directories(AkiLauncher PRIVATE ${CMAKE_BINARY_DIR}/generated)
 if(MSVC)
@@ -99,7 +107,7 @@ add_dependencies(AkiLauncher rom_rules_tests_run)
 option(AKI_LAUNCHER_TESTS "Build AkiLauncherTests" OFF)
 if(AKI_LAUNCHER_TESTS)
     add_executable(AkiLauncherTests tests/tests_main.cpp tests/rebuild_tests.cpp tests/romscan_tests.cpp
-                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp tests/selfupdate_tests.cpp tests/modelpacks_tests.cpp tests/quickmatch_tests.cpp tests/tour_tests.cpp tests/shots_tests.cpp tests/ipc_tests.cpp tests/packages_tests.cpp src/packages.cpp src/json.cpp src/quickmatch.cpp src/tour.cpp src/shots.cpp src/gameipc.cpp src/modelpacks.cpp src/selfupdate.cpp
+                   tests/mods_tests.cpp tests/portable_tests.cpp tests/registry_tests.cpp tests/selfupdate_tests.cpp tests/modelpacks_tests.cpp tests/quickmatch_tests.cpp tests/tour_tests.cpp tests/shots_tests.cpp tests/ipc_tests.cpp tests/packages_tests.cpp tests/importer_tests.cpp tests/importbatch_tests.cpp tests/convnav_tests.cpp tests/cardlayout_tests.cpp src/convnav.cpp src/cardlayout.cpp src/packages.cpp src/texpacks.cpp src/importer.cpp src/importrun.cpp src/importbatch.cpp src/json.cpp src/quickmatch.cpp src/tour.cpp src/shots.cpp src/gameipc.cpp src/modelpacks.cpp src/selfupdate.cpp
                    src/installer.cpp src/rebuild.cpp src/romscan.cpp src/mods.cpp src/settings.cpp
                    src/launch.cpp src/games.cpp src/rom_rules.cpp)
     target_compile_definitions(AkiLauncherTests PRIVATE UNICODE _UNICODE NOMINMAX AKI_TESTS_DIR="${CMAKE_SOURCE_DIR}/tests")

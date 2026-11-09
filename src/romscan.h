@@ -40,10 +40,15 @@ struct RomScanEntry {
     RomHeader header;
     std::wstring sha1;         // of the .z64-order bytes; only for files that matched a game
     std::wstring note;         // one line for the UI
+    int otherRegionGame = -1;  // NotSupported, but the same cartridge id as this games[] index in another region (PAL)
 };
 
 // The games[] index whose cartridge code (id + region) matches, or -1.
 int rom_match_game(const RomHeader& h, const std::vector<GameEntry>& games);
+// The games[] index with the same 2-character cartridge id in ANOTHER region (a PAL or Japanese release), or -1.
+int rom_match_other_region(const RomHeader& h, const std::vector<GameEntry>& games);
+// The region a header's region letter (gameCode[3]) stands for, for the player: "PAL (Europe)", "Japanese", "USA".
+std::wstring rom_region_name(char regionLetter);
 RomScanEntry rom_classify(const std::filesystem::path& file, const std::vector<GameEntry>& games);
 // ROM-like files (.z64, .v64, .n64, .rom, .bin) in dir and up to 3 folders
 // below it, sorted by path; at most maxFiles (truncated says so). A folder

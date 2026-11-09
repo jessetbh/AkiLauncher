@@ -209,6 +209,11 @@ bool release_for(const std::wstring& artKey, ReleaseInfo* out) {
     return true;
 }
 
+void release_set(const std::wstring& artKey, const ReleaseInfo& rel) {
+    std::lock_guard lk(g_relMx);
+    g_releases[artKey] = rel;
+}
+
 // ---------------------------------------------------------------------------
 // Install worker
 // ---------------------------------------------------------------------------
