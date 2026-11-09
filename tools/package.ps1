@@ -81,9 +81,12 @@ Controls
   Enter / A         play / download / select ROM
   F / X             flip the box art (front / back)
   U / RB            install an available update
-  S / Y             settings (rebind quick-back, per-game paths)
+  M / Start         the selected game's Mods page (import mods, hacks, packs)
+  C / LB            Play as: the original game or an installed conversion
+  S / Esc / Y       settings (rebind quick-back, ROM folder, per-game paths);
+                    Quit AKI Launcher is a button there, below ROM Folder
+  Esc / B           back (on a sub-page)
   F11 / Alt+Enter   windowed / fullscreen
-  Esc               quit
   In game           Shift+F12 or hold View+Menu ~0.6s to return here
 
 Notes

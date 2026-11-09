@@ -2738,7 +2738,7 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
             break;
         }
     } else {
-        bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape) && !io.WantTextInput;
+        bool esc = ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !io.WantTextInput;  // no repeat: a held Esc from home (#291)
         // With gamepad nav on, B is also ImGui's cancel — while a text field
         // is active let it just leave the field instead of closing the page.
         if (esc || ((pad & XINPUT_GAMEPAD_B) && !io.WantTextInput)) close_settings(games);
@@ -2811,7 +2811,10 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    if (ImGui::Button("Quit AKI Launcher")) g_quitRequested = true;
+    if (ImGui::Button("Quit AKI Launcher")) {
+        close_settings(games);  // the path fields become overrides and are saved, as on Back
+        g_quitRequested = true;
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
