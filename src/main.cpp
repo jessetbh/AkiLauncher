@@ -1256,22 +1256,27 @@ static ImportLine install_local(const std::vector<GameEntry>& games, const std::
             l.kind = L"ROM";
             int gi = e.gameIndex >= 0 ? e.gameIndex : e.otherRegionGame;
             l.gameKey = gi >= 0 ? engine_game_key(games[gi].modGameId) : L"";
-            if (e.verdict == RomVerdict::BaseDump) {
+            switch (import_rom_route(e.verdict == RomVerdict::BaseDump, e.verdict == RomVerdict::OtherBuild,
+                                     e.otherRegionGame >= 0, e.verdict == RomVerdict::Unreadable)) {
+            case ImportRomRoute::Stock:
                 l.outcome = ImportOutcome::Stock;
                 l.detail = L"This is the stock game (" + games[gi].title +
                            L"): nothing to install. Set it as the game's ROM on its card if it needs one.";
-            } else if (e.otherRegionGame >= 0) {
+                break;
+            case ImportRomRoute::Unsupported:
                 l.outcome = ImportOutcome::Unsupported;
                 l.detail = e.note;
-            } else if (e.verdict == RomVerdict::OtherBuild) {
-                l.viaWorker = true;  // a hack, translation or other revision: the converter decides
-                l.detail = e.note;
-            } else if (e.verdict == RomVerdict::Unreadable) {
+                break;
+            case ImportRomRoute::Failed:
                 l.outcome = ImportOutcome::Failed;
                 l.detail = e.note;
-            } else {
-                l.outcome = ImportOutcome::Unsupported;
+                break;
+            case ImportRomRoute::Converter:
+                // A hack or other revision of one of the six, or an unknown cartridge code the converter may know (a
+                // catalog hack with its own code, VPW2 Freem; a renamed No Mercy hack): it decides (aki-roadmap#277).
+                l.viaWorker = true;
                 l.detail = e.note;
+                break;
             }
             return l;
         }

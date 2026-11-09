@@ -1,4 +1,5 @@
 #pragma once
+// (aki-roadmap#277) ImportRomRoute / import_rom_route: where the Import screen sends a picked ROM file.
 #include <filesystem>
 #include <map>
 #include <string>
@@ -131,3 +132,10 @@ std::vector<std::string> ledger_keys_for_packages(const std::filesystem::path& l
 // --- results file (the headless --import-batch run writes it; --shot import reads it) ------------------------------
 std::string import_lines_json(const std::vector<ImportLine>& lines, const std::wstring& status);
 bool import_lines_from_json(const std::string& text, std::vector<ImportLine>* lines, std::wstring* status);
+
+// Where the Import screen sends a picked ROM file (aki-roadmap#277): the stock dump of one of the six (nothing to do),
+// the converter (a hack or other build of one of them, or a cartridge code it may know: catalog hacks such as VPW2
+// Freem carry their own code, and renamed No Mercy hacks are routed by title, #268), Unsupported (a dump of one of the
+// six from another region), or Failed (unreadable).
+enum class ImportRomRoute { Stock, Converter, Unsupported, Failed };
+ImportRomRoute import_rom_route(bool baseDump, bool otherBuild, bool otherRegion, bool unreadable);

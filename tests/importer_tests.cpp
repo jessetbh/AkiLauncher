@@ -222,6 +222,12 @@ static void test_worker_lines() {
     CHECK(e.line.detail == L"needs a stock ROM of the game it was made for");
     e = parse_worker_line(R"({"event":"item","item":"x","status":"needs-rom","needs":"WWF No Mercy (USA) 1.0"})");
     CHECK(e.line.detail == L"needs WWF No Mercy (USA) 1.0");
+    // aki-roadmap#277: an unknown cartridge code goes to the converter (catalog hacks with their own code), not Unsupported.
+    CHECK(import_rom_route(false, false, false, false) == ImportRomRoute::Converter);
+    CHECK(import_rom_route(false, true, false, false) == ImportRomRoute::Converter);
+    CHECK(import_rom_route(true, false, false, false) == ImportRomRoute::Stock);
+    CHECK(import_rom_route(false, false, true, false) == ImportRomRoute::Unsupported);
+    CHECK(import_rom_route(false, false, false, true) == ImportRomRoute::Failed);
     e = parse_worker_line(R"({"event":"item","item":"x","status":"needs-game"})");
     CHECK(e.line.outcome == ImportOutcome::NeedsGame);
     // A mod the worker found in a folder: the launcher installs it; inside an archive it can't.
