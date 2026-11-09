@@ -200,7 +200,14 @@ WorkerEvent parse_worker_line(const std::string& text) {
         l.outcome = ImportOutcome::Stock;
         l.detail = why.empty() ? L"this is the stock game: nothing to convert" : why;
         // The same hint a loose stock ROM gets (aki-roadmap#271): one inside a folder or zip said only "nothing to convert".
-        if (l.detail.find(L"card") == std::wstring::npos) l.detail += L". Set it as the game's ROM on its card if it needs one";
+        // Only for the port's own dump ("the stock <game> ROM: nothing to convert"): another stock ROM (No Mercy 1.0, a
+        // base for patches) isn't one the card takes.
+        const bool portDump = why.empty() || (why.rfind(L"the stock ", 0) == 0 && why != L"the stock ROM: nothing to convert" &&
+                                              why.find(L"base for patches") == std::wstring::npos);
+        if (portDump && l.detail.find(L"on its card") == std::wstring::npos) {
+            while (!l.detail.empty() && l.detail.back() == L'.') l.detail.pop_back();
+            l.detail += L". Set it as the game's ROM on its card if it needs one.";
+        }
     } else if (status == L"have-it") {
         l.outcome = ImportOutcome::HaveIt;
         l.detail = why.empty() ? L"imported before: skipped" : why;
@@ -208,7 +215,10 @@ WorkerEvent parse_worker_line(const std::string& text) {
         l.outcome = ImportOutcome::NeedsRom;
         l.detail = l.needs.empty() ? (why.empty() ? L"needs its stock ROM" : why) : L"needs " + l.needs;
         // The converter's reason too (aki-roadmap#271): "needs the ROM it was made for" alone hid which ROMs it tried.
-        if (!l.needs.empty() && !why.empty()) l.detail += L" (" + why + L")";
+        // Not when it only repeats the need, nor the converter's own wording for "no ROMs given" (roms / rom_dirs).
+        if (!l.needs.empty() && !why.empty() && why.find(l.needs) == std::wstring::npos &&
+            why.rfind(L"no stock ROMs were given", 0) != 0)
+            l.detail += L" (" + why + L")";
     } else if (status == L"needs-game") {
         l.outcome = ImportOutcome::NeedsGame;
         l.detail = why.empty() ? L"doesn't say which game it is for" : why;

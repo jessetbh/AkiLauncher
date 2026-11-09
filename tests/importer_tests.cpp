@@ -209,7 +209,19 @@ static void test_worker_lines() {
     e = parse_worker_line(R"({"event":"item","item":"C:\\dl\\wzbb.xdelta","status":"needs-rom","kind":"patch","needs":"the ROM it was made for","why":"it does not apply to: WWF No Mercy"})");
     CHECK(e.line.detail == L"needs the ROM it was made for (it does not apply to: WWF No Mercy)");
     e = parse_worker_line(R"({"event":"item","item":"x!nm.z64","status":"stock","why":"the stock WWF No Mercy ROM: nothing to convert"})");
-    CHECK(e.line.detail.find(L"Set it as the game's ROM on its card") != std::wstring::npos);
+    CHECK(e.line.detail == L"the stock WWF No Mercy ROM: nothing to convert. Set it as the game's ROM on its card if it needs one.");
+    // Not for a stock ROM the card won't take (No Mercy 1.0: a base for patches; the survey's other stock dump).
+    e = parse_worker_line(R"({"event":"item","item":"x","status":"stock","why":"WWF No Mercy (USA) 1.0, a stock ROM (a base for patches)"})");
+    CHECK(e.line.detail.find(L"card") == std::wstring::npos);
+    e = parse_worker_line(R"({"event":"item","item":"x","status":"stock","why":"the stock ROM: nothing to convert"})");
+    CHECK(e.line.detail.find(L"card") == std::wstring::npos);
+    // The need isn't repeated when the reason only restates it, and no developer words for "no ROMs given".
+    e = parse_worker_line(R"({"event":"item","item":"x","status":"needs-rom","needs":"the WWF No Mercy ROM the port uses","why":"needs the WWF No Mercy ROM the port uses"})");
+    CHECK(e.line.detail == L"needs the WWF No Mercy ROM the port uses");
+    e = parse_worker_line(R"({"event":"item","item":"x","status":"needs-rom","needs":"a stock ROM of the game it was made for","why":"no stock ROMs were given (roms / rom_dirs)"})");
+    CHECK(e.line.detail == L"needs a stock ROM of the game it was made for");
+    e = parse_worker_line(R"({"event":"item","item":"x","status":"needs-rom","needs":"WWF No Mercy (USA) 1.0"})");
+    CHECK(e.line.detail == L"needs WWF No Mercy (USA) 1.0");
     e = parse_worker_line(R"({"event":"item","item":"x","status":"needs-game"})");
     CHECK(e.line.outcome == ImportOutcome::NeedsGame);
     // A mod the worker found in a folder: the launcher installs it; inside an archive it can't.
