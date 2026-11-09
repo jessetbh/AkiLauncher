@@ -202,8 +202,8 @@ Folder → *Scan a folder for ROMs...* reads every `.z64`/`.v64`/`.n64` (also
 - the accepted dump of an installed game gets a *Use this ROM* button (a
   byte-swapped dump is saved as `.z64`);
 - another build of a supported game (a hack, translation or other revision)
-  is named as such, with how it plays: as a patch mod made with
-  `tools\romhack\make_patch_mod.py` from the game's repository;
+  is named as such, with how to play it: import it on the Mods page
+  (*Import...*), which converts it into a conversion of that game;
 - everything else is listed as not supported.
 
 Only files whose header names one of the games are read in full and
