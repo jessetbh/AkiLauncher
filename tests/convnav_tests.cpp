@@ -112,7 +112,39 @@ static void test_pad_script() {
     CHECK(!PadScriptPlayer().active() && p.active());
 }
 
+// aki-roadmap#289: Down doesn't open the Mods page from the card; M / Start (and V) do, on the conversions when there are some.
+static void test_card_open() {
+    using convnav::CardKeys;
+    using convnav::CardOpen;
+    CardKeys down;
+    down.keyDown = true;
+    down.padDown = true;
+    CHECK(convnav::card_open(down, 2) == CardOpen::None);
+    CHECK(convnav::card_open(down, 0) == CardOpen::None);
+    CardKeys start;
+    start.padStart = true;
+    CHECK(convnav::card_open(start, 2) == CardOpen::ModsOnConversions);
+    CHECK(convnav::card_open(start, 0) == CardOpen::Mods);
+    CardKeys m;
+    m.keyM = true;
+    CHECK(convnav::card_open(m, 1) == CardOpen::ModsOnConversions);
+    CHECK(convnav::card_open(m, 0) == CardOpen::Mods);
+    CardKeys v;
+    v.keyV = true;
+    CHECK(convnav::card_open(v, 1) == CardOpen::ModsOnConversions);
+    CHECK(convnav::card_open(v, 0) == CardOpen::None);
+    CHECK(convnav::card_open(CardKeys{}, 3) == CardOpen::None);
+    for (bool pad : {true, false}) {
+        std::string h = convnav::play_as_hint(pad);
+        CHECK(h.find("Down") == std::string::npos);
+        CHECK(h.find("Known Issues") != std::string::npos);
+    }
+    CHECK(convnav::play_as_hint(true).find("Start") != std::string::npos);
+    CHECK(convnav::play_as_hint(false).find("V Details") != std::string::npos);
+}
+
 void run_convnav_tests(const fs::path&) {
+    test_card_open();
     test_play_as_step();
     test_conversions_focus();
     test_insert_art();

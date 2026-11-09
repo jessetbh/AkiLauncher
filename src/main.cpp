@@ -3038,11 +3038,20 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             ImGui::End();
             return -1;
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_M, false) || (pad & XINPUT_GAMEPAD_START)) {
-            play_flip();
-            open_mods(games, g_ui.selected);
-            ImGui::End();
-            return -1;
+        {
+            // aki-roadmap#289: M / Start open the Mods page, on the Conversions section (details, known issues) when
+            // the game has conversions; Down opens nothing (V, the keyboard's details shortcut, is on the Play as line).
+            convnav::CardKeys ck;
+            ck.keyM = ImGui::IsKeyPressed(ImGuiKey_M, false);
+            ck.padStart = (pad & XINPUT_GAMEPAD_START) != 0;
+            if (ck.keyM || ck.padStart) {
+                const GameEntry& mg = games[g_ui.selected];
+                int nconv = mg.exeFound || !g_shotModsDir.empty() ? (int)game_conversions(games, g_ui.selected).size() : 0;
+                play_flip();
+                open_mods(games, g_ui.selected, convnav::card_open(ck, nconv) == convnav::CardOpen::ModsOnConversions);
+                ImGui::End();
+                return -1;
+            }
         }
         // aki-roadmap#287: Quick match and the History Tour (which runs on it) are dev-only in 0.3.0.
         const bool quickUi = quick_match_ui_enabled(dev_mode());
@@ -3354,8 +3363,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // Play as... (aki-roadmap#154): the original game or one of its conversions, remembered per game. A launch
     // choice: nothing in the game's files changes.
-    // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it, Down (V) opens the Conversions page
-    // with its details (tier, known issues, Untested) on the picked one. Shown also while the game needs its ROM.
+    // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it; Start / M (V on a keyboard) opens the
+    // Mods page on its Conversions section with its details (tier, known issues, Untested) on the picked one. Shown also while the game needs its ROM.
     bool lbPlayAs = false;
     if ((s.exeFound || !g_shotModsDir.empty()) && !installingSel) {
         const auto& convs = game_conversions(games, g_ui.selected);
@@ -3370,8 +3379,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                 pick = play_as(games, g_ui.selected);
                 play_nav();
             }
-            if (!inserting && (ImGui::IsKeyPressed(ImGuiKey_V, false) || ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
-                               (pad & XINPUT_GAMEPAD_DPAD_DOWN))) {
+            convnav::CardKeys vk;
+            vk.keyV = ImGui::IsKeyPressed(ImGuiKey_V, false);
+            if (!inserting && convnav::card_open(vk, (int)convs.size()) == convnav::CardOpen::ModsOnConversions) {
                 play_flip();
                 open_mods(games, g_ui.selected, true);
                 ImGui::End();
@@ -3383,8 +3393,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             convnav::TierBadge badge = pick ? convnav::tier_badge(pick->tier, pick->untested) : convnav::TierBadge{};
             if (!badge.text.empty()) line += "  [" + narrow(badge.text) + "]";
             text_centered_colored(badge.warn ? palette::warn : palette::accent, line);
-            text_centered_colored(palette::dim, g_ui.padInput ? "LB Changes It      Down Details And Known Issues"
-                                                              : "C Changes It (Shift+C Back)      V Or Down Details And Known Issues");
+            text_centered_colored(palette::dim, convnav::play_as_hint(g_ui.padInput));
             if (pick && !pkg::conversion_rom_matches(*pick, rom_sha1_of(s)))
                 text_centered_colored(palette::warn, narrow(pick->name) + " is made for another ROM than yours");
             if (pick && !pick->needsGame.empty())  // aki-roadmap#264: said before Play, not only after the cart goes in

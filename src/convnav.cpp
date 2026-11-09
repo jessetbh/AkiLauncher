@@ -157,4 +157,15 @@ PadFrame PadScriptPlayer::next() {
     return f;
 }
 
+CardOpen card_open(const CardKeys& k, int conversions) {
+    if (k.keyM || k.padStart) return conversions > 0 ? CardOpen::ModsOnConversions : CardOpen::Mods;
+    if (k.keyV && conversions > 0) return CardOpen::ModsOnConversions;
+    return CardOpen::None;
+}
+
+std::string play_as_hint(bool padInput) {
+    return padInput ? "LB Changes It      Start Details And Known Issues"
+                    : "C Changes It (Shift+C Back)      V Details And Known Issues";
+}
+
 }  // namespace convnav

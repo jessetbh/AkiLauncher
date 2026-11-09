@@ -31,6 +31,18 @@ struct TierBadge {
 };
 TierBadge tier_badge(const std::wstring& tier, bool untested);
 
+// aki-roadmap#289: the home card's ways into the Mods page. Down (arrow or D-pad) is not one: it reads as "move".
+// M / Start open the Mods page, on its Conversions section (the Play as... pick's details and known issues) when the
+// game has conversions; V is the keyboard's shortcut to those details.
+struct CardKeys {
+    bool keyM = false, padStart = false, keyV = false;
+    bool keyDown = false, padDown = false;  // never open anything
+};
+enum class CardOpen { None, Mods, ModsOnConversions };
+CardOpen card_open(const CardKeys& k, int conversions);
+// The hint line under the Play as... line.
+std::string play_as_hint(bool padInput);
+
 // The folders a controller ROM search looks in (no file dialog): the candidates in order, existing ones only, each
 // once (paths compared without case and without a trailing slash).
 std::vector<std::filesystem::path> rom_search_dirs(const std::vector<std::filesystem::path>& candidates,

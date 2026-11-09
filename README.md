@@ -59,8 +59,9 @@ timing, and file-backed saves.
 | Enter, A | play / download / select ROM |
 | F, X | flip the box art |
 | U, RB | install an available update |
-| M, Start | the game's Mods page (install / remove mods, texture packs, model packs and conversions) |
+| M, Start | the game's Mods page (install / remove mods, texture packs, model packs and conversions); with conversions installed it opens on the Conversions section, on the Play as... pick |
 | C, LB | Play as...: the original game or one of its installed conversions (shown when it has some) |
+| V | that game's conversion details and known issues (the Mods page's Conversions section; Start / M opens there too when the game has conversions) |
 | Q, Back (developer mode only in 0.3.0) | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
 | H (or History Tour... on the Quick match page; developer mode only in 0.3.0) | the History Tour: stops through wrestling history, played in order |
 | S, Y | settings (Return to Launcher binding, per-game paths) |
