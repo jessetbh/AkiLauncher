@@ -23,6 +23,7 @@
 #include "audio.h"
 #include "conversions.h"
 #include "games.h"
+#include "importer.h"
 #include "installer.h"
 #include "rebuild.h"
 #include "romscan.h"
@@ -201,6 +202,7 @@ struct UiState {
     std::vector<Texture> modThumbs;  // parallel to modItems (empty srv = none)
     std::string modsNote;
     bool modsNoteOk = true;
+    std::vector<ImportLine> modsResults;  // aki-roadmap#228: one line per item of the last multi-item install
     int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
     int packRemove = -1;  // the same for a model pack
     // Model packs (aki-roadmap#130): <mods>\models\ and its models.txt, for games with model import
@@ -1050,19 +1052,21 @@ static bool is_package_source(const std::filesystem::path& p) {
     return pk.opened() && pk.has("aki-package.json");
 }
 
-// A package (or a patch-mod ROM hack, which becomes a conversion), with Yes/No for a reinstall or a downgrade.
-static pkg::PackageInstall install_one_package(const GameEntry& g, const std::filesystem::path& src, bool patchMod) {
+// A package (or a patch-mod ROM hack, which becomes a conversion). ask: Yes/No for a reinstall or a downgrade (a
+// batch doesn't ask: the same version stays, and says so).
+static pkg::PackageInstall install_one_package(const GameEntry& g, const std::filesystem::path& src, bool patchMod,
+                                               bool ask = true) {
     pkg::InstallTarget t = install_target(g);
     pkg::InstallOptions o;
     o.gameRunning = g_session.active() && g_session.artKey == g.artKey;
     auto run = [&] { return patchMod ? pkg::install_patch_mod(src, t, o) : pkg::install_package(src, t, o); };
     pkg::PackageInstall r = run();
     using O = pkg::PackageInstall::Outcome;
-    if (r.outcome == O::AlreadyInstalled || r.outcome == O::NeedsDowngradeConfirm) {
+    if (ask && (r.outcome == O::AlreadyInstalled || r.outcome == O::NeedsDowngradeConfirm)) {
         bool down = r.outcome == O::NeedsDowngradeConfirm;
-        std::wstring ask = r.message + (down ? L".\n\nInstall the older version anyway? Files you changed are kept as .edited copies."
-                                             : L".\n\nInstall it again? Files you changed are kept as .edited copies.");
-        if (MessageBoxW(g_hwnd, ask.c_str(), L"AKI Launcher", MB_YESNO | MB_ICONQUESTION) == IDYES) {
+        std::wstring q = r.message + (down ? L".\n\nInstall the older version anyway? Files you changed are kept as .edited copies."
+                                           : L".\n\nInstall it again? Files you changed are kept as .edited copies.");
+        if (MessageBoxW(g_hwnd, q.c_str(), L"AKI Launcher", MB_YESNO | MB_ICONQUESTION) == IDYES) {
             (down ? o.allowDowngrade : o.reinstall) = true;
             r = run();
         }
@@ -1075,6 +1079,7 @@ static void open_mods(const std::vector<GameEntry>& games, int index) {
     carry_portable(games[index]);
     g_ui.modsGame = index;
     g_ui.modsNote.clear();
+    g_ui.modsResults.clear();
     g_ui.packsNote.clear();
     g_ui.modsRemove = -1;
     refresh_mods(games);
@@ -1094,46 +1099,121 @@ static void mods_note(const std::wstring& msg, bool ok) {
     g_ui.modsNoteOk = ok;
 }
 
-static void install_into_mods(const std::vector<GameEntry>& games, const std::vector<std::filesystem::path>& srcs) {
+// One picked or dropped item, installed by the launcher itself when it can (aki-roadmap#228): a ROM is the stock
+// game, another region, another game, or a hack for the converter (viaWorker); everything else goes through the
+// installers as before (packages, patch-mod hacks, aki.json conversions, mods, texture packs, Rice/Jabo packs, model
+// packs). What none of them recognises is for the converter too.
+static ImportLine install_local(const std::vector<GameEntry>& games, const std::filesystem::path& src, bool ask,
+                                bool* anyConversion) {
     const GameEntry& g = games[g_ui.modsGame];
-    std::wstring all;
-    bool allOk = true;
-    bool anyConversion = false;  // an aki.json-only conversion: picked with Play as..., not in the game's Mods menu
-    for (const auto& src : srcs) {
-        // aki-roadmap#154: a package (aki-package.json) or a patch-mod ROM hack goes through the shared installer;
-        // everything else (a plain .nrm, .rtz, zip of them, model-pack folder) installs as before.
-        std::wstring ext = src.extension().wstring();
-        bool hack = _wcsicmp(ext.c_str(), L".nrm") == 0 && pkg::is_patch_mod(src);
-        bool ok;
-        std::wstring msg;
-        if (!hack && !is_package_source(src) && is_conversion_source(src)) anyConversion = true;
-        if (hack || is_package_source(src)) {
-            pkg::PackageInstall r = install_one_package(g, src, hack);
-            ok = r.ok();
-            msg = r.message;
-        } else if (is_conversion_source(src)) {
-            // A conversion or texture package with only an aki.json (aki-roadmap#57): its own checks and
-            // long-path extraction, into the game the aki.json names.
-            AddResult r;
-            if (g_session.active()) r.message = L"Close the game first, then add " + src.filename().wstring() + L".";
-            else r = add_conversion(games, src, g_ui.modsGame);
-            ok = r.ok;
-            msg = r.message;
-            for (wchar_t& ch : msg) if (ch == L'\n') ch = L' ';
-        } else {
-            InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title, g.modelProfile);
-            ok = r.ok;
-            msg = r.message;
+    ImportLine l;
+    l.item = src.wstring();
+    l.source = src;
+    l.name = src.filename().wstring();
+    l.gameKey = engine_game_key(g.modGameId);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(src, ec)) {
+        RomScanEntry e = rom_classify(src, games);  // 64 bytes for a non-ROM; hashes only ROMs of the six games
+        if (e.header.order != RomByteOrder::NotARom) {
+            l.kind = L"ROM";
+            int gi = e.gameIndex >= 0 ? e.gameIndex : e.otherRegionGame;
+            l.gameKey = gi >= 0 ? engine_game_key(games[gi].modGameId) : L"";
+            if (e.verdict == RomVerdict::BaseDump) {
+                l.outcome = ImportOutcome::Stock;
+                l.detail = L"This is the stock game (" + games[gi].title +
+                           L"): nothing to install. Set it as the game's ROM on its card if it needs one.";
+            } else if (e.otherRegionGame >= 0) {
+                l.outcome = ImportOutcome::Unsupported;
+                l.detail = e.note;
+            } else if (e.verdict == RomVerdict::OtherBuild) {
+                l.viaWorker = true;  // a hack, translation or other revision: the converter decides
+                l.detail = e.note;
+            } else if (e.verdict == RomVerdict::Unreadable) {
+                l.outcome = ImportOutcome::Failed;
+                l.detail = e.note;
+            } else {
+                l.outcome = ImportOutcome::Unsupported;
+                l.detail = e.note;
+            }
+            return l;
         }
-        allOk = allOk && ok;
-        if (!all.empty()) all += L"   |   ";
-        all += msg;
+    }
+    std::wstring ext = src.extension().wstring();
+    bool hack = _wcsicmp(ext.c_str(), L".nrm") == 0 && pkg::is_patch_mod(src);
+    bool package = !hack && is_package_source(src);
+    if (hack || package) {
+        pkg::PackageInstall r = install_one_package(g, src, hack, ask);
+        l.kind = hack || r.kind == "conversion" ? L"conversion" : r.kind == "texture-pack" ? L"texture pack" : L"package";
+        if (!r.name.empty()) l.name = r.name;
+        if (r.ok()) {
+            l.outcome = ImportOutcome::Installed;
+            l.installed.push_back({g.artKey, r.id, {}});
+            if (l.kind == L"conversion") *anyConversion = true;
+        } else {
+            l.outcome = r.outcome == pkg::PackageInstall::Outcome::AlreadyInstalled ? ImportOutcome::HaveIt : ImportOutcome::Failed;
+        }
+        l.detail = r.message;
+    } else if (is_conversion_source(src)) {
+        // A conversion or texture package with only an aki.json (aki-roadmap#57): its own checks and long-path
+        // extraction, into the game the aki.json names.
+        AddResult r;
+        if (g_session.active()) r.message = L"Close the game first, then add " + src.filename().wstring() + L".";
+        else r = add_conversion(games, src, g_ui.modsGame);
+        l.kind = L"conversion";
+        l.outcome = r.ok ? ImportOutcome::Installed : ImportOutcome::Failed;
+        if (r.ok) *anyConversion = true;
+        l.detail = r.message;
+        for (wchar_t& ch : l.detail) if (ch == L'\n') ch = L' ';
+    } else {
+        InstallResult r = install_mod(src, g_ui.modsDir, g.modGameId, g.title, g.modelProfile);
+        l.detail = r.message;
+        if (r.ok) {
+            l.outcome = ImportOutcome::Installed;
+            l.kind = L"mod";
+            for (const auto& p : r.installed) {
+                l.installed.push_back({g.artKey, {}, p});
+                if (inspect_mod(p).kind_text() == L"Texture pack") l.kind = L"texture pack";
+            }
+        } else if (r.unrecognized) {
+            l.viaWorker = true;  // a patch, bundle, 7z, an archive of hacks...: the converter knows more
+        } else {
+            l.outcome = ImportOutcome::Failed;
+        }
+    }
+    return l;
+}
+
+static void install_into_mods(const std::vector<GameEntry>& games, const std::vector<std::filesystem::path>& srcs) {
+    g_ui.modsResults.clear();
+    bool anyConversion = false;  // picked with Play as..., not in the game's Mods menu
+    bool ask = srcs.size() == 1;
+    std::vector<ImportLine> lines;
+    for (const auto& src : srcs) {
+        ImportLine l = install_local(games, src, ask, &anyConversion);
+        if (l.viaWorker) {
+            // Phase 0: ROM hacks, patches and Project64 bundles need the converter (Import, aki-roadmap#228).
+            l.outcome = ImportOutcome::Unsupported;
+            if (l.detail.empty() || l.kind != L"ROM") l.detail = L"not a mod, texture pack or package";
+            l.detail += L" (ROM hacks and patches are converted by Import)";
+        }
+        lines.push_back(std::move(l));
     }
     refresh_mods(games);
-    mods_note(all + (!allOk ? L"" : anyConversion ? L" Pick it with Play as... on the game's card."
-                                                  : L". Start (or restart) the game to use it; turn mods on and off in its Mods menu."),
-              allOk);
-    if (allOk) play_flip();
+    ImportCounts c = count_import(lines);
+    bool allOk = c.installed == c.total;
+    if (lines.size() == 1) {
+        const ImportLine& l = lines[0];
+        mods_note(l.detail + (!allOk ? L"" : anyConversion ? L" Pick it with Play as... on the game's card."
+                                                           : L". Start (or restart) the game to use it; turn mods on and off in its Mods menu."),
+                  allOk || l.outcome == ImportOutcome::Stock);
+    } else {
+        std::wstring head = import_summary(c);
+        if (c.installed) head += anyConversion ? L" Pick conversions with Play as... on the game's card."
+                                               : L" Start (or restart) the game to use them.";
+        mods_note(head, c.failed == 0 && c.unsupported == 0);
+        g_ui.modsResults = std::move(lines);
+    }
+    if (c.installed) play_flip();
 }
 
 // Multi-select picker for mod files; empty on cancel.
@@ -1266,6 +1346,21 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         ImGui::PushTextWrapPos(0.0f);
         ImGui::TextColored(g_ui.modsNoteOk ? palette::ready : palette::error, "%s", g_ui.modsNote.c_str());
         ImGui::PopTextWrapPos();
+    }
+    // aki-roadmap#228 phase 0: a multi-item install lists every item on its own line.
+    if (!g_ui.modsResults.empty()) {
+        float wordW = ImGui::CalcTextSize("Unsupported  ").x;
+        for (const auto& l : g_ui.modsResults) {
+            ImVec4 col = l.outcome == ImportOutcome::Installed || l.outcome == ImportOutcome::Converted ? palette::ready
+                         : l.outcome == ImportOutcome::Failed ? palette::error
+                         : l.outcome == ImportOutcome::HaveIt || l.outcome == ImportOutcome::Stock ? palette::dim
+                                                                                                      : palette::warn;
+            ImGui::TextColored(col, "%s", narrow(import_outcome_word(l.outcome)).c_str());
+            ImGui::SameLine(wordW);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextColored(palette::dim, "%s  -  %s", narrow(l.name).c_str(), narrow(l.detail).c_str());
+            ImGui::PopTextWrapPos();
+        }
     }
     ImGui::PopFont();
     ImGui::Separator();
@@ -2958,6 +3053,13 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
     }
     for (int i = 1; i < __argc && !g_shot; ++i) {
         std::wstring a = __wargv[i];
+        // Dev/test: --install-mod <mods folder> <mod game id> <file or folder> installs as the Mods page does (Rice/Jabo
+        // packs wrapped, aki-roadmap#228) without a window; exit code 0 = installed. The result is in the log.
+        if (a == L"--install-mod" && i + 3 < __argc) {
+            InstallResult r = install_mod(__wargv[i + 3], __wargv[i + 1], __wargv[i + 2], __wargv[i + 2]);
+            logf(L"install-mod: %s: %s", r.ok ? L"ok" : L"failed", r.message.c_str());
+            return r.ok ? 0 : 1;
+        }
         if (a == L"--smoke") smoke = true;
         else if (a == L"--test-launch" && i + 1 < __argc) testLaunch = _wtoi(__wargv[++i]);
         else if (a == L"--select" && i + 1 < __argc) g_ui.selected = _wtoi(__wargv[++i]);

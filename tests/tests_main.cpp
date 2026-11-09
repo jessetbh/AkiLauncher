@@ -22,6 +22,7 @@ void run_tour_tests(const std::filesystem::path& tmp);
 void run_shots_tests(const std::filesystem::path& tmp);
 void run_ipc_tests(const std::filesystem::path& tmp);
 void run_packages_tests(const std::filesystem::path& tmp);
+void run_importer_tests(const std::filesystem::path& tmp);
 
 int main() {
     wchar_t tmpBuf[MAX_PATH]{};
@@ -42,6 +43,7 @@ int main() {
     run_shots_tests(tmp / L"shots");
     run_ipc_tests(tmp / L"ipc");
     run_packages_tests(tmp / L"packages");
+    run_importer_tests(tmp / L"importer");
     std::error_code ec;
     std::filesystem::remove_all(tmp, ec);
     printf("%s (%d failed)\n", g_failed ? "FAILED" : "OK", g_failed);
