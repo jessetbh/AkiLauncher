@@ -62,6 +62,7 @@ private:
     void finish();
     void fail_placeholders(const std::wstring& why);
     void add_worker_line(ImportLine l);
+    void reinstall_have_it(ImportLine& l);
 
     ImportEnv env_;
     Phase phase_ = Phase::Idle;

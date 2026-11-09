@@ -202,7 +202,11 @@ static void test_worker_lines() {
     e = parse_worker_line(R"({"event":"item","item":"x","status":"failed","why":"derelink: cannot resolve symbol"})");
     CHECK(e.line.outcome == ImportOutcome::Failed && contains(e.line.log, L"cannot resolve symbol"));
     e = parse_worker_line(R"J({"event":"item","item":"x","status":"have-it","why":"imported before (2026-11-08)"})J");
-    CHECK(e.line.outcome == ImportOutcome::HaveIt);
+    CHECK(e.line.outcome == ImportOutcome::HaveIt && e.line.reinstall.empty());
+    // aki-roadmap#272: a have-it line's packages are an earlier import's: kept for a reinstall, never this batch's.
+    e = parse_worker_line(R"J({"event":"item","item":"x","status":"have-it","why":"imported before","package":"C:\\c\\a-1.0.0.zip","packages":["C:\\c\\a-1.0.0.zip"]})J");
+    CHECK(e.line.outcome == ImportOutcome::HaveIt && e.line.packages.empty() && e.line.reinstall.size() == 1 &&
+          e.line.reinstall[0] == std::filesystem::path(L"C:\\c\\a-1.0.0.zip"));
     e = parse_worker_line(R"({"event":"item","item":"x","status":"stock"})");
     CHECK(e.line.outcome == ImportOutcome::Stock);
     e = parse_worker_line(R"({"event":"item","item":"x","status":"needs-game"})");

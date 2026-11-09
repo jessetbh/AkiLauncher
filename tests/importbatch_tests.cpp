@@ -8,6 +8,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -46,7 +47,13 @@ static ImportEnv base_env(const fs::path& dir, std::vector<std::wstring>* uninst
         return l;
     };
     env.installPackages = [](ImportLine& l) {
-        for (const auto& p : l.packages) l.installed.push_back({L"nomercy", "pkg_" + p.stem().string(), {}});
+        for (const auto& p : l.packages) {
+            if (p.stem().wstring().find(L"kept") != std::wstring::npos) {  // install_converted: already installed
+                l.outcome = ImportOutcome::HaveIt;
+                continue;
+            }
+            l.installed.push_back({L"nomercy", "pkg_" + p.stem().string(), {}});
+        }
     };
     env.uninstall = [uninstalled](const ImportLine::Installed& in, std::wstring*) {
         uninstalled->push_back(in.packageId.empty() ? in.path.filename().wstring() : std::wstring(in.packageId.begin(), in.packageId.end()));
@@ -115,6 +122,12 @@ for p in job["paths"]:
             emit(dict(event="item", item=p, status="converted", kind="patch", game="nomercy", name="Patched", aki_tier="verified", converter="derelink", package=os.path.join(job["out"], "nomercy", "patched-1.0.0.zip")))
         else:
             emit(dict(event="item", item=p, status="needs-rom", kind="patch", needs="WWF No Mercy (USA) 1.0"))
+    elif name in ("again.z64", "kept.z64"):
+        # aki-roadmap#272: imported before; the ledger's package is still in Converted.
+        pk = os.path.join(job["out"], "nomercy", name.replace(".z64", "-1.0.0.zip"))
+        os.makedirs(os.path.dirname(pk), exist_ok=True)
+        open(pk, "wb").write(b"PK")
+        emit(dict(event="item", item=p, status="have-it", kind="rom", game="nomercy", name=name, why="imported before (2026-11-09T14:01:58)", package=pk, packages=[pk]))
     elif name == "bundle":
         emit(dict(event="item", item=os.path.join(p, "a.z64"), status="unsupported", why="PAL version"))
         emit(dict(event="item", item=p + "!x.ips", status="failed", why="bad patch"))
@@ -140,6 +153,8 @@ static void test_stub_worker(const fs::path& dir) {
     put(env.importDir / L"patch.bps", "x");
     put(env.importDir / L"bundle" / L"a.z64", "x");
     put(env.importDir / L"z pack", "x");
+    put(env.importDir / L"again.z64", "x");
+    put(env.importDir / L"kept.z64", "x");
     ImportBatch b;
     b.start(env, import_folder_items(env.importDir), true);
     CHECK(b.busy());
@@ -148,15 +163,21 @@ static void test_stub_worker(const fs::path& dir) {
         Sleep(50);
     }
     CHECK(!b.busy() && b.engine == "stub");
-    // bundle -> 2 lines (in its place), hack, patch, z pack (local)
-    CHECK(b.lines.size() == 5);
-    if (b.lines.size() == 5) {
-        CHECK(b.lines[0].outcome == ImportOutcome::Unsupported && b.lines[0].source.filename() == L"bundle");
-        CHECK(b.lines[1].outcome == ImportOutcome::Failed && b.lines[1].source.filename() == L"bundle");
-        CHECK(b.lines[2].outcome == ImportOutcome::Converted && b.lines[2].untested && b.lines[2].installed.size() == 1 &&
-              b.lines[2].installed[0].packageId == "pkg_hack-1.0.0");
-        CHECK(b.lines[3].outcome == ImportOutcome::NeedsRom && b.lines[3].source.filename() == L"patch.bps");
-        CHECK(b.lines[4].outcome == ImportOutcome::Installed);
+    // again, bundle -> 2 lines (in its place), hack, kept, patch, z pack (local)
+    CHECK(b.lines.size() == 7);
+    if (b.lines.size() == 7) {
+        // aki-roadmap#272: imported before, its conversion removed since: installed again from the ledger's package.
+        CHECK(b.lines[0].outcome == ImportOutcome::Installed && b.lines[0].installed.size() == 1 &&
+              b.lines[0].installed[0].packageId == "pkg_again-1.0.0" && b.lines[0].packages.empty() &&
+              has(b.lines[0].detail, L"installed again") && b.lines[0].kind == L"conversion");
+        CHECK(b.lines[1].outcome == ImportOutcome::Unsupported && b.lines[1].source.filename() == L"bundle");
+        CHECK(b.lines[2].outcome == ImportOutcome::Failed && b.lines[2].source.filename() == L"bundle");
+        CHECK(b.lines[3].outcome == ImportOutcome::Converted && b.lines[3].untested && b.lines[3].installed.size() == 1 &&
+              b.lines[3].installed[0].packageId == "pkg_hack-1.0.0");
+        // ... and one still installed stays Have it, as before.
+        CHECK(b.lines[4].outcome == ImportOutcome::HaveIt && b.lines[4].installed.empty() && has(b.lines[4].detail, L"imported before"));
+        CHECK(b.lines[5].outcome == ImportOutcome::NeedsRom && b.lines[5].source.filename() == L"patch.bps");
+        CHECK(b.lines[6].outcome == ImportOutcome::Installed);
     }
     CHECK(fs::exists(env.importDir / L"Imported" / L"hack.z64") && fs::exists(env.importDir / L"Needs attention" / L"bundle"));
     CHECK(fs::exists(env.importDir / L"patch.bps"));  // waits for its ROM
@@ -167,12 +188,15 @@ static void test_stub_worker(const fs::path& dir) {
         b.tick();
         Sleep(50);
     }
-    CHECK(b.lines.size() == 5 && b.lines.back().outcome == ImportOutcome::Converted && b.lines.back().tier == L"Verified");
+    CHECK(b.lines.size() == 7 && b.lines.back().outcome == ImportOutcome::Converted && b.lines.back().tier == L"Verified");
     CHECK(!b.retry_needs_rom({dir / L"roms"}, &err));  // nothing left waiting
     // Undo: both packages' installs removed, the stub's package deleted.
     std::wstring msg;
     b.undo(&msg);
     CHECK(un.size() >= 3 && !fs::exists(env.convertedDir / L"nomercy" / L"hack-1.0.0.zip") && fs::exists(env.importDir / L"hack.z64"));
+    // The reinstall is undone, but an earlier import's packages are never deleted (aki-roadmap#272).
+    CHECK(std::find(un.begin(), un.end(), L"pkg_again-1.0.0") != un.end());
+    CHECK(fs::exists(env.convertedDir / L"nomercy" / L"again-1.0.0.zip") && fs::exists(env.convertedDir / L"nomercy" / L"kept-1.0.0.zip"));
 }
 
 void run_importbatch_tests(const fs::path& tmp) {
