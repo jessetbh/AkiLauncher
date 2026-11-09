@@ -38,7 +38,6 @@ struct Settings {
     bool portableGames = true;  // portable_games=0: a portable launcher leaves its games' data in AppData
     // AKI Launcher's own updates (aki-roadmap#117)
     bool updateChecks = true;      // update_checks=0: never look for launcher releases
-    bool updatePrerelease = false; // update_prerelease=1: pre-releases count too
     std::wstring updateSkip;       // update_skip=<tag>: "Skip this version"
     std::wstring updateEtag;       // update_etag: the release feed's ETag (If-None-Match)
     int tourStop = 0;              // tour_stop: the History Tour's next stop (0-based; past the end = finished)

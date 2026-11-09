@@ -45,9 +45,9 @@ timing, and file-backed saves.
   play-time stats, and controller-aware button hints.
 - **Windowed or fullscreen** (`F11` / `Alt+Enter`); running games follow the
   launcher window live.
-- **Quick match** (`Q` / `Back`): the game starts straight into a CPU-vs-CPU
+- **Quick match** (developer mode only in 0.3.0: `--dev`, `AKI_DEV=1` or `dev_mode=1`; `Q` / `Back`): the game starts straight into a CPU-vs-CPU
   match in the venue you pick, through the Quick Match mod the games bundle.
-- **History Tour** (`H`): a run of stops through wrestling history, each one a
+- **History Tour** (developer mode only in 0.3.0; `H`): a run of stops through wrestling history, each one a
   quick match in that event's venue and match type (first slice: five No Mercy
   stops from WWF 2000).
 
@@ -59,18 +59,19 @@ timing, and file-backed saves.
 | Enter, A | play / download / select ROM |
 | F, X | flip the box art |
 | U, RB | install an available update |
-| M, Start | the game's Mods page (install / remove mods, texture packs, model packs and conversions) |
+| M, Start | the selected game's Mods page ("M  Manage <game> Mods" under its Play button): install / remove mods, texture packs, model packs and conversions; with conversions installed it opens on the Conversions section, on the Play as... pick |
 | C, LB | Play as...: the original game or one of its installed conversions (shown when it has some) |
-| Q, Back | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
-| H (or History Tour... on the Quick match page) | the History Tour: stops through wrestling history, played in order |
-| S, Y | settings (Return to Launcher binding, per-game paths) |
+| V | that game's conversion details (the Mods page's Conversions section; Start / M opens there too when the game has conversions) |
+| Q, Back (developer mode only in 0.3.0) | Quick match: straight into a CPU-vs-CPU match, venue and match picked (or Random) |
+| H (or History Tour... on the Quick match page; developer mode only in 0.3.0) | the History Tour: stops through wrestling history, played in order |
+| S, Esc, Y | settings (Return to Launcher binding, ROM folder, per-game paths) and **Quit AKI Launcher** (below ROM Folder) |
 | F11, Alt+Enter | windowed / fullscreen |
-| Esc | quit |
+| Esc (on a sub-page), B | back |
 | Shift+F12, hold View (in game) | quit prompt → back to launcher |
 
 ## FAQ
 
-**What is the History Tour?** A list of stops, walked in order. Each stop has a year, a title, a two-line blurb, and a
+**What is the History Tour?** (Developer mode only in 0.3.0, like Quick match.) A list of stops, walked in order. Each stop has a year, a title, a two-line blurb, and a
 game with a Quick match venue and match set. **Play this stop** launches it through Quick match, with the same
 one-run-only mod settings. When the game closes, the tour marks the stop done (`tour_stop` in the launcher's settings),
 and its page comes back on the next stop. A crash or a forced close doesn't count. Stops go in order: the next one
@@ -241,8 +242,9 @@ SHA256SUMS (an update without them is refused), swaps the files and restarts.
 - The replaced files are kept in `.update\previous\`. If the new version
   doesn't start within 30 seconds, the old one puts everything back and keeps
   running.
-- Settings: *Check for launcher updates* (off: `update_checks=0`) and
-  *Include pre-releases*. A launcher run from a build folder says "dev build,
+- Settings: *Check for launcher updates* (off: `update_checks=0`). The
+  channel follows the running launcher: a release build is offered releases
+  only, a pre-release build newer pre-releases too; drafts never. A launcher run from a build folder says "dev build,
   updates off" and never checks.
 - `AKI_UPDATE_FEED=<file>` reads the release list from a local JSON file
   instead of GitHub (for trying the notice).

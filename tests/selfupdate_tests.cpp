@@ -123,6 +123,19 @@ static void test_feed() {
     CHECK(parse_launcher_releases("{not json").empty() && parse_launcher_releases("{}").empty());
 }
 
+// aki-roadmap#292: no setting; the running launcher's own build picks the channel (drafts are dropped by the parser).
+static void test_channel() {
+    CHECK(!launcher_prerelease_channel(ver(L"0.3.0")));
+    CHECK(launcher_prerelease_channel(ver(L"0.3.1-beta.1")));
+    auto rels = parse_launcher_releases(kFeed);
+    // A release build: the newest release, never the beta.
+    const LauncherRelease* r = pick_launcher_update(rels, ver(L"0.1.4"), launcher_prerelease_channel(ver(L"0.1.4")), L"");
+    CHECK(r && r->tag == L"v0.2.1");
+    // A pre-release build: the newer beta too.
+    r = pick_launcher_update(rels, ver(L"0.2.1-rc.1"), launcher_prerelease_channel(ver(L"0.2.1-rc.1")), L"");
+    CHECK(r && r->tag == L"v0.3.0-beta.1");
+}
+
 static void test_dev_rule(const fs::path& dir) {
     put(dir / L"pkg" / L"AkiLauncher.exe", "exe");
     CHECK(!is_dev_build(dir / L"pkg"));
@@ -147,6 +160,7 @@ void run_selfupdate_tests(const fs::path& dir) {
     test_conversion_needs_newer_game();
     test_game_update_offered();
     test_feed();
+    test_channel();
     test_dev_rule(dir / L"dev");
     test_entries();
 

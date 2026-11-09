@@ -367,3 +367,5 @@ bool quickmatch_restore(const fs::path& dataDir, std::wstring* err) {
     else if (err) *err = firstErr;
     return ok;
 }
+
+bool quick_match_ui_enabled(bool devMode) { return kQuickMatchForPlayers || devMode; }

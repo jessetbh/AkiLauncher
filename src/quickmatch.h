@@ -18,6 +18,13 @@
 
 constexpr const char* kQuickMatchId = "aki_quickmatch";
 
+// aki-roadmap#287: Quick match (and the History Tour, which runs on it) is a developer tool in 0.3.0. Players don't
+// see it: the home page's Q / Back / H routes and their footer hints are on only in dev mode (--dev, AKI_DEV=1,
+// dev_mode=1). Turning it on for players is #288 (0.4.0): set this true. The restore of an earlier run's settings
+// on start (quickmatch_pending / quickmatch_restore) runs either way.
+constexpr bool kQuickMatchForPlayers = false;
+bool quick_match_ui_enabled(bool devMode);
+
 struct QmOption {               // one Enum option of the mod
     std::string id, name;       // UTF-8
     std::vector<std::string> choices;

@@ -252,7 +252,15 @@ static void test_json_write() {
     CHECK(back.get("a")->items[0].n == 1 && out.find("1,") != std::string::npos);
 }
 
+// aki-roadmap#287: no Quick match / History Tour routes for players in 0.3.0; dev mode keeps them.
+static void test_ui_gate() {
+    CHECK(!kQuickMatchForPlayers);
+    CHECK(!quick_match_ui_enabled(false));
+    CHECK(quick_match_ui_enabled(true));
+}
+
 void run_quickmatch_tests(const fs::path& tmp) {
+    test_ui_gate();
     fs::create_directories(tmp);
     test_manifest();
     test_find(tmp / L"find");

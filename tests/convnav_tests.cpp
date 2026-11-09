@@ -112,7 +112,58 @@ static void test_pad_script() {
     CHECK(!PadScriptPlayer().active() && p.active());
 }
 
+// aki-roadmap#289: Down doesn't open the Mods page from the card; M / Start (and V) do, on the conversions when there are some.
+static void test_card_open() {
+    using convnav::CardKeys;
+    using convnav::CardOpen;
+    CardKeys down;
+    down.keyDown = true;
+    down.padDown = true;
+    CHECK(convnav::card_open(down, 2) == CardOpen::None);
+    CHECK(convnav::card_open(down, 0) == CardOpen::None);
+    CardKeys start;
+    start.padStart = true;
+    CHECK(convnav::card_open(start, 2) == CardOpen::ModsOnConversions);
+    CHECK(convnav::card_open(start, 0) == CardOpen::Mods);
+    CardKeys m;
+    m.keyM = true;
+    CHECK(convnav::card_open(m, 1) == CardOpen::ModsOnConversions);
+    CHECK(convnav::card_open(m, 0) == CardOpen::Mods);
+    CardKeys v;
+    v.keyV = true;
+    CHECK(convnav::card_open(v, 1) == CardOpen::ModsOnConversions);
+    CHECK(convnav::card_open(v, 0) == CardOpen::None);
+    CHECK(convnav::card_open(CardKeys{}, 3) == CardOpen::None);
+    for (bool pad : {true, false}) {
+        std::string h = convnav::play_as_hint(pad);
+        CHECK(h.find("Down") == std::string::npos);
+        CHECK(h.find("Known Issues") == std::string::npos && h.find("Details") != std::string::npos);  // #295
+    }
+    CHECK(convnav::play_as_hint(true).find("Start") != std::string::npos);
+    CHECK(convnav::play_as_hint(false).find("V Details") != std::string::npos);
+}
+
+// One home key map (aki-roadmap#287 #289 #291 #293 #294): no Mods, Quit, Down in the hint bar; Esc / Y Settings; Quick
+// match and the History Tour only in dev mode; Mods under the game's Play button.
+static void test_home_hints() {
+    for (bool pad : {true, false}) {
+        std::string h = convnav::home_hint_line(pad, false, "View");
+        CHECK(h.find("Mods") == std::string::npos && h.find("Quit") == std::string::npos && h.find("Down") == std::string::npos);
+        CHECK(h.find("Quick Match") == std::string::npos && h.find("History Tour") == std::string::npos);
+        CHECK(h.find("Settings") != std::string::npos && h.find("View") != std::string::npos);
+        std::string dev = convnav::home_hint_line(pad, true, "View");
+        CHECK(dev.find("Quick Match") != std::string::npos);
+    }
+    CHECK(convnav::home_hint_line(false, false, "Shift+F12").find("Esc Settings") != std::string::npos);
+    CHECK(convnav::home_hint_line(true, false, "View").find("Y Settings") != std::string::npos);
+    CHECK(convnav::home_hint_line(false, true, "x").find("H History Tour") != std::string::npos);
+    CHECK(convnav::mods_hint_line(false, "WWF No Mercy") == "M  Manage WWF No Mercy Mods");
+    CHECK(convnav::mods_hint_line(true, "WWF No Mercy") == "Start  Manage WWF No Mercy Mods");
+}
+
 void run_convnav_tests(const fs::path&) {
+    test_home_hints();
+    test_card_open();
     test_play_as_step();
     test_conversions_focus();
     test_insert_art();
