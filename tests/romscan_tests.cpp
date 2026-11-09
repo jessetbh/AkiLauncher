@@ -154,7 +154,10 @@ void run_romscan_tests(const fs::path& dir) {
     const RomScanEntry* junk = find(L"notes.bin");
     CHECK(b && b->verdict == RomVerdict::BaseDump && b->gameIndex == 0 && b->sha1 == games[0].romSha1);
     CHECK(v && v->verdict == RomVerdict::BaseDump && v->sha1 == games[0].romSha1 && has(v->note, L"byte-swapped"));
-    CHECK(hk && hk->verdict == RomVerdict::OtherBuild && hk->gameIndex == 0 && has(hk->note, L"make_patch_mod.py"));
+    CHECK(hk && hk->verdict == RomVerdict::OtherBuild && hk->gameIndex == 0 && has(hk->note, L"import it"));
+    // aki-roadmap#278: a hack's line tells the player to import it, with no developer tool or repo names.
+    CHECK(hk && has(hk->note, L"Mods page > Import...") && !has(hk->note, L"make_patch_mod.py"));
+    CHECK(hk && !has(hk->note, L"TestRecomp"));  // no repo folder names either
     CHECK(hk && has(hk->note, L"TEST GAME HACK"));
     CHECK(o && o->verdict == RomVerdict::NotSupported && o->gameIndex == -1 && o->sha1.empty());
     CHECK(o && has(o->note, L"NZZE"));

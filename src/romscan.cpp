@@ -208,9 +208,10 @@ RomScanEntry rom_classify(const fs::path& file, const std::vector<GameEntry>& ga
                  std::to_wstring(g.romVersion) + L").";
     } else {
         e.verdict = RomVerdict::OtherBuild;
-        e.note = g.title + L": another build (a hack, translation or revision, " + describe(e.header) +
-                 L"). It plays as a patch mod made with tools\\romhack\\make_patch_mod.py from " +
-                 g.repoDir + L"; the game itself needs the " + g.romNote + L".";
+        // A hack or translation: players bring it in through Import, which converts it (aki-roadmap#278).
+        e.note = g.title + L": a hack, translation or other build (" + describe(e.header) +
+                 L"). To play it, import it: Mods page > Import... turns it into a conversion of " + g.title +
+                 L", which needs the " + g.romNote + L".";
     }
     return e;
 }

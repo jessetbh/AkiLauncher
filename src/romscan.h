@@ -11,8 +11,8 @@ struct GameEntry;
 //   - the accepted dump of a game (by SHA1, also when byte-swapped) -> it can
 //     set that game up;
 //   - another build of a supported game (same cartridge code, other SHA1: a
-//     ROM hack, translation or revision) -> named, with how to play it (a
-//     patch mod: tools/romhack/make_patch_mod.py in the game's repo);
+//     ROM hack, translation or revision) -> named, with how to play it (import
+//     it on the Mods page; the converter builds a conversion, aki-roadmap#278);
 //   - anything else -> "not a supported ROM".
 // Only files whose header matches one of the games are hashed, so a big
 // collection scans quickly.
