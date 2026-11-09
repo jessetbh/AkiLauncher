@@ -648,10 +648,16 @@ static bool install_rom_file(GameEntry& g, const std::filesystem::path& src,
                     f.close();
                     wrote = !f.fail() && std::filesystem::file_size(tmp, wec) == z64.size() && !wec;
                 }
-                if (wrote) std::filesystem::rename(tmp, g.romInstallPath, wec);
-                if (!wrote || wec) {
+                if (!wrote) {
                     std::filesystem::remove(tmp, wec);
                     *errOut = L"Couldn't write " + g.romInstallPath.wstring() + L" (disk full?)";
+                    return false;
+                }
+                std::filesystem::rename(tmp, g.romInstallPath, wec);
+                if (wec) {
+                    std::error_code rec;
+                    std::filesystem::remove(tmp, rec);
+                    *errOut = L"Couldn't replace " + g.romInstallPath.wstring() + L" (is the game running?)";
                     return false;
                 }
                 auto ov = settings().overrides.find(g.artKey);
@@ -698,9 +704,10 @@ static bool pick_rom(GameEntry& g, std::wstring* errOut) {
         *errOut = L"File dialog unavailable";
         return false;
     }
-    COMDLG_FILTERSPEC types[] = {{L"N64 ROM (*.z64)", L"*.z64"}, {L"All files", L"*.*"}};
+    // .v64 / .n64 copies of the dump are set up as .z64 too (aki-roadmap#274).
+    COMDLG_FILTERSPEC types[] = {{L"N64 ROM (*.z64, *.v64, *.n64)", L"*.z64;*.v64;*.n64"}, {L"All files", L"*.*"}};
     dlg->SetFileTypes(2, types);
-    std::wstring title = L"Select your " + g.title + L" ROM - " + g.romNote + L" (.z64)";
+    std::wstring title = L"Select your " + g.title + L" ROM - " + g.romNote + L" (.z64 / .v64 / .n64)";
     dlg->SetTitle(title.c_str());
     bool ok = false;
     if (SUCCEEDED(dlg->Show(g_hwnd))) {
