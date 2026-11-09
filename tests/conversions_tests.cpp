@@ -90,6 +90,8 @@ namespace {
         f.codesText = "# rom: wm2k-rev0\n";
         n = pkg::conversion_notes(f);
         CHECK(!n.codesRunnable && n.notes.size() == 1 && has_note(n.notes, L"tagged wm2k-rev0, so the game won't run its codes"));
+        f.codesText = "# rom:\n";
+        CHECK(has_note(pkg::conversion_notes(f).notes, L"empty # rom: line"));
         f.codesReadable = false;
         n = pkg::conversion_notes(f);
         CHECK(!n.codesRunnable && has_note(n.notes, L"codes.txt is missing"));

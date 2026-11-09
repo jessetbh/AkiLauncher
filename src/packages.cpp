@@ -1548,7 +1548,8 @@ ConversionNotes conversion_notes(const ConversionNoteFacts& f) {
             r.notes.push_back(L"Its codes are for " + w(tag) + L"; they're translated to " + w(f.portTag) +
                 L" as they run (codes outside the known map are skipped)");
         } else if (v == CodesVerdict::Refused) {
-            r.notes.push_back(L"Its codes file is tagged " + w(tag) + L", so the game won't run its codes");
+            r.notes.push_back(tag.empty() ? std::wstring(L"Its codes file has an empty # rom: line, so the game won't run its codes")
+                                          : L"Its codes file is tagged " + w(tag) + L", so the game won't run its codes");
         }
         // aki.json's codes.rom decides nothing; say so only when it reads differently from the file's tag.
         if (!f.manifestCodesRom.empty() && codes_tag_verdict("# rom: " + f.manifestCodesRom, f.portTag) != v) {
