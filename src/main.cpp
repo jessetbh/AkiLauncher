@@ -1179,6 +1179,10 @@ static bool is_package_source(const std::filesystem::path& p) {
 // batch doesn't ask: the same version stays, and says so).
 static pkg::PackageInstall install_one_package(const GameEntry& g, const std::filesystem::path& src, bool patchMod,
                                                bool ask = true) {
+    // aki-roadmap#276: an import for a game that hasn't started yet (Starrcade from another game's Mods page) carries it
+    // to portable first, so the package goes into games\<id>\, not %LOCALAPPDATA%.
+    if (carry_before_install(g, launcher_portable(), settings().portableGames, !g_importSandbox.empty()))
+        carry_portable(g);
     pkg::InstallTarget t = install_target(g);
     pkg::InstallOptions o;
     o.gameRunning = g_session.active() && g_session.artKey == g.artKey;
