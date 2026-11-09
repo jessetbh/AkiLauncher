@@ -344,6 +344,13 @@ void romscan_shutdown() {
 // Provisioning
 // ---------------------------------------------------------------------------
 
+bool rom_read_matching_z64(const fs::path& file, const std::wstring& sha1, std::vector<unsigned char>* z64) {
+    std::vector<unsigned char> data;
+    if (sha1.empty() || !read_z64(file, data, nullptr) || sha1_bytes(data) != sha1) return false;
+    if (z64) *z64 = std::move(data);
+    return true;
+}
+
 bool rom_provision(GameEntry& g, const RomScanEntry& e, std::wstring* errorOut) {
     std::error_code ec;
     if (e.verdict != RomVerdict::BaseDump) {

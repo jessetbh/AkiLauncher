@@ -82,3 +82,6 @@ void romscan_shutdown();
 // game's ROM path (re-checking its SHA1 on the way). Never overwrites a ROM
 // the game already has.
 bool rom_provision(GameEntry& g, const RomScanEntry& e, std::wstring* errorOut);
+// The file's bytes in .z64 order (from any byte order) when their SHA1 is sha1 (upper-case hex), else false: the card's
+// Select ROM takes a byte-swapped copy of the accepted dump as the scan does (aki-roadmap#274).
+bool rom_read_matching_z64(const std::filesystem::path& file, const std::wstring& sha1, std::vector<unsigned char>* z64);
