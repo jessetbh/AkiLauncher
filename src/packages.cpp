@@ -1524,6 +1524,11 @@ CodesVerdict codes_tag_verdict(const std::string& text, const std::string& portT
 
 ConversionNotes conversion_notes(const ConversionNoteFacts& f) {
     ConversionNotes r;
+    // aki-roadmap#264: a game too old for conversions ignores AKI_CONVERSION and plays the original.
+    r.needsGame = conversion_needs_newer_game(f.gameVersion, f.minimumGame);
+    if (!r.needsGame.empty())
+        r.notes.push_back(L"Needs " + (f.gameTitle.empty() ? std::wstring(L"the game") : f.gameTitle + L": Recompiled") + L" " +
+                          r.needsGame + L" or newer (you have " + f.gameVersion + L"): update the game to play it");
     if (!f.texturesPackage.empty()) {
         r.texturesInstalled = f.texturesAdded;
         if (!f.texturesAdded) {
@@ -1583,7 +1588,8 @@ void read_conversion_note_files(const fs::path& dataDir, const fs::path& folder,
     }
 }
 
-std::vector<ConversionInfo> list_conversions(const fs::path& dataDir, const std::string& portTag) {
+std::vector<ConversionInfo> list_conversions(const fs::path& dataDir, const std::string& portTag, const std::wstring& gameVersion,
+                                             const std::wstring& gameTitle) {
     std::vector<ConversionInfo> out;
     Registry reg = load_registry(dataDir / L"packages.json");
     std::error_code ec;
@@ -1640,10 +1646,16 @@ std::vector<ConversionInfo> list_conversions(const fs::path& dataDir, const std:
                     if (nf.manifestCodesRom.empty()) nf.manifestCodesRom = str(*cd, "rom_revision");
                 }
             }
-            if (const JsonValue* rq = v.get("requires"); rq && rq->is(JsonValue::Type::Object))
+            if (const JsonValue* rq = v.get("requires"); rq && rq->is(JsonValue::Type::Object)) {
                 if (const JsonValue* rp = rq->get("patch"); rp && rp->is(JsonValue::Type::Object)) nf.requiresPatchBase = str(*rp, "base");
+                nf.minimumGame = w(str(*rq, "minimum_recomp_version"));
+            }
+            nf.gameVersion = gameVersion;
+            nf.gameTitle = gameTitle;
             read_conversion_note_files(dataDir, c.folder, nf);
-            c.notes = conversion_notes(nf).notes;
+            ConversionNotes cn = conversion_notes(nf);
+            c.notes = std::move(cn.notes);
+            c.needsGame = cn.needsGame;
         }
         if (const RegEntry* e = reg.owner("conversions/" + dir); e && e->kind == "conversion") {
             c.recorded = true;

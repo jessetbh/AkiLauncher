@@ -92,6 +92,9 @@ void resolve_game_paths(std::vector<GameEntry>& games, const std::filesystem::pa
 // ports check it (recompui get_app_folder_path); else %LOCALAPPDATA%\<exe stem>.
 std::filesystem::path game_data_dir(const GameEntry& g);
 bool game_is_portable(const GameEntry& g);
+// The installed version (version.txt) of the exe that actually runs, or "" when that exe isn't the launcher's install:
+// an exe= override or a depot build next to an older install must not be judged by the install's version (#264).
+std::wstring game_run_version(const GameEntry& g);
 
 // aki-roadmap#14: a portable launcher starts the games it installed itself
 // (installDir, under games_root()) portable too, so everything stays in the

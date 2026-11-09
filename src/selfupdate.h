@@ -22,6 +22,12 @@ std::wstring version_text(const Version& v);                  // "0.2.0" / "0.2.
 // the newest GitHub release is older than what's installed, and offering it was a downgrade. A release tag that
 // isn't a version is never offered; an installed tag that isn't one (an old or hand-made version.txt) is, as before.
 bool game_update_offered(const std::wstring& installedTag, const std::wstring& releaseTag);
+// A conversion on a game too old to run it (aki-roadmap#264): games before 0.3.0 don't know AKI_CONVERSION and
+// silently play the original game. Returns the version the game needs ("0.3.0", or the conversion's own
+// minimum_recomp_version when that is newer), or "" when it can run it. 0.3.0 pre-releases count as 0.3.0. A game without a version (a depot or dev
+// build) or with one that isn't a version can: nothing to compare.
+extern const wchar_t* const kFirstConversionGameVersion;
+std::wstring conversion_needs_newer_game(const std::wstring& installedTag, const std::wstring& minimumVersion);
 // The running exe's ProductVersion (icons/app.rc); false without a version resource.
 bool current_launcher_version(Version* out);
 

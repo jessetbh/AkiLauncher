@@ -68,6 +68,18 @@ fs::path game_data_dir(const GameEntry& g) {
     return fs::path(lad) / fs::path(g.exeRel).stem();
 }
 
+std::wstring game_run_version(const GameEntry& g) {
+    if (g.installedTag.empty() || g.installDir.empty() || g.exePath.empty()) return L"";
+    auto key = [](const fs::path& p) {
+        std::wstring s = p.lexically_normal().wstring();
+        for (auto& ch : s) ch = (ch == L'/') ? L'\\' : (wchar_t)towlower(ch);
+        while (!s.empty() && s.back() == L'\\') s.pop_back();
+        return s;
+    };
+    const std::wstring dir = key(g.installDir) + L"\\", exe = key(g.exePath);
+    return exe.compare(0, dir.size(), dir) == 0 ? g.installedTag : L"";
+}
+
 bool game_is_portable(const GameEntry& g) {
     std::error_code ec;
     return !g.repoPath.empty() && fs::exists(g.repoPath / L"portable.txt", ec);

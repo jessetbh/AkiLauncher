@@ -202,6 +202,8 @@ struct ConversionInfo {
     // aki-roadmap#243: what the player should know before playing it (texture package missing, ROM patch left out,
     // codes the game won't run); conversion_notes() writes them, the Mods page shows them.
     std::vector<std::wstring> notes;
+    // aki-roadmap#264: the game version it needs when the one that runs is older ("" = it runs). The launch refuses it.
+    std::wstring needsGame;
 };
 
 // --- conversion notes (aki-roadmap#243), shared by the Mods page (list_conversions) and the installer -----------------
@@ -226,11 +228,15 @@ struct ConversionNoteFacts {
     std::string codesText;
     std::string manifestCodesRom;   // components.codes.rom (or rom_revision): mentioned only when it disagrees
     std::string portTag;            // port_rom_tag of the game ("" = unknown: no codes note)
+    std::wstring gameVersion;       // game_run_version: the installed version of the exe that runs ("" = unknown)
+    std::wstring minimumGame;       // requires.minimum_recomp_version ("" = none)
+    std::wstring gameTitle;         // for the note
 };
 struct ConversionNotes {
     std::vector<std::wstring> notes;
     bool texturesInstalled = true;
     bool codesRunnable = true;      // Native or Translated
+    std::wstring needsGame;         // the game version it needs when the one that runs is older (#264; "" = it runs)
 };
 ConversionNotes conversion_notes(const ConversionNoteFacts& f);
 // Fills f's file facts from the game's data folder and the installed conversion folder: whether the texture package
@@ -246,7 +252,9 @@ constexpr int kModelsFormat = 2;
 std::wstring conversion_tier_word(const std::string& tier);
 // conversions\<id>\ folders with an aki.json, recorded or not, sorted by name. portTag: the game's port_rom_tag, for
 // the codes note ("" = no codes note).
-std::vector<ConversionInfo> list_conversions(const std::filesystem::path& dataDir, const std::string& portTag = std::string());
+std::vector<ConversionInfo> list_conversions(const std::filesystem::path& dataDir, const std::string& portTag = std::string(),
+                                             const std::wstring& gameVersion = std::wstring(),
+                                             const std::wstring& gameTitle = std::wstring());
 // Whether the player's ROM is one the conversion names (no names: any ROM).
 bool conversion_rom_matches(const ConversionInfo& c, const std::vector<std::string>& romSha1);
 

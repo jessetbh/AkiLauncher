@@ -10,6 +10,7 @@
 #include "installer.h"
 #include "launch.h"
 #include "packages.h"
+#include "selfupdate.h"
 #include "miniz.h"
 #include "third_party/nlohmann/json.hpp"
 
@@ -225,6 +226,7 @@ namespace {
         if (auto r = j.find("requires"); r != j.end() && r->is_object() && r->contains("patch") && (*r)["patch"].is_object()) {
             c.requiresPatchBase = wide(str((*r)["patch"], "base"));
         }
+        if (auto r = j.find("requires"); r != j.end() && r->is_object()) c.minimumGame = wide(str(*r, "minimum_recomp_version"));
         return c;
     }
 
@@ -238,11 +240,15 @@ namespace {
         f.codesFile = c.codes ? c.codesFile : std::string();
         f.manifestCodesRom = narrow(c.codesRom);
         f.portTag = narrow(port_rom_tag(g));
+        f.gameVersion = game_run_version(g);
+        f.minimumGame = c.minimumGame;
+        f.gameTitle = g.title;
         pkg::read_conversion_note_files(game_data_dir(g), c.folder, f);
         pkg::ConversionNotes n = pkg::conversion_notes(f);
         c.notes = std::move(n.notes);
         c.texturesInstalled = n.texturesInstalled;
         c.codesRunnable = n.codesRunnable;
+        c.needsGame = n.needsGame;  // aki-roadmap#264
     }
 }
 

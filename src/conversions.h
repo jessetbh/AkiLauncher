@@ -20,6 +20,8 @@ struct ConversionInfo {
     std::wstring texturesPackage;   // dependency package "Team-Name" ("" = inline or none)
     std::wstring texturesNaming;    // rt64 / rice / jabo
     std::wstring requiresPatchBase; // aki.json requires.patch.base: a ROM patch left out until the player supplies that ROM
+    std::wstring minimumGame;       // aki.json requires.minimum_recomp_version ("" = none)
+    std::wstring needsGame;         // the game version it needs when the installed one is older ("" = it runs; #264)
     std::wstring texturesSha256;    // the package zip it was made with ("" = not pinned)
     std::wstring rtLights, rtMaterials;
     bool models = false;            // aki.json components.models (aki-roadmap#226): its own model packs
