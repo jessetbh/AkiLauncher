@@ -41,6 +41,12 @@ using Sha1Fn = std::function<std::wstring(const std::wstring&)>;
 RomResolution resolve_rom_choice(const std::wstring& overridePath, const std::vector<std::wstring>& candidates,
                                  const std::wstring& expectedSha1, const ExistsFn& exists, const Sha1Fn& sha1);
 
+// Settings' ROM field (aki-roadmap#219). Closing Settings saves the field as a rom= override only when it names
+// another file than autoPath, the ROM the game gets without one. Reset fills in autoPath, so it saves no override;
+// it used to fill in the checkout's ROM name, which became a rom= override whenever an imported copy was in use.
+std::wstring rom_field_reset(const std::wstring& autoPath);
+std::wstring rom_override_from_field(const std::wstring& field, const std::wstring& autoPath);
+
 // True when a port's log says it refused the ROM it was given ("WCW_AUTOBOOT ROM validation failed").
 bool log_says_rom_refused(const std::vector<std::string>& logLines);
 

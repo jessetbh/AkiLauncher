@@ -44,6 +44,23 @@ RomResolution resolve_rom_choice(const std::wstring& overridePath, const std::ve
     return r;
 }
 
+// Windows paths: case and slash direction don't make another file.
+static std::wstring path_key(const std::wstring& p) {
+    std::wstring k = p;
+    for (wchar_t& c : k) {
+        if (c == L'/') c = L'\\';
+        else if (c >= L'A' && c <= L'Z') c = wchar_t(c - L'A' + L'a');
+    }
+    return k;
+}
+
+std::wstring rom_field_reset(const std::wstring& autoPath) { return autoPath; }
+
+std::wstring rom_override_from_field(const std::wstring& field, const std::wstring& autoPath) {
+    if (field.empty() || path_key(field) == path_key(autoPath)) return L"";
+    return field;
+}
+
 bool log_says_rom_refused(const std::vector<std::string>& logLines) {
     for (const std::string& line : logLines) {
         if (line.find("ROM validation failed") != std::string::npos) return true;

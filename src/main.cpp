@@ -28,6 +28,7 @@
 #include "importer.h"
 #include "installer.h"
 #include "rebuild.h"
+#include "rom_rules.h"
 #include "romscan.h"
 #include "mods.h"
 #include "modelpacks.h"
@@ -779,12 +780,10 @@ static void close_settings(std::vector<GameEntry>& games) {
     for (size_t i = 0; i < games.size(); ++i) {
         GameEntry& g = games[i];
         std::wstring defExe = (g.repoPath / g.exeRel).wstring();
-        std::wstring defRom = g.romAutoPath.wstring();
         std::wstring edExe = widen(g_ui.exeEdit[i]);
-        std::wstring edRom = widen(g_ui.romEdit[i]);
         GameOverride& o = settings().overrides[g.artKey];
         o.exePath = (!edExe.empty() && edExe != defExe) ? edExe : L"";
-        o.romPath = (!edRom.empty() && edRom != defRom) ? edRom : L"";
+        o.romPath = rom_rules::rom_override_from_field(widen(g_ui.romEdit[i]), g.romAutoPath.wstring());
     }
     settings_save();
     apply_overrides(games);
@@ -2759,7 +2758,7 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset")) {
             g_ui.exeEdit[i] = narrow((g.repoPath / g.exeRel).wstring());
-            g_ui.romEdit[i] = narrow((g.repoPath / g.romFile).wstring());
+            g_ui.romEdit[i] = narrow(rom_rules::rom_field_reset(g.romAutoPath.wstring()));  // aki-roadmap#219
         }
         ImGui::PopFont();
         ImGui::Spacing();
