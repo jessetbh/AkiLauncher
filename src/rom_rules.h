@@ -47,6 +47,14 @@ RomResolution resolve_rom_choice(const std::wstring& overridePath, const std::ve
 std::wstring rom_field_reset(const std::wstring& autoPath);
 std::wstring rom_override_from_field(const std::wstring& field, const std::wstring& autoPath);
 
+// Settings' EXE field and the exe= override (aki-roadmap#263, the release line's part of #256). The default exe is
+// the registry's after install resolution (a launcher-installed game's exe sits at its install folder's root, not
+// in the registry's build-msvc path), from before any override. Reset fills it in; closing Settings saves the field
+// as an override only when it names another file, so an untouched field writes no exe= line (it used to write an
+// absolute one for every installed game, which pinned a portable folder to where it was).
+std::wstring exe_field_reset(const std::wstring& registryExe);
+std::wstring exe_override_from_field(const std::wstring& field, const std::wstring& registryExe);
+
 // True when a port's log says it refused the ROM it was given ("WCW_AUTOBOOT ROM validation failed").
 bool log_says_rom_refused(const std::vector<std::string>& logLines);
 

@@ -17,6 +17,11 @@ struct Version {
 bool parse_version(const std::wstring& text, Version* out);  // "v0.2.0", "0.2.0-beta.1"
 int compare_versions(const Version& a, const Version& b);     // <0, 0, >0 (semver precedence)
 std::wstring version_text(const Version& v);                  // "0.2.0" / "0.2.0-beta.1"
+// A game card's "Update vX available" (aki-roadmap#262): only for a release strictly newer than the installed one.
+// A different tag is not enough: before a version is published, or on a prerelease or a locally installed build,
+// the newest GitHub release is older than what's installed, and offering it was a downgrade. A release tag that
+// isn't a version is never offered; an installed tag that isn't one (an old or hand-made version.txt) is, as before.
+bool game_update_offered(const std::wstring& installedTag, const std::wstring& releaseTag);
 // The running exe's ProductVersion (icons/app.rc); false without a version resource.
 bool current_launcher_version(Version* out);
 

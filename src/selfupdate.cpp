@@ -95,6 +95,13 @@ int compare_versions(const Version& a, const Version& b) {
     return compare_pre(a.pre, b.pre);
 }
 
+bool game_update_offered(const std::wstring& installedTag, const std::wstring& releaseTag) {
+    Version rel, inst;
+    if (!parse_version(releaseTag, &rel)) return false;
+    if (!parse_version(installedTag, &inst)) return !installedTag.empty() && installedTag != releaseTag;
+    return compare_versions(rel, inst) > 0;
+}
+
 std::wstring version_text(const Version& v) {
     std::wstring s = std::to_wstring(v.major) + L"." + std::to_wstring(v.minor) + L"." + std::to_wstring(v.patch);
     if (!v.pre.empty()) s += L"-" + std::wstring(v.pre.begin(), v.pre.end());

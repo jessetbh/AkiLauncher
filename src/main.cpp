@@ -424,7 +424,10 @@ static void apply_overrides(std::vector<GameEntry>& games) {
         std::wstring romOverride;
         auto it = settings().overrides.find(g.artKey);
         if (it != settings().overrides.end()) {
-            const GameOverride& o = it->second;
+            GameOverride& o = it->second;
+            // An exe= naming the default exe is no override (aki-roadmap#263: closing Settings wrote one for every
+            // installed game); dropped here, so the next save leaves it out.
+            o.exePath = rom_rules::exe_override_from_field(o.exePath, g.exeRegistryPath.wstring());
             // A stale override must not shadow a healthy default: only apply
             // path overrides whose target still exists. (The vpw2 bug: a dead
             // exe= override from earlier testing pinned the card to "Not
@@ -779,10 +782,8 @@ static void close_settings(std::vector<GameEntry>& games) {
     // Path fields become overrides when they differ from the registry default.
     for (size_t i = 0; i < games.size(); ++i) {
         GameEntry& g = games[i];
-        std::wstring defExe = (g.repoPath / g.exeRel).wstring();
-        std::wstring edExe = widen(g_ui.exeEdit[i]);
         GameOverride& o = settings().overrides[g.artKey];
-        o.exePath = (!edExe.empty() && edExe != defExe) ? edExe : L"";
+        o.exePath = rom_rules::exe_override_from_field(widen(g_ui.exeEdit[i]), g.exeRegistryPath.wstring());
         o.romPath = rom_rules::rom_override_from_field(widen(g_ui.romEdit[i]), g.romAutoPath.wstring());
     }
     settings_save();
@@ -2757,7 +2758,7 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
         ImGui::InputText("##rom", &g_ui.romEdit[i]);
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset")) {
-            g_ui.exeEdit[i] = narrow((g.repoPath / g.exeRel).wstring());
+            g_ui.exeEdit[i] = narrow(rom_rules::exe_field_reset(g.exeRegistryPath.wstring()));  // aki-roadmap#263
             g_ui.romEdit[i] = narrow(rom_rules::rom_field_reset(g.romAutoPath.wstring()));  // aki-roadmap#219
         }
         ImGui::PopFont();
@@ -3296,9 +3297,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
     }
 
-    // Update-available line (installed via the launcher, newer tag on GitHub)
+    // Update-available line (installed via the launcher, a strictly newer tag on GitHub: aki-roadmap#262)
     bool updateAvail = s.exeFound && !s.installedTag.empty() && haveRel &&
-                       rel.tag != s.installedTag && !installingSel &&
+                       game_update_offered(s.installedTag, rel.tag) && !installingSel &&
                        inst.phase == InstallPhase::Idle;
     if (updateAvail) {
         ImGui::PushFont(g_ui.fontSmall);

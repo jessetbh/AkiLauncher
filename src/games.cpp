@@ -330,6 +330,9 @@ void resolve_game_paths(std::vector<GameEntry>& games, const fs::path& depotRoot
             }
         }
 
+        g.repoRegistryPath = g.repoPath;
+        g.exeRegistryPath = g.exePath;
+
         std::ifstream vf(g.installDir / L"version.txt");
         if (vf) {
             std::string tag;

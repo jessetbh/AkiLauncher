@@ -33,6 +33,8 @@ struct GameEntry {
     // resolved by build_game_list
     std::filesystem::path repoPath;
     std::filesystem::path exePath;
+    std::filesystem::path repoRegistryPath;  // the default checkout or install, before any exe= override
+    std::filesystem::path exeRegistryPath;   // the default exe, before any exe= override (aki-roadmap#256)
     std::filesystem::path romPath;         // the ROM a launch passes (resolve_rom)
     std::filesystem::path romRegistryPath; // the default repo's or install's ROM, before any exe= override
     std::filesystem::path romInstallPath;  // where Select ROM copies to: romFile in the checkout that runs
