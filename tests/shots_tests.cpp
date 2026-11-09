@@ -51,6 +51,12 @@ static void test_args() {
     CHECK(!parse_shot_args({L"--shot-all", L"d", L"--size", L"3840x2160x2"}, &r, &err));
     CHECK(!parse_shot_args({L"--shot-all", L"d", L"--size", L"100x100"}, &r, &err));
     CHECK(!parse_shot_args({L"--size", L"1920x1080"}, &r, &err));  // without a shot
+    // aki-roadmap#232: a pad script drives one page
+    CHECK(parse_shot_args({L"--shot", L"home", L"a.png", L"--pad-script", L"DOWN,A"}, &r, &err) && r.padScript == L"DOWN,A");
+    CHECK(parse_shot_args({L"--shot", L"home", L"a.png"}, &r, &err) && r.padScript.empty());
+    CHECK(!parse_shot_args({L"--shot-all", L"d", L"--pad-script", L"A"}, &r, &err));
+    CHECK(!parse_shot_args({L"--pad-script", L"A"}, &r, &err));
+    CHECK(!parse_shot_args({L"--shot", L"home", L"a.png", L"--pad-script"}, &r, &err));
     // a flag is never taken as a value
     CHECK(!parse_shot_args({L"--shot", L"home", L"--game", L"nomercy"}, &r, &err));
     CHECK(!parse_shot_args({L"--shot-all", L"--demo"}, &r, &err));

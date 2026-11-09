@@ -96,10 +96,20 @@ bool parse_shot_args(const std::vector<std::wstring>& args, ShotRequest* out, st
             r.height = h;
             gameOrDemo = true;
             ++i;
+        } else if (a == L"--pad-script") {
+            if (!value_at(args, i + 1)) {
+                *err = L"--pad-script \"<steps>\"";
+                return false;
+            }
+            r.padScript = args[++i];
         }
     }
     if (gameOrDemo && !one && !all) {
         *err = L"--game, --demo and --size go with --shot or --shot-all";
+        return false;
+    }
+    if (!r.padScript.empty() && !one) {
+        *err = L"--pad-script goes with one --shot (the page it starts on)";
         return false;
     }
     r.active = one || all;
@@ -233,7 +243,12 @@ bool make_demo_conversions(const fs::path& data, std::wstring* err) {
     fs::remove_all(data, ec);
     bool ok = put(data / L"conversions" / L"demo_plus" / L"aki.json",
                   R"({"format":"aki-conversion","id":"demo_plus","name":"Demo Mercy Plus","version":"1.2.0",)"
-                  R"("authors":["demo data"]})") &&
+                  R"("authors":["demo data"],"description":"Demo data for a launcher screenshot.",)"
+                  R"("survey":{"aki_tier":"experimental","known_issues":["Entrance titles flicker",)"
+                  R"("The crowd is grey in two arenas"],"note":"played to the end of a match"}})") &&
+              put(data / L"conversions" / L"demo_fresh" / L"aki.json",
+                  R"({"format":"aki-conversion","id":"demo_fresh","name":"Demo Fresh Import","version":"1.0.0",)"
+                  R"("authors":["demo data"],"survey":{"aki_tier":"untested"}})") &&
               put(data / L"conversions" / L"demo_plus" / L"codes.txt", "# demo data\n") &&
               put(data / L"saves" / L"demo_plus" / L"demo.sav", "demo") &&
               put_zip(data / L"mods" / L"demo_plus_textures.rtz", {{"rt64.json", "{}"}}) &&

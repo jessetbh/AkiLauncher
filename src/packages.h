@@ -189,7 +189,15 @@ struct ConversionInfo {
     bool recorded = false;  // in packages.json (else a folder put there by hand)
     std::filesystem::path folder, saves;
     std::vector<std::string> addons;  // add-on files that came with it (recorded)
+    // aki-roadmap#232: what the player reads before picking it (aki.json; the #228 converter writes survey.*).
+    std::wstring description;
+    std::wstring tier;                     // Verified / Experimental / Unsupported / Untested ("" = not said)
+    bool untested = false;                 // built on this PC by the converter, not tested by the AKI team
+    std::vector<std::wstring> knownIssues;
+    std::wstring note;                     // the catalog's note, or why the converter chose the tier
 };
+// A conversion tier as the player reads it ("verified" -> "Verified"; unknown words are kept as they are).
+std::wstring conversion_tier_word(const std::string& tier);
 // conversions\<id>\ folders with an aki.json, recorded or not, sorted by name.
 std::vector<ConversionInfo> list_conversions(const std::filesystem::path& dataDir);
 // Whether the player's ROM is one the conversion names (no names: any ROM).

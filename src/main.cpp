@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "imgui.h"
+#include "imgui_internal.h"  // SetFocusID: the Conversions page lands the controller on a conversion
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
 #include "imgui_stdlib.h"
@@ -31,6 +32,7 @@
 #include "mods.h"
 #include "modelpacks.h"
 #include "packages.h"
+#include "convnav.h"
 #include "quickmatch.h"
 #include "tour.h"
 #include "shots.h"
@@ -156,6 +158,10 @@ static void destroy_device() {
 static GameSession g_session;
 // Screenshot mode (--shot / --shot-all, shots.h): no launches, no config writes, no carry_portable.
 static bool g_shot = false;
+// A shot run driven by a pad script (--pad-script, aki-roadmap#232): the buttons down this frame, fed to the UI as a
+// controller would be (pad_pressed and ImGui's gamepad nav).
+static convnav::PadScriptPlayer g_padScript;
+static WORD g_padScriptDown = 0;
 static std::filesystem::path g_shotModsDir;  // the mods folder pages show instead of the game's (demo data)
 // Bulk import (aki-roadmap#228): the batch, and a sandbox folder that stands in for the launcher's data folder and every
 // game's data folder (--import-sandbox: headless tests and owner shots never touch real installs).
@@ -229,6 +235,10 @@ struct UiState {
     std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
     std::vector<pkg::ConversionInfo> convs;
     int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
+    // aki-roadmap#232: opened from the card's Play as... line (Down): the controller lands on this conversion's row
+    // (-1 = the original game's) for the first frames, after ImGui's own first focus.
+    int convFocus = -1;
+    int convFocusFrames = 0;
     std::map<std::wstring, std::vector<pkg::ConversionInfo>> convCache;  // by artKey
     // launcher self-update (aki-roadmap#117)
     bool showUpdate = false;
@@ -308,15 +318,78 @@ static bool keyboard_mouse_activity() {
     return false;
 }
 
-// Newly-pressed XInput buttons this frame (any pad), for carousel navigation.
-static WORD pad_pressed() {
-    if (g_shot) return 0;  // a pad someone is holding mustn't drive a screenshot run
-    static WORD prev = 0;
-    WORD cur = 0;
+// The controllers this frame (aki-roadmap#232), read once per frame before ImGui's: every XInput pad merged (buttons
+// OR'd, the stick and triggers pushed furthest), or a shot run's pad script. pad_pressed() and ImGui's gamepad nav
+// both read it, so any pad drives every page (ImGui's Win32 backend reads only the first; it is built without that).
+static XINPUT_GAMEPAD g_padFrame{};
+static bool g_padFrameAny = false;
+static void poll_pads() {
+    g_padFrame = {};
+    g_padFrameAny = false;
+    if (g_shot) {  // a pad someone is holding mustn't drive a screenshot run; a script may
+        g_padFrame.wButtons = g_padScriptDown;
+        g_padFrameAny = g_padScript.active();
+        return;
+    }
     for (DWORD i = 0; i < XUSER_MAX_COUNT; ++i) {
         XINPUT_STATE st{};
-        if (XInputGetState(i, &st) == ERROR_SUCCESS) cur |= st.Gamepad.wButtons;
+        if (XInputGetState(i, &st) != ERROR_SUCCESS) continue;
+        const XINPUT_GAMEPAD& p = st.Gamepad;
+        g_padFrameAny = true;
+        g_padFrame.wButtons |= p.wButtons;
+        if (p.bLeftTrigger > g_padFrame.bLeftTrigger) g_padFrame.bLeftTrigger = p.bLeftTrigger;
+        if (p.bRightTrigger > g_padFrame.bRightTrigger) g_padFrame.bRightTrigger = p.bRightTrigger;
+        if (abs(p.sThumbLX) > abs(g_padFrame.sThumbLX)) g_padFrame.sThumbLX = p.sThumbLX;
+        if (abs(p.sThumbLY) > abs(g_padFrame.sThumbLY)) g_padFrame.sThumbLY = p.sThumbLY;
+        if (abs(p.sThumbRX) > abs(g_padFrame.sThumbRX)) g_padFrame.sThumbRX = p.sThumbRX;
+        if (abs(p.sThumbRY) > abs(g_padFrame.sThumbRY)) g_padFrame.sThumbRY = p.sThumbRY;
     }
+}
+
+// g_padFrame as ImGui gamepad input (the mapping imgui_impl_win32 uses). Between ImGui_ImplWin32_NewFrame and
+// ImGui::NewFrame.
+static void feed_imgui_gamepad() {
+    ImGuiIO& io = ImGui::GetIO();
+    io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+    if (!g_padFrameAny) return;
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    const XINPUT_GAMEPAD& g = g_padFrame;
+    auto button = [&](ImGuiKey key, WORD bit) { io.AddKeyEvent(key, (g.wButtons & bit) != 0); };
+    auto analog = [&](ImGuiKey key, float v, float v0, float v1) {
+        float t = (v - v0) / (v1 - v0);
+        t = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+        io.AddKeyAnalogEvent(key, t > 0.10f, t);
+    };
+    button(ImGuiKey_GamepadStart, XINPUT_GAMEPAD_START);
+    button(ImGuiKey_GamepadBack, XINPUT_GAMEPAD_BACK);
+    button(ImGuiKey_GamepadFaceLeft, XINPUT_GAMEPAD_X);
+    button(ImGuiKey_GamepadFaceRight, XINPUT_GAMEPAD_B);
+    button(ImGuiKey_GamepadFaceUp, XINPUT_GAMEPAD_Y);
+    button(ImGuiKey_GamepadFaceDown, XINPUT_GAMEPAD_A);
+    button(ImGuiKey_GamepadDpadLeft, XINPUT_GAMEPAD_DPAD_LEFT);
+    button(ImGuiKey_GamepadDpadRight, XINPUT_GAMEPAD_DPAD_RIGHT);
+    button(ImGuiKey_GamepadDpadUp, XINPUT_GAMEPAD_DPAD_UP);
+    button(ImGuiKey_GamepadDpadDown, XINPUT_GAMEPAD_DPAD_DOWN);
+    button(ImGuiKey_GamepadL1, XINPUT_GAMEPAD_LEFT_SHOULDER);
+    button(ImGuiKey_GamepadR1, XINPUT_GAMEPAD_RIGHT_SHOULDER);
+    button(ImGuiKey_GamepadL3, XINPUT_GAMEPAD_LEFT_THUMB);
+    button(ImGuiKey_GamepadR3, XINPUT_GAMEPAD_RIGHT_THUMB);
+    analog(ImGuiKey_GamepadL2, g.bLeftTrigger, XINPUT_GAMEPAD_TRIGGER_THRESHOLD, 255);
+    analog(ImGuiKey_GamepadR2, g.bRightTrigger, XINPUT_GAMEPAD_TRIGGER_THRESHOLD, 255);
+    analog(ImGuiKey_GamepadLStickLeft, g.sThumbLX, -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, -32768);
+    analog(ImGuiKey_GamepadLStickRight, g.sThumbLX, +XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, +32767);
+    analog(ImGuiKey_GamepadLStickUp, g.sThumbLY, +XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, +32767);
+    analog(ImGuiKey_GamepadLStickDown, g.sThumbLY, -XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, -32768);
+    analog(ImGuiKey_GamepadRStickLeft, g.sThumbRX, -XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, -32768);
+    analog(ImGuiKey_GamepadRStickRight, g.sThumbRX, +XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, +32767);
+    analog(ImGuiKey_GamepadRStickUp, g.sThumbRY, +XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, +32767);
+    analog(ImGuiKey_GamepadRStickDown, g.sThumbRY, -XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, -32768);
+}
+
+// Newly-pressed buttons this frame (any pad, or the shot run's pad script), for carousel navigation.
+static WORD pad_pressed() {
+    static WORD prev = 0;
+    WORD cur = g_padFrame.wButtons;
     WORD edge = cur & (WORD)~prev;
     prev = cur;
     return edge;
@@ -1089,7 +1162,10 @@ static pkg::PackageInstall install_one_package(const GameEntry& g, const std::fi
 
 static void refresh_import_count();
 
-static void open_mods(const std::vector<GameEntry>& games, int index) {
+static const pkg::ConversionInfo* play_as(const std::vector<GameEntry>& games, int i);
+
+// focusConversions (aki-roadmap#232): the controller starts on the Conversions section, on the Play as... pick.
+static void open_mods(const std::vector<GameEntry>& games, int index, bool focusConversions = false) {
     carry_portable(games[index]);
     g_ui.modsGame = index;
     g_ui.modsNote.clear();
@@ -1099,6 +1175,14 @@ static void open_mods(const std::vector<GameEntry>& games, int index) {
     refresh_mods(games);
     refresh_import_count();
     g_ui.showMods = true;
+    g_ui.convFocusFrames = 0;
+    if (focusConversions) {
+        std::vector<std::string> ids;
+        for (const auto& c : g_ui.convs) ids.push_back(c.id);
+        const pkg::ConversionInfo* pick = play_as(games, index);
+        g_ui.convFocus = pick ? convnav::conversions_focus(ids, pick->id) : -1;
+        g_ui.convFocusFrames = 3;
+    }
 }
 
 static void close_mods() {
@@ -1423,7 +1507,7 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
 
     float panelW = page_column(vw, vh, 0.86f, 1.75f);
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
-    ImGui::BeginChild("##import", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##import", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_NavFlattened);
     ImGui::PushFont(g_ui.fontBase);
     const bool appearing = ImGui::IsWindowAppearing();
     if (g_import.busy()) {
@@ -1672,11 +1756,14 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
 
     float panelW = page_column(vw, vh, 0.70f, 1.45f);
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.15f));
-    ImGui::BeginChild("##mods", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##mods", ImVec2(panelW, vh * 0.74f), ImGuiChildFlags_NavFlattened);
     ImGui::PushFont(g_ui.fontBase);
     // aki-roadmap#228: one way in for everything (mods, texture packs, packages, ROM hacks, patches, Project64 bundles).
     bool gameRuns = g_session.active();
     ImGui::BeginDisabled(gameRuns || g_import.busy());
+    // A file dialog is a dead end for a controller (aki-roadmap#232): with a pad these two are off, and the Import
+    // folder (Convert my Import folder) is the way in.
+    ImGui::BeginDisabled(g_ui.padInput);
     if (ImGui::Button("Import...")) {
         auto files = pick_mod_files();
         if (!files.empty()) start_import(games, files, false);
@@ -1686,6 +1773,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         std::filesystem::path dir = pick_folder(L"");
         if (!dir.empty()) start_import(games, {dir}, false);
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
     std::string convLabel = "Convert my Import folder (" + std::to_string(g_ui.importNew) + " new)";
     ImGui::BeginDisabled(g_ui.importNew == 0);
@@ -1714,6 +1802,8 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     }
     ImGui::PushFont(g_ui.fontSmall);
     if (gameRuns) ImGui::TextColored(palette::warn, "Import is off while a game runs: close the game first.");
+    else if (g_ui.padInput)
+        ImGui::TextColored(palette::faint, "With a controller: put files in the Import folder, then Convert my Import folder.");
     ImGui::TextColored(palette::faint, "%s   -   or drop any mix of mods, texture packs, ROM hacks, patches and folders on this window",
                        narrow(g_ui.modsDir.wstring()).c_str());
     if (!g_ui.modsNote.empty()) {
@@ -1804,37 +1894,87 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     g_ui.convMove = moveIndex;
     // Conversions (aki-roadmap#154): one at a time, each with its own saves. Play starts the game as it (and Play as...
     // on the home page remembers it); Remove takes what it installed, never its saves.
+    // aki-roadmap#232: every row is a stop for the D-pad (the original game first): A on a row picks it for Play as...,
+    // Play starts it with the cart insert; its tier, Untested label and known issues are on the row.
     {
         int playConv = -1, removeConv = -1;
         ImGui::Spacing();
         ImGui::TextColored(palette::accent, "Conversions");
         ImGui::PushFont(g_ui.fontSmall);
         if (g_ui.convs.empty())
-            ImGui::TextColored(palette::dim, "None installed. A conversion package, or a ROM-hack .nrm, installs here through Install files...");
+            ImGui::TextColored(palette::dim, "None installed. A conversion package, or a ROM-hack .nrm, installs here through Import...");
+        const pkg::ConversionInfo* pick = play_as(games, g_ui.modsGame);
+        bool focusNow = g_ui.convFocusFrames > 0;
+        if (focusNow) --g_ui.convFocusFrames;
+        auto land = [&](int row) {  // the controller starts here (opened from the card's Play as... line)
+            if (!focusNow || row != g_ui.convFocus) return;
+            ImGui::SetFocusID(ImGui::GetItemID(), ImGui::GetCurrentWindow());
+            ImGui::SetNavCursorVisible(true);
+            ImGui::SetScrollHereY(0.25f);
+        };
+        if (!g_ui.convs.empty()) {
+            ImGui::PushFont(g_ui.fontBase);
+            if (ImGui::Selectable(pick ? "The original game" : "The original game   (Play as)", !pick, ImGuiSelectableFlags_AllowOverlap)) {
+                set_play_as(g, std::string());
+                mods_note(L"Play on the card starts the original " + g.title, true);
+            }
+            land(-1);
+            ImGui::PopFont();
+            ImGui::Spacing();
+        }
+        if (!g.launchable() && !g_ui.convs.empty())
+            ImGui::TextColored(palette::warn, "%s isn't ready to play yet: B goes back to its card, which says what it needs.",
+                               narrow(g.title).c_str());
         std::vector<std::string> rom = rom_sha1_of(g);
         for (int i = 0; i < (int)g_ui.convs.size(); ++i) {
             const pkg::ConversionInfo& c = g_ui.convs[i];
+            bool picked = pick && pick->id == c.id;
             ImGui::PushID(10000 + i);
             ImGui::PushFont(g_ui.fontBase);
-            ImGui::TextUnformatted((narrow(c.name) + (c.version.empty() ? "" : "  " + narrow(c.version))).c_str());
+            std::string head = narrow(c.name) + (c.version.empty() ? "" : "  " + narrow(c.version)) + (picked ? "   (Play as)" : "");
+            if (ImGui::Selectable(head.c_str(), picked, ImGuiSelectableFlags_AllowOverlap)) {
+                set_play_as(g, c.id);
+                mods_note(L"Picked " + c.name + L": Play here, or Play on the card, starts it", true);
+            }
+            land(i);
             ImGui::PopFont();
+            ImGui::PushTextWrapPos(panelW - ui_px(20));
+            convnav::TierBadge badge = convnav::tier_badge(c.tier, c.untested);
+            if (c.untested)
+                ImGui::TextColored(palette::warn, "Untested: built on this PC by the converter, not tested by the AKI team. It may crash "
+                                                  "or look wrong; your other saves are safe.");
+            else if (!badge.text.empty())
+                ImGui::TextColored(badge.warn ? palette::warn : palette::ready, "%s", narrow(badge.text).c_str());
+            if (!c.description.empty()) ImGui::TextColored(palette::faint, "%s", narrow(c.description).c_str());
+            if (!c.knownIssues.empty()) {
+                ImGui::TextColored(palette::dim, "Known issues:");
+                for (const auto& k : c.knownIssues) ImGui::TextColored(palette::dim, "  -  %s", narrow(k).c_str());
+            }
+            if (!c.note.empty()) ImGui::TextColored(palette::faint, "%s", narrow(c.note).c_str());
             std::string line = c.authors.empty() ? std::string() : "by " + narrow(c.authors) + "  -  ";
             line += c.recorded ? "installed as a package" : "added by hand";
             line += "  -  saves in saves\\" + c.id + "\\";
             for (const auto& a : c.addons) line += "  -  with " + a;
-            ImGui::PushTextWrapPos(panelW - ui_px(20));
             ImGui::TextColored(palette::dim, "%s", line.c_str());
             ImGui::PopTextWrapPos();
             bool romOk = pkg::conversion_rom_matches(c, rom);
             ImGui::TextColored(romOk ? palette::ready : palette::warn, "%s", romOk ? "Your ROM matches" : "Made for another ROM than yours");
-            if (g.launchable() && ImGui::SmallButton("Play")) playConv = i;
+            bool first = true;
+            auto gap = [&]() {
+                if (!first) ImGui::SameLine();
+                first = false;
+            };
+            if (g.launchable()) {
+                gap();
+                if (ImGui::SmallButton("Play")) playConv = i;
+            }
             std::error_code ec;
             if (std::filesystem::is_directory(c.saves, ec)) {
-                ImGui::SameLine();
+                gap();
                 if (ImGui::SmallButton("Open saves folder")) ShellExecuteW(nullptr, L"explore", c.saves.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             }
             if (c.recorded) {
-                ImGui::SameLine();
+                gap();
                 if (ImGui::SmallButton("Remove")) removeConv = i;
             }
             ImGui::Spacing();
@@ -1867,7 +2007,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     ImGui::EndChild();
     ImGui::PushFont(g_ui.fontSmall);
     ImGui::SetCursorPosY(vh * 0.92f);
-    text_centered_colored(palette::faint, g_ui.padInput ? "B Back      The game turns mods on and off and sets their order in its own Mods menu"
+    text_centered_colored(palette::faint, g_ui.padInput ? "D-Pad Move      A Pick / Press      B Back      The game turns mods on and off in its own Mods menu"
                                                         : "Esc Back      The game turns mods on and off and sets their order in its own Mods menu");
     ImGui::PopFont();
     return -1;
@@ -1959,7 +2099,7 @@ static int draw_quick(std::vector<GameEntry>& games, WORD pad) {
 
     float panelW = page_column(vw, vh, 0.50f, 1.0f);
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.20f));
-    ImGui::BeginChild("##quick", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##quick", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_NavFlattened);
     ImGui::PushFont(g_ui.fontBase);
     int launch = -1;
     if (!g_ui.qmFound) {
@@ -2075,7 +2215,7 @@ static int draw_tour(std::vector<GameEntry>& games, WORD pad) {
     float panelW = page_column(vw, vh, 0.56f, 1.1f);
     if (!g_ui.tourOk) {
         ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.18f));
-        ImGui::BeginChild("##tour", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_None);
+        ImGui::BeginChild("##tour", ImVec2(panelW, vh * 0.70f), ImGuiChildFlags_NavFlattened);
         ImGui::PushFont(g_ui.fontBase);
         ImGui::TextColored(palette::error, "The tour couldn't be read");
         ImGui::PopFont();
@@ -2095,7 +2235,7 @@ static int draw_tour(std::vector<GameEntry>& games, WORD pad) {
     ImGui::PopFont();
 
     ImGui::SetCursorPos(ImVec2((vw - panelW) * 0.5f, vh * 0.17f));
-    ImGui::BeginChild("##tour", ImVec2(panelW, vh * 0.72f), ImGuiChildFlags_None);
+    ImGui::BeginChild("##tour", ImVec2(panelW, vh * 0.72f), ImGuiChildFlags_NavFlattened);
     ImGui::PushFont(g_ui.fontBase);
     for (int i = 0; i < n; ++i) {
         const TourStop& s = tour.stops[i];
@@ -2627,6 +2767,56 @@ static void draw_settings(std::vector<GameEntry>& games, WORD pad) {
 }
 
 // Returns the index of a game to launch this frame, or -1.
+// The Needs ROM prompt by controller (aki-roadmap#232): no file dialog, the game's accepted dump is looked for in the
+// ROM scan's folder, the other games' ROM folders, the folders Find it... used, the Import folder and the usual
+// Windows folders (Downloads, Desktop, Documents; 3 folders deep), and set up when found. False with *err naming
+// where it looked.
+static bool pad_find_rom(std::vector<GameEntry>& games, int index, std::wstring* err) {
+    GameEntry& g = games[index];
+    std::vector<std::filesystem::path> cands;
+    cands.push_back(settings().romScanDir);
+    for (const auto& o : games)
+        if (o.romFound) cands.push_back(o.romPath.parent_path());
+    for (const auto& d : g_importRomDirs) cands.push_back(d);
+    cands.push_back(import_dir());
+    wchar_t home[MAX_PATH]{};
+    if (GetEnvironmentVariableW(L"USERPROFILE", home, MAX_PATH))
+        for (const wchar_t* sub : {L"Downloads", L"Desktop", L"Documents"}) cands.push_back(std::filesystem::path(home) / sub);
+    std::vector<std::filesystem::path> dirs = convnav::rom_search_dirs(cands, [](const std::filesystem::path& d) {
+        std::error_code ec;
+        return std::filesystem::is_directory(d, ec);
+    });
+    std::wstring where, provisionErr;
+    for (const auto& d : dirs) {
+        where += (where.empty() ? L"" : L", ") + d.wstring();
+        for (const auto& f : rom_candidates(d, 2000).files) {
+            RomScanEntry e = rom_classify(f, games);
+            if (e.verdict != RomVerdict::BaseDump || e.gameIndex != index) continue;
+            if (rom_provision(g, e, &provisionErr)) {
+                logf(L"pad ROM search: %s set up from %s", g.title.c_str(), f.c_str());
+                return true;
+            }
+            logf(L"pad ROM search: %s: %s", f.c_str(), provisionErr.c_str());
+        }
+    }
+    *err = L"Couldn't find your " + g.title + L" ROM (" + g.romNote + L")" +
+           (provisionErr.empty() ? L"" : L": " + provisionErr) + L".\nLooked in " + (where.empty() ? L"no folders" : where) +
+           L".\nPut the .z64 in one of them and press A again, or pick it with the mouse.   B dismisses this.";
+    return false;
+}
+
+// Every launch from the UI starts here (aki-roadmap#232): the home card's Play, a conversion's Play on the Conversions
+// page and the Import screen's Play. The card comes back on that game and the cart-insert animation plays; the game
+// starts when it ends (draw_ui returns the index then), so a conversion launch looks exactly like a stock one.
+static void begin_launch(int index) {
+    play_launch();
+    g_ui.selected = index;
+    g_ui.face = g_ui.facePrev = 0;
+    g_ui.flipAnim = 1.0f;
+    g_ui.insertIndex = index;
+    g_ui.insertAnim = 0.0f;
+}
+
 static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                    const std::filesystem::path& depotRoot) {
     ImGuiViewport* vp = ImGui::GetMainViewport();
@@ -2674,7 +2864,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // Which device is the user on? Pad wins ties; the state sticks until the
     // other device produces input.
-    if (pad || pad_held_mask()) g_ui.padInput = true;
+    if (pad || g_padFrame.wButtons) g_ui.padInput = true;
     else if (keyboard_mouse_activity()) g_ui.padInput = false;
 
     // ------------------------------------------------------------------ update page
@@ -2701,8 +2891,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     // ------------------------------------------------------------------ mods page
     if (g_ui.showMods) {
         int launch = g_ui.showImport ? draw_import(games, pad) : draw_mods(games, pad);
+        if (launch >= 0) begin_launch(launch);  // the pages closed themselves: the card plays the cart insert
         ImGui::End();
-        return launch;
+        return -1;
     }
 
     // ------------------------------------------------------------------ settings screen
@@ -2771,6 +2962,8 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             rebuild_cancel();
         } else if (back && rebuild_status().phase != RebuildPhase::Idle) {
             rebuild_ack();
+        } else if (back && !g_session.statusNote.empty()) {
+            g_session.statusNote.clear();  // a launch error or Needs ROM note (aki-roadmap#232): B dismisses it too
         }
     }
     const bool rebuildPanel = g_session.logTail.empty() && rebuild_status().phase != RebuildPhase::Idle;
@@ -3028,24 +3221,37 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // Play as... (aki-roadmap#154): the original game or one of its conversions, remembered per game. A launch
     // choice: nothing in the game's files changes.
+    // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it, Down (V) opens the Conversions page
+    // with its details (tier, known issues, Untested) on the picked one. Shown also while the game needs its ROM.
     bool lbPlayAs = false;
-    if ((s.launchable() || !g_shotModsDir.empty()) && !installingSel) {
+    if ((s.exeFound || !g_shotModsDir.empty()) && !installingSel) {
         const auto& convs = game_conversions(games, g_ui.selected);
         if (!convs.empty()) {
             lbPlayAs = true;
             const pkg::ConversionInfo* pick = play_as(games, g_ui.selected);
-            if (!inserting && (ImGui::IsKeyPressed(ImGuiKey_C, false) || (pad & XINPUT_GAMEPAD_LEFT_SHOULDER))) {
-                int next = (pick ? (int)(pick - convs.data()) : -1) + 1;  // the original, then each conversion
-                set_play_as(s, next < (int)convs.size() ? convs[next].id : std::string());
+            bool keyC = ImGui::IsKeyPressed(ImGuiKey_C, false);
+            if (!inserting && (keyC || (pad & XINPUT_GAMEPAD_LEFT_SHOULDER))) {
+                int next = convnav::play_as_step(pick ? (int)(pick - convs.data()) : -1, (int)convs.size(),
+                                                 keyC && ImGui::GetIO().KeyShift ? -1 : +1);
+                set_play_as(s, next >= 0 ? convs[next].id : std::string());
                 pick = play_as(games, g_ui.selected);
                 play_nav();
             }
+            if (!inserting && (ImGui::IsKeyPressed(ImGuiKey_V, false) || ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
+                               (pad & XINPUT_GAMEPAD_DPAD_DOWN))) {
+                play_flip();
+                open_mods(games, g_ui.selected, true);
+                ImGui::End();
+                return -1;
+            }
             ImGui::PushFont(g_ui.fontSmall);
-            text_centered_colored(palette::accent, std::to_string(convs.size()) +
-                                                       (convs.size() == 1 ? " conversion" : " conversions") +
-                                                       " installed   -   Play as:  " +
-                                                       (pick ? narrow(pick->name) : std::string("the original game")) +
-                                                       "   -   C / LB changes it");
+            std::string line = std::to_string(convs.size()) + (convs.size() == 1 ? " conversion" : " conversions") +
+                               " installed   -   Play as:  " + (pick ? narrow(pick->name) : std::string("the original game"));
+            convnav::TierBadge badge = pick ? convnav::tier_badge(pick->tier, pick->untested) : convnav::TierBadge{};
+            if (!badge.text.empty()) line += "  [" + narrow(badge.text) + "]";
+            text_centered_colored(badge.warn ? palette::warn : palette::accent, line);
+            text_centered_colored(palette::dim, g_ui.padInput ? "LB Changes It      Down Details And Known Issues"
+                                                              : "C Changes It (Shift+C Back)      V Or Down Details And Known Issues");
             if (pick && !pkg::conversion_rom_matches(*pick, rom_sha1_of(s)))
                 text_centered_colored(palette::warn, narrow(pick->name) + " is made for another ROM than yours");
             ImGui::PopFont();
@@ -3098,7 +3304,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
     if (action != CardAction::None) {
         const char* label = action == CardAction::Play       ? "PLAY"
                             : action == CardAction::Download ? "DOWNLOAD"
-                                                             : "SELECT ROM...";
+                                                             : g_ui.padInput ? "FIND MY ROM" : "SELECT ROM...";
         ImGui::PushFont(g_ui.fontBase);
         ImVec2 bsz(vw * (action == CardAction::Play ? 0.10f : 0.13f), vh * 0.048f);
         // Keep the button at a stable anchor, but never let it ride up over the
@@ -3119,21 +3325,15 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         if (actLaunch) trigger = true;
         if (trigger && !inserting) {
             if (action == CardAction::Play) {
-                // Launch happens when the cart-insert animation finishes;
-                // without cart art just launch immediately.
-                play_launch();
-                if (art[g_ui.selected].cart.ok()) {
-                    g_ui.insertIndex = g_ui.selected;
-                    g_ui.insertAnim = 0.0f;
-                } else {
-                    launchIndex = g_ui.selected;
-                }
+                begin_launch(g_ui.selected);  // the launch happens when the cart-insert animation finishes
             } else if (action == CardAction::Download) {
                 if (install_start(g_ui.selected, s, rel)) play_flip();
             } else {
                 std::wstring err;
-                if (pick_rom(s, &err)) {
+                // A controller can't drive the file dialog: it searches the known ROM folders instead.
+                if (g_ui.padInput ? pad_find_rom(games, g_ui.selected, &err) : pick_rom(s, &err)) {
                     apply_overrides(games);
+                    g_session.statusNote.clear();
                     play_flip();
                 } else if (!err.empty()) {
                     g_session.statusNote = err;
@@ -3273,10 +3473,13 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             float dim = fminf(t / 0.30f, 1.0f);
             fg->AddRectFilled(wp, ImVec2(wp.x + vw, wp.y + vh),
                               IM_COL32(8, 8, 12, (int)(dim * 190.0f)));
-            const Texture& cart = art[g_ui.insertIndex].cart;
+            // The cartridge scan, else the front cover, else a drawn cartridge: the animation always plays.
+            const BoxArt& ba = art[g_ui.insertIndex];
+            convnav::InsertArt kind = convnav::insert_art(ba.cart.ok(), ba.front.ok());
+            const Texture& cart = kind == convnav::InsertArt::Cover ? ba.front : ba.cart;
             float appear = fminf(t / 0.10f, 1.0f);  // quick fade/scale in
             float cw = vw * 0.16f * (0.92f + 0.08f * appear);
-            float ch = cw * (float)cart.h / (float)cart.w;
+            float ch = kind == convnav::InsertArt::Drawn ? cw * 0.72f : cw * (float)cart.h / (float)cart.w;
             float cx = wp.x + vw * 0.5f;
             // Timeline: drop onto the slot, rest a beat, click-in push, hold
             // seated with the top half of the cart peeking over the edge.
@@ -3295,9 +3498,16 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             } else {
                 cy = ySeat;                          // seated until launch
             }
-            fg->AddImage((ImTextureID)cart.srv, ImVec2(cx - cw * 0.5f, cy - ch * 0.5f),
-                         ImVec2(cx + cw * 0.5f, cy + ch * 0.5f), ImVec2(0, 0), ImVec2(1, 1),
-                         IM_COL32(255, 255, 255, (int)(appear * 255.0f)));
+            ImVec2 c0(cx - cw * 0.5f, cy - ch * 0.5f), c1(cx + cw * 0.5f, cy + ch * 0.5f);
+            if (kind == convnav::InsertArt::Drawn) {
+                int a = (int)(appear * 255.0f);
+                fg->AddRectFilled(c0, c1, IM_COL32(58, 60, 70, a), cw * 0.04f);
+                fg->AddRectFilled(ImVec2(c0.x + cw * 0.10f, c0.y + ch * 0.10f), ImVec2(c1.x - cw * 0.10f, c0.y + ch * 0.55f),
+                                  IM_COL32(250, 199, 72, a), cw * 0.02f);
+                fg->AddRect(c0, c1, IM_COL32(20, 20, 26, a), cw * 0.04f, 0, 2.0f);
+            } else {
+                fg->AddImage((ImTextureID)cart.srv, c0, c1, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, (int)(appear * 255.0f)));
+            }
         }
     }
 
@@ -3465,6 +3675,14 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
             return 2;
         }
         g_shot = shot.active;
+        if (!shot.padScript.empty()) {
+            std::vector<convnav::PadStep> steps;
+            if (!convnav::parse_pad_script(shot.padScript, &steps, &err)) {
+                logf(L"shot: %s", err.c_str());
+                return 2;
+            }
+            g_padScript = convnav::PadScriptPlayer(std::move(steps));
+        }
         // Shots of the import pages (aki-roadmap#228): AKI_IMPORT_SANDBOX = an --import-batch sandbox, whose data folders
         // and Import folder the pages then show instead of the real ones.
         wchar_t sb[MAX_PATH]{};
@@ -3915,20 +4133,9 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         }
         if (testLaunch >= 0) {
             if (frame == 30 && testLaunch < (int)games.size()) {
-                // Go through the real UI path, including the cart-insert
-                // animation, when cart art exists.
-                if (art[testLaunch].cart.ok()) {
-                    logf(L"test-launch: starting cart-insert animation");
-                    g_ui.insertIndex = testLaunch;
-                    g_ui.insertAnim = 0.0f;
-                } else {
-                    std::wstring err;
-                    if (!g_session.launch(games[testLaunch], &err)) {
-                        logf(L"test-launch: launch failed: %s", err.c_str());
-                        exitCodeOut = 2;
-                        break;
-                    }
-                }
+                // Go through the real UI path, including the cart-insert animation (it always plays).
+                logf(L"test-launch: starting cart-insert animation");
+                begin_launch(testLaunch);
             }
             if (g_session.state == SessionState::Running && !testCloseSent &&
                 GetTickCount64() - g_session.runningTick > 15000) {
@@ -3981,7 +4188,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         // flows so held buttons don't drive focus mid-capture.
         {
             ImGuiIO& nio = ImGui::GetIO();
-            if (!g_shot && ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods ||
+            if ((!g_shot || g_padScript.active()) && ((g_ui.showSettings && !g_ui.captureChord && !g_ui.captureHotkey) || g_ui.showMods ||
                             g_ui.showUpdate || g_ui.showQuick || g_ui.showTour))
                 nio.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
             else
@@ -3989,6 +4196,20 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         }
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
+        // A pad script (aki-roadmap#232) starts once the page has laid out, like a plain shot's wait.
+        bool padShot = false, padDone = false;
+        if (g_shot && g_padScript.active()) {
+            g_padScriptDown = 0;
+            if (shotFrame >= 20) {
+                convnav::PadFrame pf = g_padScript.next();
+                g_padScriptDown = pf.down;
+                padShot = pf.shot;
+                padDone = pf.done;
+            }
+        }
+        poll_pads();
+        feed_imgui_gamepad();
+        if (g_shot && g_padScript.active()) ImGui::GetIO().DeltaTime = 1.0f / 60.0f;  // script frames are 1/60 s
         ImGui::NewFrame();
 
         if (!g_session.active() && !g_ui.showSettings && !g_ui.showMods && !g_ui.showUpdate && !g_ui.showQuick && !g_ui.showTour &&
@@ -4003,6 +4224,11 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
 
         int launchIdx = draw_ui(games, art, depotRoot);
         if (g_shot) {
+            if (launchIdx >= 0) {
+                const pkg::ConversionInfo* c = play_as(games, launchIdx);
+                logf(L"shot: launch blocked: %s%s%s (the cart insert ran)", games[launchIdx].title.c_str(),
+                     c ? L" as " : L"", c ? c->name.c_str() : L"");
+            }
             launchIdx = -1;  // nothing starts from a screenshot run
             g_ui.qmLaunch = false;
             if (!g_shotModsDir.empty()) {
@@ -4089,7 +4315,33 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
         g_context->ClearRenderTargetView(g_rtv, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
         // A shot is taken once the page has had a few frames to lay out and load (fonts, thumbnails).
-        if (g_shot && ++shotFrame >= 20) {
+        if (g_shot && g_padScript.active()) {
+            // Pad script: a numbered frame at each "shot" step, the last frame as the shot's own file, then exit.
+            static int padShotNo = 0;
+            ++shotFrame;
+            const std::filesystem::path& out = shot.shots[0].second;
+            std::wstring err;
+            if (padShot) {
+                wchar_t num[16];
+                swprintf_s(num, L"-%02d", ++padShotNo);
+                std::filesystem::path f = out.parent_path() / (out.stem().wstring() + num + out.extension().wstring());
+                if (capture_png(f, &err)) logf(L"shot: %s", f.c_str());
+                else {
+                    ++shotFailed;
+                    logf(L"shot FAILED: %s: %s", f.c_str(), err.c_str());
+                }
+            }
+            if (padDone) {
+                if (capture_png(out, &err)) logf(L"shot: %s (pad script done)", out.c_str());
+                else {
+                    ++shotFailed;
+                    logf(L"shot FAILED: %s: %s", out.c_str(), err.c_str());
+                }
+                shotIndex = shot.shots.size();
+                exitCodeOut = shotFailed || !shotPageOk ? 1 : 0;
+                done = true;
+            }
+        } else if (g_shot && ++shotFrame >= 20) {
             const auto& [page, out] = shot.shots[shotIndex];
             std::wstring err;
             if (!shotPageOk) {

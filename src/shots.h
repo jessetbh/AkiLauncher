@@ -12,6 +12,7 @@
 //
 //   AkiLauncher.exe --shot <page> <out.png> [--game <id>] [--demo] [--size WxH]
 //   AkiLauncher.exe --shot-all <dir> [--game <id>] [--demo] [--size WxH]      every page, as <dir>\<page>.png
+//   AkiLauncher.exe --shot <page> <out.png> --pad-script "DOWN,shot,A,wait40,shot"  a controller path, frame by frame
 //
 // --game: a games.json id (default nomercy when the registry has it). --demo: demo data even where real data exists.
 // --size: the frame in pixels (default 1600x900; 3840x2160 for a 4K screen), 320x240 to 7680x4320.
@@ -27,6 +28,9 @@ struct ShotRequest {
     std::wstring game;  // "" = the default
     bool demo = false;
     int width = 1600, height = 900;
+    // aki-roadmap#232: drive the page with a controller script (convnav::parse_pad_script) and save frames: each
+    // "shot" step as <out>-NN.png, the last frame as <out>. Launches stay blocked; the cart insert still plays.
+    std::wstring padScript;
 };
 
 // The shot options in a command line (the others are left for the caller). False (with *err) for a malformed one:
@@ -41,5 +45,6 @@ bool write_png(const std::filesystem::path& file, int width, int height, const u
 // models\ with two No Mercy model packs and a models.txt assigning one of them.
 bool make_demo_mods_dir(const std::filesystem::path& dir, std::wstring* err);
 // A demo data folder for conversions (aki-roadmap#154): conversions\ with one recorded in packages.json (with a
-// texture pack that came with it, and saves) and one added by hand for another ROM.
+// texture pack that came with it, and saves; Experimental with known issues), one Untested import, and one added by
+// hand for another ROM.
 bool make_demo_conversions(const std::filesystem::path& dataDir, std::wstring* err);

@@ -1411,6 +1411,17 @@ std::vector<ConversionInfo> list_conversions(const fs::path& dataDir) {
                         if (x.is(JsonValue::Type::String)) c.baseSha1.push_back(lower(x.s));
             }
         }
+        c.description = w(str(v, "description"));
+        if (const JsonValue* sv = v.get("survey"); sv && sv->is(JsonValue::Type::Object)) {
+            std::string tier = str(*sv, "aki_tier");
+            c.tier = conversion_tier_word(tier);
+            c.untested = lower(tier) == "untested";
+            if (const JsonValue* ki = sv->get("known_issues"); ki && ki->is(JsonValue::Type::Array))
+                for (auto& x : ki->items)
+                    if (x.is(JsonValue::Type::String) && !x.s.empty()) c.knownIssues.push_back(w(x.s));
+            c.note = w(str(*sv, "note"));
+            if (c.note.empty()) c.note = w(str(*sv, "tier_note"));
+        }
         c.folder = it->path();
         c.saves = dataDir / L"saves" / it->path().filename();
         if (const RegEntry* e = reg.owner("conversions/" + dir); e && e->kind == "conversion") {
@@ -1423,6 +1434,15 @@ std::vector<ConversionInfo> list_conversions(const fs::path& dataDir) {
     }
     std::sort(out.begin(), out.end(), [](const ConversionInfo& a, const ConversionInfo& b) { return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0; });
     return out;
+}
+
+std::wstring conversion_tier_word(const std::string& tier) {
+    std::string t = lower(tier);
+    if (t == "verified") return L"Verified";
+    if (t == "experimental") return L"Experimental";
+    if (t == "unsupported") return L"Unsupported";
+    if (t == "untested") return L"Untested";
+    return w(tier);
 }
 
 bool conversion_rom_matches(const ConversionInfo& c, const std::vector<std::string>& romSha1) {
