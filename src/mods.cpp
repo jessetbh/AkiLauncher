@@ -240,6 +240,9 @@ bool recycle_path(const fs::path& p, std::wstring* errorOut) {
         return !ec;
     }
     std::wstring from = fs::absolute(p).wstring();
+    // The shell doesn't take \\?\ paths (packages.cpp long_path_of, aki-roadmap#265).
+    if (from.rfind(L"\\\\?\\UNC\\", 0) == 0) from = L"\\\\" + from.substr(8);
+    else if (from.rfind(L"\\\\?\\", 0) == 0) from = from.substr(4);
     from.push_back(L'\0');  // double-null-terminated list
     SHFILEOPSTRUCTW op{};
     op.wFunc = FO_DELETE;
@@ -536,6 +539,28 @@ bool remove_model_pack(const fs::path& packDir, const fs::path& modsDir, std::ws
 static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::path& modsDir, const std::wstring& gameId,
                                                 const std::wstring& gameTitle);
 
+// A Project64 bundle carries Rice textures too, but it is a conversion (codes, saves, its ROM or patch): the converter
+// builds it, the texture-pack installer must not take its textures alone (aki-roadmap#265, WWF Legends: Challenge 64).
+static bool names_hold_pj64_bundle(const std::vector<std::wstring>& names) {
+    for (const auto& n : names) {
+        std::wstring leaf = lower(fs::path(n).filename().wstring());
+        if (leaf == L"project64.exe" || leaf == L"project64.cht" || leaf == L"project64.cfg" || leaf == L"project64.rdb")
+            return true;
+    }
+    return false;
+}
+
+static bool folder_holds_pj64_bundle(const fs::path& dir) {
+    std::error_code ec;
+    std::vector<std::wstring> names;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (it.depth() > 3) { it.disable_recursion_pending(); continue; }  // a bundle's markers sit near its top
+        if (it->is_regular_file(ec)) names.push_back(it->path().filename().wstring());
+    }
+    return names_hold_pj64_bundle(names);
+}
+
 InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const std::wstring& gameId,
                           const std::wstring& gameTitle, const std::string& modelProfile) {
     InstallResult r;
@@ -685,6 +710,11 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
             r.message = src.wstring() + L" holds the mods folder itself: pick the pack's own folder";
             return r;
         }
+        if (folder_holds_pj64_bundle(src)) {  // aki-roadmap#265: the converter's
+            r.message = name + L": a Project64 bundle";
+            r.unrecognized = true;
+            return r;
+        }
         TexScan ts = scan_texture_folder(src);
         if (ts.naming() == TexNaming::Rice || ts.naming() == TexNaming::Jabo)
             return install_legacy_pack(src, ts, modsDir, gameId, gameTitle, name, false);
@@ -776,6 +806,11 @@ static InstallResult install_mod_file_or_folder(const fs::path& src, const fs::p
             if (leaf == L"rt64.json") anyRt64Json = true;
             if (mext == L".nrm" || mext == L".rtz") anyMod = true;
             names.push_back(nm);
+        }
+        if (names_hold_pj64_bundle(names)) {  // aki-roadmap#265: the converter's, not a zipped texture pack
+            r.message = name + L": a Project64 bundle";
+            r.unrecognized = true;
+            return r;
         }
         TexScan ts = scan_texture_names(names);
         if (!anyRt64Json && !anyMod && (ts.naming() == TexNaming::Rice || ts.naming() == TexNaming::Jabo)) {

@@ -182,8 +182,38 @@ static void test_model_pack_installs(const fs::path& dir) {
     CHECK(find_model_packs(src / L"share").size() == 2 && find_model_packs(src / L"Tex").empty());
 }
 
+// aki-roadmap#265: a Project64 bundle (zipped, or a folder) has Rice textures too; the texture-pack installer used to
+// take them alone (and fail on the bundle's long read-me paths). It is the converter's: unrecognized, nothing installed.
+static void test_pj64_bundle_goes_to_the_converter(const fs::path& dir) {
+    const fs::path mods = dir / L"pj64" / L"mods";
+    std::vector<std::pair<std::string, std::string>> entries = {
+        {"Ch64 - Public/Project64/Project64.exe", "x"}, {"Ch64 - Public/Project64/Config/Project64.cht", "[x]"}};
+    for (int i = 0; i < 6; ++i) {
+        char nm[160];
+        snprintf(nm, sizeof nm, "Ch64 - Public/Project64/Plugin/hires_texture/WWF NO MERCY/WWF NO MERCY#%08X#0#2_all.png", i);
+        entries.push_back({nm, "png"});
+    }
+    const fs::path z = dir / L"pj64" / L"Ch64 - Public v2.zip";
+    fs::create_directories(z.parent_path());
+    write_zip(z, entries);
+    InstallResult r = install_mod(z, mods, L"wwfnomercy", L"WWF No Mercy");
+    CHECK(!r.ok && r.unrecognized && r.installed.empty());
+    const fs::path folder = dir / L"pj64" / L"Bundle Folder";
+    for (const auto& e : entries) write_text(folder / fs::path(e.first).relative_path(), e.second);
+    r = install_mod(folder / L"Ch64 - Public", mods, L"wwfnomercy", L"WWF No Mercy");
+    CHECK(!r.ok && r.unrecognized && r.installed.empty());
+    // The same textures without the Project64 files are still a texture pack.
+    std::vector<std::pair<std::string, std::string>> pack;
+    for (const auto& e : entries)
+        if (e.first.find("hires_texture") != std::string::npos) pack.push_back(e);
+    write_zip(dir / L"pj64" / L"pack.zip", pack);
+    r = install_mod(dir / L"pj64" / L"pack.zip", mods, L"wwfnomercy", L"WWF No Mercy");
+    CHECK(!r.unrecognized);
+}
+
 void run_mods_tests(const fs::path& dir) {
     test_manifest();
+    test_pj64_bundle_goes_to_the_converter(dir);
 
     GameEntry g;
     g.title = L"WWF No Mercy";

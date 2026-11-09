@@ -569,12 +569,35 @@ static void test_conversion_models(const fs::path& tmp) {
     }
 }
 
+// aki-roadmap#265: a converted Project64 bundle nests its textures deep (WWF Legends' menu textures reached 317
+// characters once staged); the install used to fail with "couldn't unpack conversion/ (disk full?)".
+static void test_install_deep_paths(const fs::path& tmp) {
+    const std::string deep = "conversion/textures/Menus/08. VS Screens/03 - Saturday Night's Main Event/Title Match Graphics/"
+                             "Real Worlds Championship/Vs. Screen/WWF No Mercy#FDF74B47#3#0#00000000_ciByRGBA.png";
+    const std::string man = manifest("conversion", "deep-conv", "1.0.0", R"({"folder":"conversion/"})",
+                                     R"(,"base_rom":{"sha1":[")" + std::string(kRomSha1) + R"("],"name":"Test ROM"})");
+    const fs::path zip = tmp / L"deep" / L"deep-conv-1.0.0.zip";
+    put(zip, zip_bytes({{"aki-package.json", man}, {"thumb.png", kPng},
+                        {"conversion/aki.json", R"({"format":"aki-conversion","id":"deep-conv","name":"Deep","version":"1.0.0","base_rom":{"sha1":")" +
+                                                    std::string(kRomSha1) + R"("}})"},
+                        {deep, "png"}}));
+    const fs::path data = tmp / L"deep" / L"a data folder far down the tree for this test" / L"games" / L"nomercy";
+    pkg::InstallOptions o;
+    o.today = "20261109";
+    pkg::PackageInstall r = pkg::install_package(zip, target(data), o);
+    CHECK(r.outcome == Outcome::Installed);
+    std::error_code ec;
+    CHECK(fs::exists(pkg::long_path_of(data / L"conversions" / L"deep-conv" / fs::u8path(deep.substr(11))), ec));
+    CHECK(pkg::long_path_of(L"C:\\x\\y") == fs::path(L"\\\\?\\C:\\x\\y"));
+}
+
 void run_packages_tests(const fs::path& tmp) {
     std::error_code ec;
     fs::remove_all(tmp, ec);
     fs::create_directories(tmp);
     test_fixtures();
     test_rules();
+    test_install_deep_paths(tmp);
     test_registry(tmp);
     test_hash(tmp);
     test_install_and_upgrade(tmp);
