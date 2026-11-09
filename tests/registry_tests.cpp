@@ -69,6 +69,9 @@ void run_registry_tests(const fs::path& dir) {
     std::wstring err;
     std::vector<GameEntry> games = registry_from_json(embedded_games_json(), &err);
     CHECK(games.size() == std::size(kOld));
+    // aki-roadmap#279: a texture pack's game (its mod game id) finds its entry.
+    CHECK(game_index_for_mod_id(games, L"wwfnomercy") == 5 && game_index_for_mod_id(games, L"vpw2") == 4);
+    CHECK(game_index_for_mod_id(games, L"") == -1 && game_index_for_mod_id(games, L"nosuchgame") == -1);
     for (size_t i = 0; i < games.size() && i < std::size(kOld); ++i) {
         const GameEntry& g = games[i];
         const Expected& e = kOld[i];

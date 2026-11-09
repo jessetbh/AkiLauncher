@@ -56,6 +56,7 @@ struct InstallResult {
     std::wstring message;  // for the UI, success or not
     bool already = false;       // not ok because the same pack folder is installed already
     bool unrecognized = false;  // not ok because it isn't a mod, pack or package at all (the importer's worker may know it)
+    std::wstring otherGameId;   // not ok because it's a texture pack for this mod game id instead (aki-roadmap#279)
 };
 // Installs an .nrm, .rtz, a zip (rt64.json at its root -> an .rtz; a package
 // with .nrm/.rtz files inside -> those) or a pack folder into modsDir.

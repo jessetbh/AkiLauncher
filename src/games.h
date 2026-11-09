@@ -78,6 +78,8 @@ std::vector<GameEntry> registry_from_json(const std::string& text, std::wstring*
 bool game_from_json(const JsonValue& v, GameEntry* g, std::wstring* err);
 // The registry file's games, or the built-in ones when it is missing or invalid.
 std::vector<GameEntry> load_registry(const std::filesystem::path& file);
+// The game with this mod game id (mod.json's game_id, "wwfnomercy"), or -1 (aki-roadmap#279).
+int game_index_for_mod_id(const std::vector<GameEntry>& games, const std::wstring& modGameId);
 // Adds games from <root>\<folder>\aki-game.json (one level down, each root),
 // skipping ids already present; a depot folder's name becomes its repo_dir.
 void discover_games(std::vector<GameEntry>& games, const std::filesystem::path& depotRoot,

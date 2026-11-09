@@ -124,6 +124,7 @@ static void test_wrap_installs(const fs::path& dir) {
     // From another game's page: refused by its Rice name.
     r = install_mod(rice, dir / L"mods-vpw2", L"wcwnworevenge", L"WCW/nWo Revenge");
     CHECK(!r.ok && contains(r.message, L"WWF No Mercy") && !fs::exists(dir / L"mods-vpw2" / L"No Mercy HD"));
+    CHECK(r.otherGameId == L"wwfnomercy");  // Import installs it on No Mercy instead (aki-roadmap#279)
     // A hack's own header name: accepted, with a note.
     fs::path hackPack = dir / L"src" / L"Hack Pack";
     put_text(hackPack / L"TESTHACK#5A17C0DE#2#1#0C3E9B71_ciByRGBA.png", "png");

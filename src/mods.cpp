@@ -640,12 +640,13 @@ InstallResult install_mod(const fs::path& src, const fs::path& modsDir, const st
 // work folder or as the player's folder: copied to modsDir\<name>, then rt64.json (autoPath) and mod.json written so
 // the game's texture-name provider (aki-roadmap#93) loads it as it is.
 static bool legacy_wrong_game(const TexScan& ts, const std::wstring& gameId, const std::wstring& gameTitle,
-                              const std::wstring& name, std::wstring* msg) {
+                              const std::wstring& name, InstallResult* r) {
     if (ts.naming() != TexNaming::Rice || gameId.empty()) return false;
     std::wstring rn = ts.rice_name(), owner = rice_name_game(rn);
     if (owner.empty() || owner == gameId) return false;
-    *msg = name + L" is a texture pack for \"" + rn + L"\" (" + owner + L"), not " + gameTitle +
-           L": install it from that game's Mods page";
+    r->otherGameId = owner;  // Import installs it on that game instead (aki-roadmap#279)
+    r->message = name + L" is a texture pack for \"" + rn + L"\" (" + owner + L"), not " + gameTitle +
+                 L": install it from that game's Mods page";
     return true;
 }
 
@@ -660,7 +661,7 @@ static InstallResult install_legacy_pack(const fs::path& packRoot, const TexScan
                                          const std::wstring& name, bool moveFromWork) {
     InstallResult r;
     std::error_code ec;
-    if (legacy_wrong_game(ts, gameId, gameTitle, name, &r.message)) return r;
+    if (legacy_wrong_game(ts, gameId, gameTitle, name, &r)) return r;
     fs::path dest = modsDir / name;
     if (fs::exists(dest, ec)) {
         r.message = name + L" is installed already: remove it first to replace it";
