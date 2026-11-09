@@ -132,6 +132,12 @@ void run_registry_tests(const fs::path& dir) {
             CHECK(g.exeFound && g.exePath == depot / L"BmHeroRecomp-t3" / L"build-msvc" / L"BMHeroRecompiled.exe");
         if (g.artKey == L"ecwmod")
             CHECK(g.exeFound && g.repoPath == installs / L"ecwmod" && g.exePath == installs / L"ecwmod" / L"Wm2kRecompiled.exe");
+        // aki-roadmap#263: Settings compares its EXE field with this default. For an install it is the exe at the install
+        // folder's root, never the registry's build-msvc path (comparing with that wrote an absolute exe= for every
+        // installed game); for a depot game it is the checkout's build.
+        if (g.artKey == L"ecwmod") CHECK(g.exeRegistryPath == installs / L"ecwmod" / L"Wm2kRecompiled.exe");
+        if (g.artKey == L"bmhero")
+            CHECK(g.exeRegistryPath == depot / L"BmHeroRecomp-t3" / L"build-msvc" / L"BMHeroRecompiled.exe");
         if (g.artKey == L"worldtour") CHECK(!g.exeFound && g.repoPath == installs / L"worldtour");
     }
 }
