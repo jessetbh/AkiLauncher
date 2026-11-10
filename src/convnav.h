@@ -33,15 +33,18 @@ TierBadge tier_badge(const std::wstring& tier, bool untested);
 
 // aki-roadmap#289: the home card's ways into the Mods page. Down (arrow or D-pad) is not one: it reads as "move".
 // M / Start open the Mods page, on its Conversions section (the Play as... pick's details) when the
-// game has conversions; V is the keyboard's shortcut to those details.
+// game has conversions. No V shortcut any more: it did the same as M (aki-roadmap#297).
 struct CardKeys {
-    bool keyM = false, padStart = false, keyV = false;
+    bool keyM = false, padStart = false;
     bool keyDown = false, padDown = false;  // never open anything: card_open ignores them on purpose (#289)
 };
 enum class CardOpen { None, Mods, ModsOnConversions };
 CardOpen card_open(const CardKeys& k, int conversions);
 // The hint line under the Play as... line.
 std::string play_as_hint(bool padInput);
+// What Play as... calls the unconverted game wherever a player reads it (card, Conversions page, refusal note):
+// a name, so title case (aki-roadmap#298).
+inline constexpr const char* kOriginalGame = "The Original Game";
 
 // The home page's key map in one place (aki-roadmap#287 #289 #291 #293 #294). The bottom hint bar: browse, play,
 // flip, Settings (S / Esc, Y on a pad; Quit is a button in Settings), the in-game return key; Quick match and the

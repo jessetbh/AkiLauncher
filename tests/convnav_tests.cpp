@@ -112,7 +112,7 @@ static void test_pad_script() {
     CHECK(!PadScriptPlayer().active() && p.active());
 }
 
-// aki-roadmap#289: Down doesn't open the Mods page from the card; M / Start (and V) do, on the conversions when there are some.
+// aki-roadmap#289: Down doesn't open the Mods page from the card; M / Start do (no V since #297), on the conversions when there are some.
 static void test_card_open() {
     using convnav::CardKeys;
     using convnav::CardOpen;
@@ -129,18 +129,18 @@ static void test_card_open() {
     m.keyM = true;
     CHECK(convnav::card_open(m, 1) == CardOpen::ModsOnConversions);
     CHECK(convnav::card_open(m, 0) == CardOpen::Mods);
-    CardKeys v;
-    v.keyV = true;
-    CHECK(convnav::card_open(v, 1) == CardOpen::ModsOnConversions);
-    CHECK(convnav::card_open(v, 0) == CardOpen::None);
     CHECK(convnav::card_open(CardKeys{}, 3) == CardOpen::None);
     for (bool pad : {true, false}) {
         std::string h = convnav::play_as_hint(pad);
         CHECK(h.find("Down") == std::string::npos);
-        CHECK(h.find("Known Issues") == std::string::npos && h.find("Details") != std::string::npos);  // #295
+        CHECK(h.find("Known Issues") == std::string::npos);                                       // #295
+        // #297: no second way into the Mods page on this line (V did what M / Start do; the Manage line shows them)
+        CHECK(h.find("Details") == std::string::npos && h.find("V ") == std::string::npos);
+        CHECK(h.find("Start") == std::string::npos);
     }
-    CHECK(convnav::play_as_hint(true).find("Start") != std::string::npos);
-    CHECK(convnav::play_as_hint(false).find("V Details") != std::string::npos);
+    CHECK(convnav::play_as_hint(true) == "LB Changes It");
+    CHECK(convnav::play_as_hint(false) == "C Changes It (Shift+C Back)");
+    CHECK(std::string(convnav::kOriginalGame) == "The Original Game");  // #298: a name, title case
 }
 
 // One home key map (aki-roadmap#287 #289 #291 #293 #294): no Mods, Quit, Down in the hint bar; Esc / Y Settings; Quick

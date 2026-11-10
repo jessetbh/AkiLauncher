@@ -237,7 +237,7 @@ struct UiState {
     std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
     std::vector<pkg::ConversionInfo> convs;
     int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
-    // aki-roadmap#232/#289: opened with Start / M (V) on a card with conversions: the controller lands on this conversion's row
+    // aki-roadmap#232/#289: opened with Start / M on a card with conversions: the controller lands on this conversion's row
     // (-1 = the original game's) for the first frames, after ImGui's own first focus.
     int convFocus = -1;
     int convFocusFrames = 0;
@@ -749,8 +749,10 @@ static bool pick_rom(GameEntry& g, std::wstring* errOut) {
     return ok;
 }
 
-// Modal folder picker for the ROM scan; empty on cancel.
-static std::filesystem::path pick_folder(const std::wstring& start) {
+// Modal folder picker; empty on cancel. The title defaults to the ROM scan's (aki-roadmap#299: Import a folder... has
+// its own).
+static std::filesystem::path pick_folder(const std::wstring& start,
+                                         const wchar_t* title = L"Scan a folder for N64 ROMs (subfolders too)") {
     IFileOpenDialog* dlg = nullptr;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
                                 IID_PPV_ARGS(&dlg))))
@@ -758,7 +760,7 @@ static std::filesystem::path pick_folder(const std::wstring& start) {
     DWORD opts = 0;
     dlg->GetOptions(&opts);
     dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dlg->SetTitle(L"Scan a folder for N64 ROMs (subfolders too)");
+    dlg->SetTitle(title);
     if (!start.empty()) {
         IShellItem* si = nullptr;
         if (SUCCEEDED(SHCreateItemFromParsingName(start.c_str(), nullptr, IID_PPV_ARGS(&si)))) {
@@ -1552,7 +1554,7 @@ static std::vector<std::filesystem::path> pick_mod_files() {
     return out;
 }
 
-static std::filesystem::path pick_folder(const std::wstring& start);
+static std::filesystem::path pick_folder(const std::wstring& start, const wchar_t* title);
 
 static std::wstring game_title_for_key(const std::vector<GameEntry>& games, const std::wstring& key) {
     int gi = game_by_engine_key(games, key);
@@ -1858,7 +1860,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         }
         ImGui::SameLine();
         if (ImGui::Button("Import a folder...")) {
-            std::filesystem::path dir = pick_folder(L"");
+            std::filesystem::path dir = pick_folder(L"", L"Import a folder (each mod, texture pack, ROM hack or patch in it)");  // #299
             if (!dir.empty()) start_import(games, {dir}, false);
         }
     }
@@ -1990,7 +1992,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         };
         if (!g_ui.convs.empty()) {
             ImGui::PushFont(g_ui.fontBase);
-            if (ImGui::Selectable(pick ? "The original game" : "The original game   (Play as)", !pick, ImGuiSelectableFlags_AllowOverlap)) {
+            if (ImGui::Selectable((std::string(convnav::kOriginalGame) + (pick ? "" : "   (Play as)") + "###original").c_str(), !pick, ImGuiSelectableFlags_AllowOverlap)) {
                 set_play_as(g, std::string());
                 mods_note(L"Play on the card starts the original " + g.title, true);
             }
@@ -3023,7 +3025,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
         {
             // aki-roadmap#289: M / Start open the Mods page, on the Conversions section (its details) when
-            // the game has conversions; Down opens nothing (V, the keyboard's details shortcut, is on the Play as line).
+            // the game has conversions; Down opens nothing (no V either since #297).
             convnav::CardKeys ck;
             ck.keyM = ImGui::IsKeyPressed(ImGuiKey_M, false);
             ck.padStart = (pad & XINPUT_GAMEPAD_START) != 0;
@@ -3349,7 +3351,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // Play as... (aki-roadmap#154): the original game or one of its conversions, remembered per game. A launch
     // choice: nothing in the game's files changes.
-    // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it; Start / M (V on a keyboard) opens the
+    // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it; Start / M opens the
     // Mods page on its Conversions section with its details (tier, Untested) on the picked one. Shown also while the game needs its ROM.
     bool lbPlayAs = false;
     if ((s.exeFound || !g_shotModsDir.empty()) && !installingSel) {
@@ -3365,17 +3367,9 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                 pick = play_as(games, g_ui.selected);
                 play_nav();
             }
-            convnav::CardKeys vk;
-            vk.keyV = ImGui::IsKeyPressed(ImGuiKey_V, false);
-            if (!inserting && convnav::card_open(vk, (int)convs.size()) == convnav::CardOpen::ModsOnConversions) {
-                play_flip();
-                open_mods(games, g_ui.selected, true);
-                ImGui::End();
-                return -1;
-            }
             ImGui::PushFont(g_ui.fontSmall);
             std::string line = std::to_string(convs.size()) + (convs.size() == 1 ? " conversion" : " conversions") +
-                               " installed   -   Play as:  " + (pick ? narrow(pick->name) : std::string("the original game"));
+                               " installed   -   Play as:  " + (pick ? narrow(pick->name) : std::string(convnav::kOriginalGame));
             convnav::TierBadge badge = pick ? convnav::tier_badge(pick->tier, pick->untested) : convnav::TierBadge{};
             if (!badge.text.empty()) line += "  [" + narrow(badge.text) + "]";
             text_centered_colored(badge.warn ? palette::warn : palette::accent, line);
@@ -3384,7 +3378,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                 text_centered_colored(palette::warn, narrow(pick->name) + " is made for another ROM than yours");
             if (pick && !pick->needsGame.empty())  // aki-roadmap#264: said before Play, not only after the cart goes in
                 text_centered_colored(palette::warn, narrow(pick->name) + " needs " + narrow(s.title) + ": Recompiled " +
-                                                         narrow(pick->needsGame) + " or newer: update the game, or play the original");
+                                                         narrow(pick->needsGame) + " or newer: update the game, or switch Play as to " + std::string(convnav::kOriginalGame));
             ImGui::PopFont();
         }
     }
@@ -4431,7 +4425,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                             const std::wstring have = game_run_version(games[launchIdx]);
                             g_session.statusNote = fc.name + L" needs " + games[launchIdx].title + L": Recompiled " +
                                                    fc.needsGame + L" or newer; this one is " + have +
-                                                   L". Update the game, or switch Play as to the original game (" +
+                                                   L". Update the game, or switch Play as to " + widen(convnav::kOriginalGame) + L" (" +
                                                    (g_ui.padInput ? L"LB" : L"C") + L").";
                             logf(L"play: %s refused: the game is %s, the conversion needs %s", fc.id.c_str(),
                                  have.c_str(), fc.needsGame.c_str());
