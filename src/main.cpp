@@ -749,8 +749,10 @@ static bool pick_rom(GameEntry& g, std::wstring* errOut) {
     return ok;
 }
 
-// Modal folder picker for the ROM scan; empty on cancel.
-static std::filesystem::path pick_folder(const std::wstring& start) {
+// Modal folder picker; empty on cancel. The title defaults to the ROM scan's (aki-roadmap#299: Import a folder... has
+// its own).
+static std::filesystem::path pick_folder(const std::wstring& start,
+                                         const wchar_t* title = L"Scan a folder for N64 ROMs (subfolders too)") {
     IFileOpenDialog* dlg = nullptr;
     if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
                                 IID_PPV_ARGS(&dlg))))
@@ -758,7 +760,7 @@ static std::filesystem::path pick_folder(const std::wstring& start) {
     DWORD opts = 0;
     dlg->GetOptions(&opts);
     dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-    dlg->SetTitle(L"Scan a folder for N64 ROMs (subfolders too)");
+    dlg->SetTitle(title);
     if (!start.empty()) {
         IShellItem* si = nullptr;
         if (SUCCEEDED(SHCreateItemFromParsingName(start.c_str(), nullptr, IID_PPV_ARGS(&si)))) {
@@ -1552,7 +1554,7 @@ static std::vector<std::filesystem::path> pick_mod_files() {
     return out;
 }
 
-static std::filesystem::path pick_folder(const std::wstring& start);
+static std::filesystem::path pick_folder(const std::wstring& start, const wchar_t* title);
 
 static std::wstring game_title_for_key(const std::vector<GameEntry>& games, const std::wstring& key) {
     int gi = game_by_engine_key(games, key);
@@ -1858,7 +1860,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         }
         ImGui::SameLine();
         if (ImGui::Button("Import a folder...")) {
-            std::filesystem::path dir = pick_folder(L"");
+            std::filesystem::path dir = pick_folder(L"", L"Import a folder (each mod, texture pack, ROM hack or patch in it)");  // #299
             if (!dir.empty()) start_import(games, {dir}, false);
         }
     }
