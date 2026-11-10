@@ -1703,7 +1703,11 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
             }
             if (!l.log.empty() || !l.raw.empty() || (l.outcome == ImportOutcome::Failed && !g_import.workerLog.empty())) {
                 if (ImGui::SmallButton("Log")) {
-                    g_ui.importLog = narrow(l.log.empty() && l.raw.empty() ? g_import.workerLog : import_line_text(l));
+                    // A failed line with no reason of its own: the converter's stderr (a traceback) follows the sentences.
+                    std::wstring text = l.log.empty() && l.raw.empty() ? g_import.workerLog : import_line_text(l);
+                    if (!l.raw.empty() && l.log.empty() && l.outcome == ImportOutcome::Failed && !g_import.workerLog.empty())
+                        text += L"\n\n" + g_import.workerLog;
+                    g_ui.importLog = narrow(text);
                     g_ui.importRaw = narrow(l.raw);
                     g_ui.importLogOpen = true;
                 }
@@ -1728,6 +1732,7 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
         const float footer = ImGui::GetFrameHeightWithSpacing() * (g_ui.importRaw.empty() ? 1.4f : 2.6f) +
                              (!g_ui.importRaw.empty() && rawOpen ? rawH + ImGui::GetStyle().ItemSpacing.y : 0.0f);
         ImGui::InputTextMultiline("##log", &g_ui.importLog, ImVec2(-1, -footer), ImGuiInputTextFlags_ReadOnly);
+        if (!g_ui.importRaw.empty()) ImGui::SetNextItemOpen(false, ImGuiCond_Appearing);  // collapsed each time it opens
         rawOpen = !g_ui.importRaw.empty() && ImGui::CollapsingHeader("Details for a bug report");
         if (rawOpen) ImGui::InputTextMultiline("##raw", &g_ui.importRaw, ImVec2(-1, rawH), ImGuiInputTextFlags_ReadOnly);
         ImGui::PopFont();
