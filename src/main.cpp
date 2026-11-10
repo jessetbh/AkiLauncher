@@ -3365,14 +3365,6 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                 pick = play_as(games, g_ui.selected);
                 play_nav();
             }
-            convnav::CardKeys vk;
-            vk.keyV = ImGui::IsKeyPressed(ImGuiKey_V, false);
-            if (!inserting && convnav::card_open(vk, (int)convs.size()) == convnav::CardOpen::ModsOnConversions) {
-                play_flip();
-                open_mods(games, g_ui.selected, true);
-                ImGui::End();
-                return -1;
-            }
             ImGui::PushFont(g_ui.fontSmall);
             std::string line = std::to_string(convs.size()) + (convs.size() == 1 ? " conversion" : " conversions") +
                                " installed   -   Play as:  " + (pick ? narrow(pick->name) : std::string("the original game"));

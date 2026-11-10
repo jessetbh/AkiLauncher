@@ -159,7 +159,6 @@ PadFrame PadScriptPlayer::next() {
 
 CardOpen card_open(const CardKeys& k, int conversions) {
     if (k.keyM || k.padStart) return conversions > 0 ? CardOpen::ModsOnConversions : CardOpen::Mods;
-    if (k.keyV && conversions > 0) return CardOpen::ModsOnConversions;
     return CardOpen::None;
 }
 
@@ -176,7 +175,7 @@ std::string mods_hint_line(bool padInput, const std::string& title) {
 }
 
 std::string play_as_hint(bool padInput) {
-    return padInput ? "LB Changes It      Start Details" : "C Changes It (Shift+C Back)      V Details";  // #289 #295
+    return padInput ? "LB Changes It" : "C Changes It (Shift+C Back)";  // #289 #295 #297: M / Start is on the Manage line
 }
 
 }  // namespace convnav
