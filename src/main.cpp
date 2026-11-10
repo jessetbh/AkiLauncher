@@ -1990,7 +1990,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         };
         if (!g_ui.convs.empty()) {
             ImGui::PushFont(g_ui.fontBase);
-            if (ImGui::Selectable(pick ? convnav::kOriginalGame : (std::string(convnav::kOriginalGame) + "   (Play as)").c_str(), !pick, ImGuiSelectableFlags_AllowOverlap)) {
+            if (ImGui::Selectable((std::string(convnav::kOriginalGame) + (pick ? "" : "   (Play as)") + "###original").c_str(), !pick, ImGuiSelectableFlags_AllowOverlap)) {
                 set_play_as(g, std::string());
                 mods_note(L"Play on the card starts the original " + g.title, true);
             }
@@ -3376,7 +3376,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
                 text_centered_colored(palette::warn, narrow(pick->name) + " is made for another ROM than yours");
             if (pick && !pick->needsGame.empty())  // aki-roadmap#264: said before Play, not only after the cart goes in
                 text_centered_colored(palette::warn, narrow(pick->name) + " needs " + narrow(s.title) + ": Recompiled " +
-                                                         narrow(pick->needsGame) + " or newer: update the game, or play the original");
+                                                         narrow(pick->needsGame) + " or newer: update the game, or switch Play as to " + std::string(convnav::kOriginalGame));
             ImGui::PopFont();
         }
     }
