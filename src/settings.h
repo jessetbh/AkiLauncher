@@ -11,7 +11,8 @@ struct GameOverride {
     std::wstring exePath;
     std::wstring romPath;
     int forceBorderless = -1;
-    bool any() const { return !exePath.empty() || !romPath.empty() || forceBorderless != -1; }
+    std::wstring playAs;  // play_as: the conversion Play starts it as (aki-roadmap#154; "" = the original game)
+    bool any() const { return !exePath.empty() || !romPath.empty() || forceBorderless != -1 || !playAs.empty(); }
 };
 
 // Per-game play stats, keyed by GameEntry::artKey. Recorded on session end.
@@ -32,6 +33,14 @@ struct Settings {
     UINT hotkeyVk = VK_F12;
     bool windowed = false;                       // launcher in a normal window (F11)
     int winX = 0, winY = 0, winW = 0, winH = 0;  // last windowed placement (0x0 = unset)
+    bool devMode = false;  // dev_mode=1: developer actions (Rebuild game); not in the settings UI
+    std::wstring romScanDir;  // last folder the ROM scan looked in
+    bool portableGames = true;  // portable_games=0: a portable launcher leaves its games' data in AppData
+    // AKI Launcher's own updates (aki-roadmap#117)
+    bool updateChecks = true;      // update_checks=0: never look for launcher releases
+    std::wstring updateSkip;       // update_skip=<tag>: "Skip this version"
+    std::wstring updateEtag;       // update_etag: the release feed's ETag (If-None-Match)
+    int tourStop = 0;              // tour_stop: the History Tour's next stop (0-based; past the end = finished)
     std::map<std::wstring, GameOverride> overrides;
     std::map<std::wstring, GameStats> stats;
 };
@@ -41,7 +50,11 @@ Settings& settings();
 // dir when a portable.txt marker exists there (missing file = defaults).
 void settings_load();
 void settings_save();
+// Screenshot mode: settings_save does nothing from then on (the launcher runs, the config stays as it was).
+void settings_set_read_only(bool readOnly);
 std::filesystem::path settings_path();
+// The launcher itself runs portable (portable.txt in the cwd or next to the exe).
+bool launcher_portable();
 
 std::string chord_to_string(WORD mask);
 std::string hotkey_to_string(UINT mods, UINT vk);

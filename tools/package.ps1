@@ -6,6 +6,7 @@
 #
 # Layout inside the zip (flat, like the game zips):
 #   AkiLauncher.exe          self-contained (static CRT)
+#   assets\games.json        the game registry (aki-roadmap#24; edit to add or change games)
 #   assets\boxart\           box/cart art (shipped - owner decision 2026-07-16)
 #   assets\sounds\           optional replacement menu sounds
 #   COPYING README.txt
@@ -14,7 +15,11 @@
 
 param(
     [string]$Version = "dev",
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    # aki-roadmap#228: the ROM-hack converter (AkiMods tools/romhack, e.g. a checkout of its release branch). Staged as
+    # tools\romhack next to the exe, where the launcher's Import looks first. Python itself is not packaged: pyfetch.ps1
+    # downloads python.org's embeddable zip (sha256-pinned) the first time a ROM hack is imported.
+    [string]$ConverterTools = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,11 +38,20 @@ if (-not $SkipBuild) {
 
 $exe = Join-Path $build "AkiLauncher.exe"
 if (-not (Test-Path $exe)) { throw "missing $exe" }
+# Self-update (aki-roadmap#117) compares the exe's own ProductVersion with the release tag: a release whose exe
+# still reports the old version would offer itself as an update forever.
+if ($Version -ne "dev") {
+    $exeVersion = (Get-Item $exe).VersionInfo.ProductVersion
+    if ($exeVersion -ne $Version.TrimStart('v')) {
+        throw "AkiLauncher.exe says $exeVersion but the release is ${Version}: bump icons\app.rc (FILEVERSION, PRODUCTVERSION, FileVersion, ProductVersion) and rebuild"
+    }
+}
 
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory -Force "$stage\assets\boxart" | Out-Null
 
 Copy-Item $exe $stage
+Copy-Item (Join-Path $repo "assets\games.json") "$stage\assets"  # the game registry (aki-roadmap#24)
 Copy-Item (Join-Path $repo "assets\boxart\README.md") "$stage\assets\boxart"
 Copy-Item (Join-Path $repo "assets\boxart\*.png") "$stage\assets\boxart" -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $repo "assets\boxart\*.jpg") "$stage\assets\boxart" -ErrorAction SilentlyContinue
@@ -67,9 +81,12 @@ Controls
   Enter / A         play / download / select ROM
   F / X             flip the box art (front / back)
   U / RB            install an available update
-  S / Y             settings (rebind quick-back, per-game paths)
+  M / Start         the selected game's Mods page (import mods, hacks, packs)
+  C / LB            Play as: the original game or an installed conversion
+  S / Esc / Y       settings (rebind quick-back, ROM folder, per-game paths);
+                    Quit AKI Launcher is a button there, below ROM Folder
+  Esc / B           back (on a sub-page)
   F11 / Alt+Enter   windowed / fullscreen
-  Esc               quit
   In game           Shift+F12 or hold View+Menu ~0.6s to return here
 
 Notes
@@ -77,6 +94,16 @@ Notes
   - Custom menu sounds: assets\sounds\{nav,flip,launch}.wav.
   - Settings and play stats live in %LOCALAPPDATA%\AkiLauncher\settings.ini.
 "@ | Set-Content (Join-Path $stage "README.txt") -Encoding utf8
+
+if ($ConverterTools) {
+    if (-not (Test-Path (Join-Path $ConverterTools "aki_import.py"))) { throw "no aki_import.py in $ConverterTools" }
+    $conv = Join-Path $stage "tools\romhack"
+    New-Item -ItemType Directory -Force $conv | Out-Null
+    # Plain files (no packed exe: fewer antivirus false alarms); its tests and caches stay behind.
+    Get-ChildItem $ConverterTools -Force | Where-Object { $_.Name -notin @('tests', '__pycache__', '.pytest_cache') } |
+        Copy-Item -Destination $conv -Recurse -Force
+    Get-ChildItem $conv -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+}
 
 # Hard gate: no ROMs or ROM-derived data in a release, ever.
 $strays = Get-ChildItem $stage -Recurse -Include *.z64, *.n64, *.v64, *.rom, *.bin

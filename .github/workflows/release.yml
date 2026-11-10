@@ -21,9 +21,18 @@ jobs:
       - name: Build
         run: cmake --build build-msvc
 
+      # The ROM-hack converter (AkiMods tools/romhack) ships as tools\romhack next to the exe, where Import looks
+      # first. `ref` is the AkiMods tag this launcher release goes with: push that tag before the launcher's, bump it per release.
+      - name: Checkout AkiMods (converter)
+        uses: actions/checkout@v4
+        with:
+          repository: jessetbh/AkiMods
+          ref: v0.3.0
+          path: _akimods
+
       - name: Package
         shell: pwsh
-        run: .\tools\package.ps1 -Version ${{ github.ref_name }} -SkipBuild
+        run: .\tools\package.ps1 -Version ${{ github.ref_name }} -SkipBuild -ConverterTools _akimods\tools\romhack
 
       - name: Draft release
         uses: softprops/action-gh-release@v2

@@ -11,6 +11,13 @@
 static Settings g_settings;
 Settings& settings() { return g_settings; }
 
+bool launcher_portable() {
+    wchar_t buf[MAX_PATH]{};
+    GetEnvironmentVariableW(L"LOCALAPPDATA", buf, MAX_PATH);
+    std::filesystem::path appData = std::filesystem::path(buf) / L"AkiLauncher";
+    return settings_path().parent_path() != appData;
+}
+
 std::filesystem::path settings_path() {
     // Resolved once per session so adding/removing portable.txt mid-run
     // doesn't split the config across two locations.
@@ -86,11 +93,20 @@ void settings_load() {
             else if (key == "win_y") g_settings.winY = atoi(val.c_str());
             else if (key == "win_w") g_settings.winW = atoi(val.c_str());
             else if (key == "win_h") g_settings.winH = atoi(val.c_str());
+            else if (key == "dev_mode") g_settings.devMode = atoi(val.c_str()) != 0;
+            else if (key == "rom_scan_dir") g_settings.romScanDir = u8_to_w(val);
+            else if (key == "portable_games") g_settings.portableGames = atoi(val.c_str()) != 0;
+            else if (key == "update_checks") g_settings.updateChecks = atoi(val.c_str()) != 0;
+            // update_prerelease (0.2.x): ignored since aki-roadmap#292 (the channel follows the launcher's own build)
+            else if (key == "update_skip") g_settings.updateSkip = u8_to_w(val);
+            else if (key == "update_etag") g_settings.updateEtag = u8_to_w(val);
+            else if (key == "tour_stop") g_settings.tourStop = atoi(val.c_str()) > 0 ? atoi(val.c_str()) : 0;
         } else if (section.rfind("game:", 0) == 0) {
             GameOverride& o = g_settings.overrides[u8_to_w(section.substr(5))];
             if (key == "exe") o.exePath = u8_to_w(val);
             else if (key == "rom") o.romPath = u8_to_w(val);
             else if (key == "borderless") o.forceBorderless = atoi(val.c_str());
+            else if (key == "play_as") o.playAs = u8_to_w(val);
         } else if (section.rfind("stats:", 0) == 0) {
             GameStats& st = g_settings.stats[u8_to_w(section.substr(6))];
             if (key == "last_played") st.lastPlayedUnix = _atoi64(val.c_str());
@@ -103,7 +119,12 @@ void settings_load() {
     if (g_settings.hotkeyVk == 0) { g_settings.hotkeyMods = MOD_SHIFT; g_settings.hotkeyVk = VK_F12; }
 }
 
+static bool g_readOnly = false;
+
+void settings_set_read_only(bool readOnly) { g_readOnly = readOnly; }
+
 void settings_save() {
+    if (g_readOnly) return;
     std::error_code ec;
     std::filesystem::create_directories(settings_path().parent_path(), ec);
     std::ofstream f(settings_path(), std::ios::trunc | std::ios::binary);
@@ -119,12 +140,20 @@ void settings_save() {
         f << "win_w=" << g_settings.winW << "\n";
         f << "win_h=" << g_settings.winH << "\n";
     }
+    if (g_settings.devMode) f << "dev_mode=1\n";
+    if (!g_settings.portableGames) f << "portable_games=0\n";
+    if (!g_settings.updateChecks) f << "update_checks=0\n";
+    if (!g_settings.updateSkip.empty()) f << "update_skip=" << w_to_u8(g_settings.updateSkip) << "\n";
+    if (!g_settings.updateEtag.empty()) f << "update_etag=" << w_to_u8(g_settings.updateEtag) << "\n";
+    if (!g_settings.romScanDir.empty()) f << "rom_scan_dir=" << w_to_u8(g_settings.romScanDir) << "\n";
+    if (g_settings.tourStop > 0) f << "tour_stop=" << g_settings.tourStop << "\n";
     for (auto& [key, o] : g_settings.overrides) {
         if (!o.any()) continue;
         f << "[game:" << w_to_u8(key) << "]\n";
         if (!o.exePath.empty()) f << "exe=" << w_to_u8(o.exePath) << "\n";
         if (!o.romPath.empty()) f << "rom=" << w_to_u8(o.romPath) << "\n";
         if (o.forceBorderless != -1) f << "borderless=" << o.forceBorderless << "\n";
+        if (!o.playAs.empty()) f << "play_as=" << w_to_u8(o.playAs) << "\n";
     }
     for (auto& [key, st] : g_settings.stats) {
         if (st.lastPlayedUnix == 0 && st.playSeconds == 0 && st.playCount == 0) continue;

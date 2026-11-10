@@ -1,0 +1,754 @@
+#include "importer.h"
+
+#include "json.h"
+#include "texpacks.h"
+
+#include <windows.h>
+
+#include <algorithm>
+#include <cwctype>
+#include <fstream>
+#include <map>
+#include <set>
+
+namespace fs = std::filesystem;
+
+static std::wstring lower(std::wstring s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](wchar_t c) { return (wchar_t)towlower(c); });
+    return s;
+}
+
+static std::string u8(const std::wstring& w) {
+    if (w.empty()) return {};
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string s(n > 0 ? n : 0, 0);
+    if (n > 0) WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+const wchar_t* import_outcome_word(ImportOutcome o) {
+    switch (o) {
+    case ImportOutcome::Waiting: return L"Waiting";
+    case ImportOutcome::Working: return L"Working";
+    case ImportOutcome::Converted: return L"Converted";
+    case ImportOutcome::Installed: return L"Installed";
+    case ImportOutcome::HaveIt: return L"Have it";
+    case ImportOutcome::Stock: return L"Stock game";
+    case ImportOutcome::NeedsRom: return L"Needs ROM";
+    case ImportOutcome::NeedsGame: return L"Needs game";
+    case ImportOutcome::Unsupported: return L"Unsupported";
+    case ImportOutcome::Failed: return L"Failed";
+    case ImportOutcome::Stopped: return L"Stopped";
+    }
+    return L"?";
+}
+
+bool import_outcome_final(ImportOutcome o) { return o != ImportOutcome::Waiting && o != ImportOutcome::Working; }
+
+ImportCounts count_import(const std::vector<ImportLine>& lines) {
+    ImportCounts c;
+    for (const auto& l : lines) {
+        ++c.total;
+        switch (l.outcome) {
+        case ImportOutcome::Waiting: ++c.waiting; break;
+        case ImportOutcome::Working: ++c.working; break;
+        case ImportOutcome::Converted:
+            ++c.converted;
+            if (l.kind == L"texture pack") ++c.texturePacks;
+            else ++c.conversions;
+            break;
+        case ImportOutcome::Installed:
+            ++c.installed;
+            if (l.kind == L"texture pack") ++c.texturePacks;
+            break;
+        case ImportOutcome::HaveIt: ++c.haveIt; break;
+        case ImportOutcome::Stock: ++c.stock; break;
+        case ImportOutcome::NeedsRom: ++c.needsRom; break;
+        case ImportOutcome::NeedsGame: ++c.needsGame; break;
+        case ImportOutcome::Unsupported: ++c.unsupported; break;
+        case ImportOutcome::Failed: ++c.failed; break;
+        case ImportOutcome::Stopped: ++c.stopped; break;
+        }
+        if (l.untested && (l.outcome == ImportOutcome::Converted)) ++c.untested;
+    }
+    return c;
+}
+
+static void part(std::wstring& s, int n, const wchar_t* one, const wchar_t* many) {
+    if (n <= 0) return;
+    if (!s.empty()) s += L", ";
+    s += std::to_wstring(n) + L" " + (n == 1 ? one : many);
+}
+
+std::wstring import_summary(const ImportCounts& c) {
+    std::wstring s;
+    if (c.converted) {
+        s = std::to_wstring(c.converted) + L" converted";
+        std::wstring kinds;
+        part(kinds, c.conversions, L"conversion", L"conversions");
+        int convTex = c.converted - c.conversions;
+        part(kinds, convTex, L"texture pack", L"texture packs");
+        if (!kinds.empty()) s += L" (" + kinds + L")";
+    }
+    part(s, c.installed, L"installed", L"installed");
+    part(s, c.haveIt, L"you had already", L"you had already");
+    part(s, c.stock, L"stock game (nothing to do)", L"stock games (nothing to do)");
+    part(s, c.needsRom, L"needs a ROM", L"need a ROM");
+    part(s, c.needsGame, L"needs a game picked", L"need a game picked");
+    part(s, c.unsupported, L"unsupported", L"unsupported");
+    part(s, c.failed, L"failed", L"failed");
+    part(s, c.stopped, L"stopped", L"stopped");
+    if (s.empty()) s = L"Nothing to import";
+    s += L". Your originals weren't changed.";
+    if (c.untested) s += L" " + std::to_wstring(c.untested) + L" Untested.";
+    return s;
+}
+
+std::wstring import_progress(const ImportCounts& c) {
+    int done = c.total - c.waiting - c.working;
+    return std::to_wstring(done) + L" done | " + std::to_wstring(c.working) + L" working | " + std::to_wstring(c.waiting) +
+           L" waiting";
+}
+
+// --- worker lines ---------------------------------------------------------------------------------------------------
+
+static const struct {
+    const wchar_t* key;
+    const wchar_t* modId;
+} kGameIds[] = {{L"wt", L"wcwnwoworldtour"}, {L"revenge", L"wcwnworevenge"}, {L"wm2k", L"wwfwm2k"},
+                {L"vpw64", L"vpw64"},        {L"nomercy", L"wwfnomercy"},    {L"vpw2", L"vpw2"}};
+
+std::wstring engine_game_mod_id(const std::wstring& key) {
+    for (const auto& g : kGameIds)
+        if (key == g.key) return g.modId;
+    return {};
+}
+
+std::wstring engine_game_key(const std::wstring& modGameId) {
+    for (const auto& g : kGameIds)
+        if (modGameId == g.modId) return g.key;
+    return {};
+}
+
+static std::wstring kind_word(const std::wstring& k) {
+    if (k == L"rom") return L"ROM hack";
+    if (k == L"patch") return L"patch";
+    if (k == L"pj64-bundle") return L"Project64 bundle";
+    if (k == L"texture-pack") return L"texture pack";
+    if (k == L"nrm") return L"mod";
+    return k;
+}
+
+static std::wstring tier_word(const std::wstring& t) {
+    if (t == L"verified") return L"Verified";
+    if (t == L"experimental") return L"Experimental";
+    if (t == L"unsupported") return L"Unsupported";
+    if (t == L"untested") return L"Untested";
+    return t;
+}
+
+WorkerEvent parse_worker_line(const std::string& text) {
+    WorkerEvent ev;
+    JsonValue j;
+    if (!json_parse(text, &j) || !j.is(JsonValue::Type::Object)) return ev;
+    std::wstring event = j.wstr("event");
+    if (event == L"done") {
+        ev.type = WorkerEvent::Type::Done;
+        if (const JsonValue* c = j.get("counts"); c && c->is(JsonValue::Type::Object))
+            for (size_t i = 0; i < c->keys.size(); ++i)
+                if (c->items[i].is(JsonValue::Type::Number)) ev.counts[c->keys[i]] = (int)c->items[i].n;
+        if (const JsonValue* e = j.get("engine"); e && e->is(JsonValue::Type::String)) ev.engine = e->s;
+        return ev;
+    }
+    if (event != L"item") return ev;
+    ev.type = WorkerEvent::Type::Item;
+    ImportLine& l = ev.line;
+    l.viaWorker = true;
+    l.item = j.wstr("item");
+    std::wstring status = j.wstr("status"), why = j.wstr("why"), kind = j.wstr("kind");
+    l.gameKey = j.wstr("game");
+    l.kind = kind_word(kind);
+    l.name = j.wstr("name");
+    if (l.name.empty()) {
+        std::wstring leaf = l.item.substr(l.item.find_last_of(L"!\\/") == std::wstring::npos ? 0 : l.item.find_last_of(L"!\\/") + 1);
+        l.name = leaf.empty() ? l.item : leaf;
+    }
+    std::wstring tier = j.wstr("aki_tier");
+    if (tier.empty() && status == L"ready") tier = j.wstr("tier");
+    l.tier = tier_word(tier);
+    l.untested = tier == L"untested";
+    l.needs = j.wstr("needs");
+    if (const JsonValue* p = j.get("package"); p && p->is(JsonValue::Type::String)) l.packages.push_back(json_utf8_to_wide(p->s));
+    if (const JsonValue* ps = j.get("packages"); ps && ps->is(JsonValue::Type::Array))
+        for (const auto& v : ps->items)
+            if (v.is(JsonValue::Type::String)) {
+                fs::path pp = json_utf8_to_wide(v.s);
+                if (std::find(l.packages.begin(), l.packages.end(), pp) == l.packages.end()) l.packages.push_back(pp);
+            }
+    if (status == L"converted") {
+        l.outcome = ImportOutcome::Converted;
+        if (kind == L"rom" || kind == L"patch" || kind == L"pj64-bundle") l.kind = L"conversion";
+        std::wstring conv = j.wstr("converter");
+        if (l.kind == L"texture pack") {
+            int images = j.integer("images", 0);
+            l.detail = images ? std::to_wstring(images) + L" textures" : L"texture pack";
+        } else {
+            l.detail = conv.empty() ? L"built" : L"built with " + conv;
+            if (l.untested) l.detail += L"; Untested: it may crash or look wrong";
+        }
+        std::wstring note = j.wstr("note");
+        if (!note.empty()) l.detail += L" (" + note + L")";
+    } else if (status == L"stock") {
+        l.outcome = ImportOutcome::Stock;
+        l.detail = why.empty() ? L"this is the stock game: nothing to convert" : why;
+        // The same hint a loose stock ROM gets (aki-roadmap#271): one inside a folder or zip said only "nothing to convert".
+        // Only for the port's own dump ("the stock <game> ROM: nothing to convert"): another stock ROM (No Mercy 1.0, a
+        // base for patches) isn't one the card takes.
+        const bool portDump = why.empty() || (why.rfind(L"the stock ", 0) == 0 && why != L"the stock ROM: nothing to convert" &&
+                                              why.find(L"base for patches") == std::wstring::npos);
+        if (portDump && l.detail.find(L"on its card") == std::wstring::npos) {
+            while (!l.detail.empty() && l.detail.back() == L'.') l.detail.pop_back();
+            l.detail += L". Set it as the game's ROM on its card if it needs one.";
+        }
+    } else if (status == L"have-it") {
+        l.outcome = ImportOutcome::HaveIt;
+        l.detail = why.empty() ? L"imported before: skipped" : why;
+        l.reinstall = std::move(l.packages);  // an earlier import's packages, not this batch's (aki-roadmap#272)
+        l.packages.clear();
+    } else if (status == L"needs-rom") {
+        l.outcome = ImportOutcome::NeedsRom;
+        l.detail = l.needs.empty() ? (why.empty() ? L"needs its stock ROM" : why) : L"needs " + l.needs;
+        // The converter's reason too (aki-roadmap#271): "needs the ROM it was made for" alone hid which ROMs it tried.
+        // Not when it only repeats the need, nor the converter's own wording for "no ROMs given" (roms / rom_dirs).
+        if (!l.needs.empty() && !why.empty() && why.find(l.needs) == std::wstring::npos &&
+            why.rfind(L"no stock ROMs were given", 0) != 0)
+            l.detail += L" (" + why + L")";
+    } else if (status == L"needs-game") {
+        l.outcome = ImportOutcome::NeedsGame;
+        l.detail = why.empty() ? L"doesn't say which game it is for" : why;
+    } else if (status == L"unsupported") {
+        l.outcome = ImportOutcome::Unsupported;
+        l.detail = why;
+    } else if (status == L"ready" && l.item.find(L'!') == std::wstring::npos) {
+        // The worker leaves mods (.nrm) and packages to the launcher: a file on disk (in a picked folder) is
+        // installed from its path.
+        l.outcome = ImportOutcome::Waiting;
+        l.installAsIs = true;
+        l.detail = L"installing";
+    } else if (status == L"ready") {
+        // ... but one inside an archive can't be installed by path.
+        l.outcome = ImportOutcome::Unsupported;
+        l.detail = L"a " + (l.kind.empty() ? std::wstring(L"mod") : l.kind) +
+                   L" inside an archive: unzip it and import that file on its own";
+    } else {
+        l.outcome = ImportOutcome::Failed;
+        l.detail = why.empty() ? L"failed (no reason given)" : why;
+    }
+    l.log = json_utf8_to_wide(text);
+    if (!why.empty()) l.log = why + L"\n\n" + l.log;
+    return ev;
+}
+
+static void put(JsonValue& o, const char* k, JsonValue v) {
+    o.keys.push_back(k);
+    o.items.push_back(std::move(v));
+}
+
+std::string worker_job_json(const WorkerJob& job) {
+    JsonValue o;
+    o.type = JsonValue::Type::Object;
+    JsonValue paths;
+    paths.type = JsonValue::Type::Array;
+    for (const auto& p : job.paths) paths.items.push_back(json_string(u8(p.wstring())));
+    put(o, "paths", paths);
+    JsonValue roms;
+    roms.type = JsonValue::Type::Object;
+    for (const auto& [k, p] : job.roms) put(roms, u8(k).c_str(), json_string(u8(p.wstring())));
+    put(o, "roms", roms);
+    JsonValue dirs;
+    dirs.type = JsonValue::Type::Array;
+    for (const auto& d : job.romDirs) dirs.items.push_back(json_string(u8(d.wstring())));
+    put(o, "rom_dirs", dirs);
+    if (!job.ledger.empty()) put(o, "ledger", json_string(u8(job.ledger.wstring())));
+    if (!job.out.empty()) put(o, "out", json_string(u8(job.out.wstring())));
+    if (!job.work.empty()) put(o, "work", json_string(u8(job.work.wstring())));
+    if (!job.catalog.empty()) put(o, "catalog", json_string(u8(job.catalog.wstring())));
+    if (!job.sevenzip.empty()) put(o, "sevenzip", json_string(u8(job.sevenzip.wstring())));
+    if (!job.game.empty()) put(o, "game", json_string(u8(job.game)));
+    put(o, "build", json_bool(job.build));
+    return json_write(o, true);
+}
+
+// --- sources --------------------------------------------------------------------------------------------------------
+
+fs::path import_source_of(const std::wstring& label, const std::vector<fs::path>& inputs) {
+    std::wstring path = label.substr(0, label.find(L'!'));
+    std::wstring lp = lower(fs::path(path).lexically_normal().wstring());
+    fs::path best;
+    size_t bestLen = 0;
+    for (const auto& in : inputs) {
+        std::wstring li = lower(in.lexically_normal().wstring());
+        while (li.size() > 3 && (li.back() == L'\\' || li.back() == L'/')) li.pop_back();
+        bool owns = lp == li || (lp.size() > li.size() && lp.compare(0, li.size(), li) == 0 &&
+                                 (lp[li.size()] == L'\\' || lp[li.size()] == L'/'));
+        if (owns && li.size() > bestLen) {
+            best = in;
+            bestLen = li.size();
+        }
+    }
+    return best;
+}
+
+// --- the Import folder ----------------------------------------------------------------------------------------------
+
+std::vector<fs::path> import_folder_items(const fs::path& importDir) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    for (fs::directory_iterator it(importDir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::wstring leaf = it->path().filename().wstring();
+        if (leaf.empty() || leaf[0] == L'.') continue;
+        std::wstring low = lower(leaf);
+        if (low == lower(kImportedFolder) || low == lower(kNeedsAttentionFolder)) continue;
+        if (low == L"desktop.ini" || low == L"thumbs.db" || low == L"readme.txt") continue;
+        DWORD attrs = GetFileAttributesW(it->path().c_str());
+        if (attrs != INVALID_FILE_ATTRIBUTES && (attrs & (FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM))) continue;
+        out.push_back(it->path());
+    }
+    std::sort(out.begin(), out.end(), [](const fs::path& a, const fs::path& b) {
+        return lower(a.filename().wstring()) < lower(b.filename().wstring());
+    });
+    return out;
+}
+
+// --- picked folders (aki-roadmap#290) -------------------------------------------------------------------------------
+
+static bool is_rom_ext(const std::wstring& ext) { return ext == L".z64" || ext == L".n64" || ext == L".v64"; }
+
+// A file that is an import item of its own (not a texture image, a save, text or the like).
+static bool is_item_file(const fs::path& p) {
+    std::wstring e = lower(p.extension().wstring());
+    static const wchar_t* kExts[] = {L".z64", L".n64", L".v64", L".zip", L".7z", L".rar", L".ips", L".bps", L".ups",
+                                     L".xdelta", L".vcdiff", L".aps", L".ppf", L".nrm", L".rtz", L".akimodel"};
+    for (const wchar_t* k : kExts)
+        if (e == k) return true;
+    return false;
+}
+
+static bool is_image_file(const fs::path& p) {
+    std::wstring e = lower(p.extension().wstring());
+    return e == L".png" || e == L".dds" || e == L".bmp";
+}
+
+static bool is_link(const fs::path& p) {
+    DWORD a = GetFileAttributesW(p.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
+static bool is_pj64_marker(const std::wstring& leafLower) {
+    return leafLower == L"project64.exe" || leafLower == L"project64.cht" || leafLower == L"project64.cfg" ||
+           leafLower == L"project64.rdb";
+}
+
+bool import_folder_holds_pj64_bundle(const fs::path& dir) {
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        if (it.depth() > 3) { it.disable_recursion_pending(); continue; }  // a bundle's markers sit near its top
+        std::error_code fec;
+        if (it->is_regular_file(fec) && is_pj64_marker(lower(it->path().filename().wstring()))) return true;
+    }
+    return false;
+}
+
+bool import_folder_holds_rom(const fs::path& dir) {
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end;
+         it.increment(ec)) {
+        std::error_code fec;
+        if (it->is_regular_file(fec) && is_rom_ext(lower(it->path().extension().wstring()))) return true;
+    }
+    return false;
+}
+
+// A texture's key: a Rice name without its game name and format suffix ("#CRC#fmt#size[#pal]"), a Jabo name's hash.
+static std::wstring texture_key(const std::wstring& leaf) {
+    size_t h = leaf.find(L'#');
+    std::wstring k;
+    if (h != std::wstring::npos) {
+        k = leaf.substr(h);
+        size_t u = k.rfind(L'_');
+        k = u != std::wstring::npos ? k.substr(0, u) : fs::path(k).stem().wstring();
+    } else {
+        k = fs::path(leaf).stem().wstring();
+    }
+    return lower(k);
+}
+
+namespace {
+enum class FolderKind { One, Pack, Collection };
+
+// What a folder is, built from its children (each folder walked once).
+struct FolderInfo {
+    FolderKind kind = FolderKind::One;
+    bool markedItem = false;          // One because of a marker (not just "nothing importable here")
+    std::set<std::wstring> keys;      // its textures' keys (texture_key), for telling packs apart
+    std::set<std::wstring> games;     // its Rice names' games (rice_name_game), else the raw name (VPW's Shift-JIS)
+};
+
+// Two packs side by side are separate when they replace the same textures (a real share, not one stray texture two
+// attire folders of one pack have in common) or belong to different games.
+constexpr size_t kPackShareMin = 32;
+
+static bool separate_packs(const FolderInfo& a, const FolderInfo& b) {
+    if (!a.games.empty() && !b.games.empty()) {
+        bool common = false;
+        for (const auto& g : a.games) common = common || b.games.count(g) > 0;
+        if (!common) return true;
+    }
+    const auto& small_ = a.keys.size() <= b.keys.size() ? a.keys : b.keys;
+    const auto& big_ = a.keys.size() <= b.keys.size() ? b.keys : a.keys;
+    size_t both = 0;
+    for (const auto& k : small_) both += big_.count(k);
+    return both >= kPackShareMin && both * 20 >= small_.size();
+}
+
+struct FolderClassifier {
+    std::map<fs::path, FolderInfo> memo;
+
+    // Entries at dir's top, as the Import folder lists them (hidden, Thumbs.db, ... skipped), links left out.
+    static std::vector<fs::path> entries(const fs::path& dir) {
+        std::vector<fs::path> v;
+        for (const auto& e : import_folder_items(dir))
+            if (!is_link(e)) v.push_back(e);
+        return v;
+    }
+
+    static bool has_pj64_markers(const fs::path& dir) {
+        std::error_code ec;
+        for (const auto& e : entries(dir)) {
+            std::wstring leaf = lower(e.filename().wstring());
+            if (!fs::is_directory(e, ec) && is_pj64_marker(leaf)) return true;
+            if (leaf == L"config" && fs::is_directory(e, ec))
+                for (const auto& c : entries(e))
+                    if (is_pj64_marker(lower(c.filename().wstring()))) return true;
+        }
+        return false;
+    }
+
+    // One item by what sits at its top: a mod, an rt64 texture pack, a conversion source, a package, a model pack, a
+    // Project64 bundle (Project64.exe, or Config\Project64.*, here or in a "Project64..." folder right inside it) or a
+    // Project64 user-folder export ("Project64 - Save", "Project64 - Plugin - GFX - GLideN64 - Cache", .hts/.htc).
+    static bool marked(const fs::path& dir) {
+        std::error_code ec;
+        for (const wchar_t* m : {L"mod.json", L"rt64.json", L"aki.json", L"aki-package.json", L"model.bin"})
+            if (fs::is_regular_file(dir / m, ec)) return true;
+        if (has_pj64_markers(dir)) return true;
+        for (const auto& e : entries(dir)) {
+            std::wstring leaf = lower(e.filename().wstring());
+            if (fs::is_directory(e, ec)) {
+                if (leaf.rfind(L"project64 - ", 0) == 0) return true;                        // its user folders
+                if (leaf.rfind(L"project64", 0) == 0 && has_pj64_markers(e)) return true;  // the emulator beside
+            } else {
+                std::wstring ext = lower(e.extension().wstring());
+                if (ext == L".hts" || ext == L".htc") return true;
+            }
+        }
+        return false;
+    }
+
+    // A folder of model packs (subfolders with model.bin) whose only loose items are their -hd.rtz files: one item,
+    // install_model_packs_from takes the lot.
+    static bool model_pack_folder(const fs::path& dir) {
+        std::error_code ec;
+        bool packs = false;
+        for (const auto& e : entries(dir)) {
+            if (fs::is_directory(e, ec)) {
+                if (fs::is_regular_file(e / L"model.bin", ec)) packs = true;
+            } else if (is_item_file(e) && lower(e.extension().wstring()) != L".rtz") {
+                return false;
+            }
+        }
+        return packs;
+    }
+
+    const FolderInfo& classify(const fs::path& dir, int depth) {
+        auto hit = memo.find(dir);
+        if (hit != memo.end()) return hit->second;
+        FolderInfo info = classify_uncached(dir, depth);
+        return memo.emplace(dir, std::move(info)).first->second;
+    }
+
+    FolderInfo classify_uncached(const fs::path& dir, int depth) {
+        FolderInfo info;
+        std::error_code ec;
+        if (marked(dir) || model_pack_folder(dir)) {
+            info.markedItem = true;
+            return info;
+        }
+        bool topItems = false, topArchivesOnly = true, topSmallArchives = true, topTextures = false;
+        std::vector<fs::path> subs;
+        for (const auto& e : entries(dir)) {
+            if (fs::is_directory(e, ec)) {
+                subs.push_back(e);
+            } else if (is_item_file(e)) {
+                topItems = true;
+                std::wstring x = lower(e.extension().wstring());
+                if (x != L".zip" && x != L".7z" && x != L".rar") topArchivesOnly = false;  // a ROM, patch or mod
+                std::error_code sec;
+                if (fs::file_size(e, sec) >= (1u << 20) || sec) topSmallArchives = false;     // readmes are KBs, hacks MBs
+            } else if (is_image_file(e)) {
+                std::wstring leaf = e.filename().wstring(), riceName;
+                TexNaming n = texture_name_kind(leaf, &riceName);
+                if (n == TexNaming::Rice || n == TexNaming::Jabo) {  // the textures' own names, not any .png
+                    topTextures = true;
+                    info.keys.insert(texture_key(leaf));
+                    if (n == TexNaming::Rice) {
+                        std::wstring g = rice_name_game(riceName);
+                        if (g.empty() && !riceName.empty()) g = L"raw:" + lower(riceName);  // a VPW (Shift-JIS) or hack name
+                        if (!g.empty()) info.games.insert(g);
+                    }
+                }
+            }
+        }
+        std::vector<const FolderInfo*> packs;
+        bool childCollection = false;
+        if (depth < 8) {
+            for (const auto& sdir : subs) {
+                const FolderInfo& c = classify(sdir, depth + 1);
+                if (c.kind == FolderKind::Collection || c.markedItem) childCollection = true;
+                if (c.kind == FolderKind::Pack) packs.push_back(&c);
+                info.keys.insert(c.keys.begin(), c.keys.end());
+                info.games.insert(c.games.begin(), c.games.end());
+            }
+        }
+        bool separate = false;
+        for (size_t i = 0; i < packs.size() && !separate; ++i)
+            for (size_t j = i + 1; j < packs.size() && !separate; ++j) separate = separate_packs(*packs[i], *packs[j]);
+        bool packLike = topTextures || !packs.empty();
+        if (childCollection || separate) {
+            info.kind = FolderKind::Collection;
+        } else if (topItems) {
+            // A readme or extras archive inside a pack rides along with it: beside the pack's own textures, or (small,
+            // under 1 MB) beside its parts. Anything else beside packs (a ROM, a patch, a mod, a hack zip) is a collection.
+            info.kind = topArchivesOnly && (topTextures || (packs.size() >= 2 && topSmallArchives)) ? FolderKind::Pack
+                                                                                                    : FolderKind::Collection;
+        } else {
+            info.kind = packLike ? FolderKind::Pack : FolderKind::One;
+        }
+        if (info.kind == FolderKind::Collection) {  // a collection's textures aren't one pack's: don't pass them up
+            info.keys.clear();
+            info.games.clear();
+        }
+        return info;
+    }
+
+    void expand(const fs::path& dir, int depth, std::vector<fs::path>* out) {
+        if (classify(dir, depth).kind != FolderKind::Collection) {
+            out->push_back(dir);
+            return;
+        }
+        std::error_code ec;
+        for (const auto& e : entries(dir)) {
+            if (fs::is_directory(e, ec)) {
+                const FolderInfo& c = classify(e, depth + 1);
+                if (c.kind == FolderKind::One && !c.markedItem) continue;  // nothing importable in it (plugins, docs)
+                expand(e, depth + 1, out);
+            } else if (is_item_file(e)) {
+                out->push_back(e);  // loose readmes, images, saves, exes: not items of their own
+            }
+        }
+    }
+};
+}  // namespace
+
+std::vector<fs::path> import_expand_folder(const fs::path& dir) {
+    std::error_code ec;
+    if (!fs::is_directory(dir, ec)) return {dir};
+    FolderClassifier fc;
+    std::vector<fs::path> out;
+    fc.expand(dir, 0, &out);
+    return out;
+}
+
+ImportPlace import_place_for(const std::vector<ImportOutcome>& outcomes) {
+    if (outcomes.empty()) return ImportPlace::Stay;
+    bool bad = false;
+    for (ImportOutcome o : outcomes) {
+        switch (o) {
+        case ImportOutcome::Waiting:
+        case ImportOutcome::Working:
+        case ImportOutcome::Stopped:
+        case ImportOutcome::NeedsRom:
+        case ImportOutcome::NeedsGame: return ImportPlace::Stay;
+        case ImportOutcome::Unsupported:
+        case ImportOutcome::Failed: bad = true; break;
+        default: break;
+        }
+    }
+    return bad ? ImportPlace::NeedsAttention : ImportPlace::Imported;
+}
+
+fs::path import_free_name(const fs::path& dir, const fs::path& leaf) {
+    std::error_code ec;
+    fs::path p = dir / leaf;
+    if (!fs::exists(p, ec)) return p;
+    std::wstring stem = leaf.stem().wstring(), ext = leaf.extension().wstring();
+    for (int n = 2; n < 10000; ++n) {
+        p = dir / (stem + L" (" + std::to_wstring(n) + L")" + ext);
+        if (!fs::exists(p, ec)) return p;
+    }
+    return dir / (stem + L" (more)" + ext);
+}
+
+std::string import_reason_text(const std::vector<const ImportLine*>& lines) {
+    std::wstring s = L"AKI Launcher could not import this:\r\n\r\n";
+    for (const ImportLine* l : lines) {
+        if (l->outcome != ImportOutcome::Unsupported && l->outcome != ImportOutcome::Failed) continue;
+        s += std::wstring(import_outcome_word(l->outcome)) + L": " + l->item + L"\r\n    " + l->detail + L"\r\n";
+    }
+    s += L"\r\nMove it back into the Import folder to try again (for example after a launcher update).\r\n";
+    return u8(s);
+}
+
+// --- ledger ---------------------------------------------------------------------------------------------------------
+
+static std::string read_all(const fs::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+
+bool ledger_remove(const fs::path& ledger, const std::vector<std::string>& keys, std::wstring* errorOut) {
+    std::error_code ec;
+    if (!fs::exists(ledger, ec)) return true;
+    JsonValue j;
+    if (!json_parse(read_all(ledger), &j) || !j.is(JsonValue::Type::Object)) {
+        if (errorOut) *errorOut = L"the import ledger isn't valid JSON: " + ledger.wstring();
+        return false;
+    }
+    std::set<std::string> drop(keys.begin(), keys.end());
+    for (size_t i = 0; i < j.keys.size(); ++i) {
+        if (j.keys[i] != "entries" || !j.items[i].is(JsonValue::Type::Object)) continue;
+        JsonValue& e = j.items[i];
+        JsonValue kept;
+        kept.type = JsonValue::Type::Object;
+        for (size_t k = 0; k < e.keys.size(); ++k)
+            if (!drop.count(e.keys[k])) {
+                kept.keys.push_back(e.keys[k]);
+                kept.items.push_back(e.items[k]);
+            }
+        e = std::move(kept);
+    }
+    fs::path tmp = ledger;
+    tmp += L".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        f << json_write(j);
+        if (!f) {
+            if (errorOut) *errorOut = L"can't write " + tmp.wstring();
+            return false;
+        }
+    }
+    if (!MoveFileExW(tmp.c_str(), ledger.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        fs::remove(tmp, ec);
+        if (errorOut) *errorOut = L"can't replace " + ledger.wstring();
+        return false;
+    }
+    return true;
+}
+
+std::vector<std::string> ledger_keys_for_packages(const fs::path& ledger, const std::vector<fs::path>& packages) {
+    std::vector<std::string> out;
+    JsonValue j;
+    if (!json_parse(read_all(ledger), &j) || !j.is(JsonValue::Type::Object)) return out;
+    const JsonValue* e = j.get("entries");
+    if (!e || !e->is(JsonValue::Type::Object)) return out;
+    std::set<std::wstring> want;
+    for (const auto& p : packages) want.insert(lower(p.lexically_normal().wstring()));
+    for (size_t k = 0; k < e->keys.size(); ++k) {
+        const JsonValue& v = e->items[k];
+        if (!v.is(JsonValue::Type::Object)) continue;
+        bool hit = false;
+        if (const JsonValue* p = v.get("package"); p && p->is(JsonValue::Type::String))
+            hit = want.count(lower(fs::path(json_utf8_to_wide(p->s)).lexically_normal().wstring())) > 0;
+        if (const JsonValue* ps = v.get("packages"); !hit && ps && ps->is(JsonValue::Type::Array))
+            for (const auto& x : ps->items)
+                if (x.is(JsonValue::Type::String) &&
+                    want.count(lower(fs::path(json_utf8_to_wide(x.s)).lexically_normal().wstring())))
+                    hit = true;
+        if (hit) out.push_back(e->keys[k]);
+    }
+    return out;
+}
+
+// --- results file ---------------------------------------------------------------------------------------------------
+
+std::string import_lines_json(const std::vector<ImportLine>& lines, const std::wstring& status) {
+    JsonValue root;
+    root.type = JsonValue::Type::Object;
+    put(root, "format", json_string("aki-import-results"));
+    put(root, "status", json_string(u8(status)));
+    JsonValue arr;
+    arr.type = JsonValue::Type::Array;
+    for (const auto& l : lines) {
+        JsonValue o;
+        o.type = JsonValue::Type::Object;
+        put(o, "item", json_string(u8(l.item)));
+        put(o, "source", json_string(u8(l.source.wstring())));
+        put(o, "outcome", json_number((double)(int)l.outcome));
+        put(o, "name", json_string(u8(l.name)));
+        put(o, "game", json_string(u8(l.gameKey)));
+        put(o, "kind", json_string(u8(l.kind)));
+        put(o, "tier", json_string(u8(l.tier)));
+        put(o, "untested", json_bool(l.untested));
+        put(o, "detail", json_string(u8(l.detail)));
+        put(o, "needs", json_string(u8(l.needs)));
+        put(o, "log", json_string(u8(l.log)));
+        JsonValue pk;
+        pk.type = JsonValue::Type::Array;
+        for (const auto& p : l.packages) pk.items.push_back(json_string(u8(p.wstring())));
+        put(o, "packages", pk);
+        arr.items.push_back(std::move(o));
+    }
+    put(root, "lines", arr);
+    return json_write(root);
+}
+
+bool import_lines_from_json(const std::string& text, std::vector<ImportLine>* lines, std::wstring* status) {
+    JsonValue j;
+    if (!json_parse(text, &j) || !j.is(JsonValue::Type::Object) || j.wstr("format") != L"aki-import-results") return false;
+    if (status) *status = j.wstr("status");
+    lines->clear();
+    const JsonValue* arr = j.get("lines");
+    if (!arr || !arr->is(JsonValue::Type::Array)) return false;
+    for (const auto& o : arr->items) {
+        if (!o.is(JsonValue::Type::Object)) continue;
+        ImportLine l;
+        l.item = o.wstr("item");
+        l.source = o.wstr("source");
+        int oc = o.integer("outcome", (int)ImportOutcome::Failed);
+        if (oc < 0 || oc > (int)ImportOutcome::Stopped) oc = (int)ImportOutcome::Failed;
+        l.outcome = (ImportOutcome)oc;
+        l.name = o.wstr("name");
+        l.gameKey = o.wstr("game");
+        l.kind = o.wstr("kind");
+        l.tier = o.wstr("tier");
+        l.untested = o.boolean("untested", false);
+        l.detail = o.wstr("detail");
+        l.needs = o.wstr("needs");
+        l.log = o.wstr("log");
+        if (const JsonValue* pk = o.get("packages"); pk && pk->is(JsonValue::Type::Array))
+            for (const auto& p : pk->items)
+                if (p.is(JsonValue::Type::String)) l.packages.push_back(json_utf8_to_wide(p.s));
+        lines->push_back(std::move(l));
+    }
+    return true;
+}
+
+ImportRomRoute import_rom_route(bool baseDump, bool otherBuild, bool otherRegion, bool unreadable) {
+    if (baseDump) return ImportRomRoute::Stock;
+    if (otherRegion) return ImportRomRoute::Unsupported;
+    if (unreadable) return ImportRomRoute::Failed;
+    (void)otherBuild;  // a hack of one of the six, or an unknown code: the converter decides either way
+    return ImportRomRoute::Converter;
+}
