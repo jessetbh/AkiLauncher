@@ -204,6 +204,25 @@ static void test_worker_lines() {
     CHECK(e.line.outcome == ImportOutcome::Unsupported && e.line.detail == L"PAL version");
     e = parse_worker_line(R"({"event":"item","item":"x","status":"failed","why":"derelink: cannot resolve symbol"})");
     CHECK(e.line.outcome == ImportOutcome::Failed && contains(e.line.log, L"cannot resolve symbol"));
+    // 0.3.1: the [Log] text is sentences only; the JSON event is kept apart (raw) for the collapsed bug-report details.
+    CHECK(!contains(e.line.log, L"{") && contains(e.line.raw, L"\"status\":\"failed\""));
+    e = parse_worker_line(R"J({"event":"item","item":"C:\\dl\\dx.zip!Emulator_over64MB.xdelta","status":"have-it","kind":"patch","game":"vpw2","name":"VPW64 Deluxe","alternative_of":"C:\\dl\\dx.zip!Summercart.xdelta","why":"another build of VPW64 Deluxe: skipped; import it alone to build it"})J");
+    {
+        std::wstring shown = import_line_text(e.line);
+        CHECK(contains(shown, L"another build of VPW64 Deluxe") && !contains(shown, L"{") && !contains(shown, L"alternative_of"));
+        CHECK(shown.find(L"another build") == shown.rfind(L"another build"));  // the sentence once, not detail + log
+        CHECK(contains(e.line.raw, L"alternative_of"));
+    }
+    {   // an install problem (the launcher's sentence) leads the log; still no JSON in what's shown
+        ImportLine l = parse_worker_line(R"({"event":"item","item":"x.z64","status":"converted","kind":"rom","game":"nomercy","converter":"derelink"})").line;
+        CHECK(l.log.empty());
+        l.detail = L"built (kept in Converted), but installing it failed: Not installed: close WWF No Mercy first (it reads these files)";
+        l.log = L"Not installed: close WWF No Mercy first (it reads these files)";
+        std::wstring shown = import_line_text(l);
+        CHECK(!contains(shown, L"{") && shown.find(L"close WWF No Mercy") == shown.rfind(L"close WWF No Mercy"));
+        l.log = L"another sentence";
+        CHECK(contains(import_line_text(l), L"\n\nanother sentence"));
+    }
     e = parse_worker_line(R"J({"event":"item","item":"x","status":"have-it","why":"imported before (2026-11-08)"})J");
     CHECK(e.line.outcome == ImportOutcome::HaveIt && e.line.reinstall.empty());
     // aki-roadmap#272: a have-it line's packages are an earlier import's: kept for a reinstall, never this batch's.
@@ -356,6 +375,8 @@ static void test_results_file() {
     v[0].gameKey = L"nomercy";
     v[0].tier = L"Untested";
     v[0].packages = {L"C:\\c\\nomercy\\x-1.0.0.zip"};
+    v[0].log = L"why";
+    v[0].raw = L"{\"event\":\"item\"}";
     v[1].needs = L"WWF No Mercy (USA) 1.0";
     v[1].source = L"C:\\dl\\a.bps";
     std::vector<ImportLine> back;
@@ -363,6 +384,7 @@ static void test_results_file() {
     CHECK(import_lines_from_json(import_lines_json(v, L"1 converted"), &back, &st) && st == L"1 converted");
     CHECK(back.size() == 2 && back[0].outcome == ImportOutcome::Converted && back[0].untested && back[0].name == v[0].name &&
           back[0].packages.size() == 1 && back[0].packages[0] == v[0].packages[0] && back[0].gameKey == L"nomercy");
+    CHECK(back[0].log == L"why" && back[0].raw == v[0].raw);
     CHECK(back[1].outcome == ImportOutcome::NeedsRom && back[1].needs == v[1].needs && back[1].source == v[1].source);
     CHECK(!import_lines_from_json("{}", &back, &st) && !import_lines_from_json("nope", &back, &st));
 }

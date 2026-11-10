@@ -219,7 +219,8 @@ struct UiState {
     bool modsNoteOk = true;
     std::vector<ImportLine> modsResults;  // aki-roadmap#228: one line per item of the last multi-item install
     bool showImport = false;              // the Import results screen (over the Mods page)
-    std::string importLog;                // the [Log] popup's text
+    std::string importLog;                // the [Log] popup's text (sentences)
+    std::string importRaw;                // the worker's JSON event, behind the popup's collapsed Details ("" = none)
     bool importLogOpen = false;
     int modsRemove = -1;  // Remove pressed: done at the start of the next frame, before any thumbnail is drawn
     int packRemove = -1;  // the same for a model pack
@@ -1432,7 +1433,7 @@ static void install_converted(const std::vector<GameEntry>& games, ImportLine& l
     if (!problems.empty()) {
         l.outcome = ImportOutcome::Failed;
         l.detail = L"built (kept in Converted), but installing it failed: " + problems;
-        l.log = problems + L"\n\n" + l.log;
+        l.log = problems + (l.log.empty() ? L"" : L"\n\n" + l.log);
     } else if (l.installed.empty() && have) {
         l.outcome = ImportOutcome::HaveIt;
         l.detail = L"built the same version you have installed already";
@@ -1662,7 +1663,8 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
                                                ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap);
             ImGui::PopStyleColor();
             if (rowPicked && (!l.log.empty() || !l.detail.empty())) {
-                g_ui.importLog = narrow(l.name + L"\n" + l.detail + (l.log.empty() ? L"" : L"\n\n" + l.log));
+                g_ui.importLog = narrow(import_line_text(l));
+                g_ui.importRaw = narrow(l.raw);
                 g_ui.importLogOpen = true;
             }
             ImGui::TableNextColumn();
@@ -1699,9 +1701,10 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
                 if (ImGui::SmallButton("Remove")) removeLine = i;
                 ImGui::SameLine();
             }
-            if (!l.log.empty() || (l.outcome == ImportOutcome::Failed && !g_import.workerLog.empty())) {
+            if (!l.log.empty() || !l.raw.empty() || (l.outcome == ImportOutcome::Failed && !g_import.workerLog.empty())) {
                 if (ImGui::SmallButton("Log")) {
-                    g_ui.importLog = narrow(l.log.empty() ? g_import.workerLog : l.log);
+                    g_ui.importLog = narrow(l.log.empty() && l.raw.empty() ? g_import.workerLog : import_line_text(l));
+                    g_ui.importRaw = narrow(l.raw);
                     g_ui.importLogOpen = true;
                 }
             }
@@ -1719,10 +1722,17 @@ static int draw_import(std::vector<GameEntry>& games, WORD pad) {
         }
 
         ImGui::PushFont(g_ui.fontSmall);
-        ImGui::InputTextMultiline("##log", &g_ui.importLog, ImVec2(-1, -ImGui::GetFrameHeightWithSpacing() * 1.4f),
-                                  ImGuiInputTextFlags_ReadOnly);
+        // The sentences; the worker's JSON only under a collapsed header (players saw it as the text in 0.3.0).
+        static bool rawOpen = false;  // last frame's header state, so the sentences' box leaves room for the details
+        const float rawH = ImGui::GetTextLineHeight() * 6;
+        const float footer = ImGui::GetFrameHeightWithSpacing() * (g_ui.importRaw.empty() ? 1.4f : 2.6f) +
+                             (!g_ui.importRaw.empty() && rawOpen ? rawH + ImGui::GetStyle().ItemSpacing.y : 0.0f);
+        ImGui::InputTextMultiline("##log", &g_ui.importLog, ImVec2(-1, -footer), ImGuiInputTextFlags_ReadOnly);
+        rawOpen = !g_ui.importRaw.empty() && ImGui::CollapsingHeader("Details for a bug report");
+        if (rawOpen) ImGui::InputTextMultiline("##raw", &g_ui.importRaw, ImVec2(-1, rawH), ImGuiInputTextFlags_ReadOnly);
         ImGui::PopFont();
-        if (ImGui::Button("Copy")) ImGui::SetClipboardText(g_ui.importLog.c_str());
+        if (ImGui::Button("Copy"))
+            ImGui::SetClipboardText((g_ui.importLog + (g_ui.importRaw.empty() ? "" : "\n\n" + g_ui.importRaw)).c_str());
         ImGui::SameLine();
         if (ImGui::Button("Close")) {
             g_ui.importLogOpen = false;
