@@ -237,7 +237,7 @@ struct UiState {
     std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
     std::vector<pkg::ConversionInfo> convs;
     int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
-    // aki-roadmap#232/#289: opened with Start / M (V) on a card with conversions: the controller lands on this conversion's row
+    // aki-roadmap#232/#289: opened with Start / M on a card with conversions: the controller lands on this conversion's row
     // (-1 = the original game's) for the first frames, after ImGui's own first focus.
     int convFocus = -1;
     int convFocusFrames = 0;
@@ -3023,7 +3023,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
         }
         {
             // aki-roadmap#289: M / Start open the Mods page, on the Conversions section (its details) when
-            // the game has conversions; Down opens nothing (V, the keyboard's details shortcut, is on the Play as line).
+            // the game has conversions; Down opens nothing (no V either since #297).
             convnav::CardKeys ck;
             ck.keyM = ImGui::IsKeyPressed(ImGuiKey_M, false);
             ck.padStart = (pad & XINPUT_GAMEPAD_START) != 0;
@@ -3349,7 +3349,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
 
     // Play as... (aki-roadmap#154): the original game or one of its conversions, remembered per game. A launch
     // choice: nothing in the game's files changes.
-    // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it; Start / M (V on a keyboard) opens the
+    // aki-roadmap#232: all of it by controller: LB (C, Shift+C back) changes it; Start / M opens the
     // Mods page on its Conversions section with its details (tier, Untested) on the picked one. Shown also while the game needs its ROM.
     bool lbPlayAs = false;
     if ((s.exeFound || !g_shotModsDir.empty()) && !installingSel) {
