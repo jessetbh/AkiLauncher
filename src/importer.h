@@ -46,7 +46,10 @@ struct ImportLine {
     // HaveIt: the package zips an earlier import built (the ledger's). Installed again when the conversion was removed
     // (aki-roadmap#272); never deleted by Undo, which deletes only what this batch built (packages).
     std::vector<std::filesystem::path> reinstall;
-    std::wstring log;           // the full text behind [Log] (the worker's why, the converter's output)
+    std::wstring log;           // the text behind [Log]: sentences only (the worker's why, install problems)
+    // The worker's JSON event as it came: never shown as the line's text (0.3.0 showed it raw), only under the [Log]
+    // window's collapsed "Details for a bug report".
+    std::wstring raw;
     bool viaWorker = false;     // the worker handles it (a ROM hack, patch, bundle, unknown archive)
     bool installAsIs = false;   // the worker found a mod or package file in a picked folder: the launcher installs it
     bool placeholder = false;   // stands for a worker input until the worker's own lines for it arrive
@@ -70,6 +73,10 @@ ImportCounts count_import(const std::vector<ImportLine>& lines);
 // changed." The progress head while running: "14 done | 1 working | 8 waiting".
 std::wstring import_summary(const ImportCounts& c);
 std::wstring import_progress(const ImportCounts& c);
+
+// What the [Log] window shows for a line: its name, its one-line detail, and the log's sentences when they add
+// something the detail doesn't already say. Never the raw JSON (that's ImportLine::raw, behind an expander).
+std::wstring import_line_text(const ImportLine& l);
 
 // --- the worker's JSON lines (aki_import.py worker) ----------------------------------------------------------------
 
