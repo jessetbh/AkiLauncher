@@ -140,6 +140,7 @@ static void test_card_open() {
     }
     CHECK(convnav::play_as_hint(true) == "LB Changes It");
     CHECK(convnav::play_as_hint(false) == "C Changes It (Shift+C Back)");
+    CHECK(std::string(convnav::kOriginalGame) == "The Original Game");  // #298: a name, title case
 }
 
 // One home key map (aki-roadmap#287 #289 #291 #293 #294): no Mods, Quit, Down in the hint bar; Esc / Y Settings; Quick

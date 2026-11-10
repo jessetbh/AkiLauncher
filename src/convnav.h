@@ -42,6 +42,9 @@ enum class CardOpen { None, Mods, ModsOnConversions };
 CardOpen card_open(const CardKeys& k, int conversions);
 // The hint line under the Play as... line.
 std::string play_as_hint(bool padInput);
+// What Play as... calls the unconverted game wherever a player reads it (card, Conversions page, refusal note):
+// a name, so title case (aki-roadmap#298).
+inline constexpr const char* kOriginalGame = "The Original Game";
 
 // The home page's key map in one place (aki-roadmap#287 #289 #291 #293 #294). The bottom hint bar: browse, play,
 // flip, Settings (S / Esc, Y on a pad; Quit is a button in Settings), the in-game return key; Quick match and the

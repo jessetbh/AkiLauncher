@@ -1990,7 +1990,7 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         };
         if (!g_ui.convs.empty()) {
             ImGui::PushFont(g_ui.fontBase);
-            if (ImGui::Selectable(pick ? "The original game" : "The original game   (Play as)", !pick, ImGuiSelectableFlags_AllowOverlap)) {
+            if (ImGui::Selectable(pick ? convnav::kOriginalGame : (std::string(convnav::kOriginalGame) + "   (Play as)").c_str(), !pick, ImGuiSelectableFlags_AllowOverlap)) {
                 set_play_as(g, std::string());
                 mods_note(L"Play on the card starts the original " + g.title, true);
             }
@@ -3367,7 +3367,7 @@ static int draw_ui(std::vector<GameEntry>& games, std::vector<BoxArt>& art,
             }
             ImGui::PushFont(g_ui.fontSmall);
             std::string line = std::to_string(convs.size()) + (convs.size() == 1 ? " conversion" : " conversions") +
-                               " installed   -   Play as:  " + (pick ? narrow(pick->name) : std::string("the original game"));
+                               " installed   -   Play as:  " + (pick ? narrow(pick->name) : std::string(convnav::kOriginalGame));
             convnav::TierBadge badge = pick ? convnav::tier_badge(pick->tier, pick->untested) : convnav::TierBadge{};
             if (!badge.text.empty()) line += "  [" + narrow(badge.text) + "]";
             text_centered_colored(badge.warn ? palette::warn : palette::accent, line);
@@ -4423,7 +4423,7 @@ int WINAPI wWinMain(HINSTANCE hinst, HINSTANCE, PWSTR, int) {
                             const std::wstring have = game_run_version(games[launchIdx]);
                             g_session.statusNote = fc.name + L" needs " + games[launchIdx].title + L": Recompiled " +
                                                    fc.needsGame + L" or newer; this one is " + have +
-                                                   L". Update the game, or switch Play as to the original game (" +
+                                                   L". Update the game, or switch Play as to " + widen(convnav::kOriginalGame) + L" (" +
                                                    (g_ui.padInput ? L"LB" : L"C") + L").";
                             logf(L"play: %s refused: the game is %s, the conversion needs %s", fc.id.c_str(),
                                  have.c_str(), fc.needsGame.c_str());
