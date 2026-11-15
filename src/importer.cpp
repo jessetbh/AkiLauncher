@@ -244,9 +244,17 @@ WorkerEvent parse_worker_line(const std::string& text) {
         l.outcome = ImportOutcome::Failed;
         l.detail = why.empty() ? L"failed (no reason given)" : why;
     }
-    l.log = json_utf8_to_wide(text);
-    if (!why.empty()) l.log = why + L"\n\n" + l.log;
+    // The sentence goes in the log; the JSON event only into raw (players saw it as the log's text, 0.3.0).
+    l.log = why;
+    l.raw = json_utf8_to_wide(text);
     return ev;
+}
+
+std::wstring import_line_text(const ImportLine& l) {
+    std::wstring t = l.name;
+    if (!l.detail.empty()) t += L"\n" + l.detail;
+    if (!l.log.empty() && l.log != l.detail && l.detail.find(l.log) == std::wstring::npos) t += L"\n\n" + l.log;
+    return t;
 }
 
 static void put(JsonValue& o, const char* k, JsonValue v) {
@@ -704,6 +712,7 @@ std::string import_lines_json(const std::vector<ImportLine>& lines, const std::w
         put(o, "detail", json_string(u8(l.detail)));
         put(o, "needs", json_string(u8(l.needs)));
         put(o, "log", json_string(u8(l.log)));
+        put(o, "raw", json_string(u8(l.raw)));
         JsonValue pk;
         pk.type = JsonValue::Type::Array;
         for (const auto& p : l.packages) pk.items.push_back(json_string(u8(p.wstring())));
@@ -737,6 +746,7 @@ bool import_lines_from_json(const std::string& text, std::vector<ImportLine>* li
         l.detail = o.wstr("detail");
         l.needs = o.wstr("needs");
         l.log = o.wstr("log");
+        l.raw = o.wstr("raw");
         if (const JsonValue* pk = o.get("packages"); pk && pk->is(JsonValue::Type::Array))
             for (const auto& p : pk->items)
                 if (p.is(JsonValue::Type::String)) l.packages.push_back(json_utf8_to_wide(p.s));
