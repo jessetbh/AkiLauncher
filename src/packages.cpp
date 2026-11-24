@@ -1,6 +1,7 @@
 #include "packages.h"
 
 #include "mods.h"
+#include "musicpack.h"
 #include "selfupdate.h"
 
 #include <windows.h>
@@ -1643,6 +1644,9 @@ std::vector<ConversionInfo> list_conversions(const fs::path& dataDir, const std:
         }
         c.folder = it->path();
         c.saves = dataDir / L"saves" / it->path().filename();
+        if (const JsonValue* comps = v.get("components"); comps && comps->is(JsonValue::Type::Object))
+            c.musicWanted = comps->get("music") != nullptr;
+        c.musicTracks = musicpack::installed_tracks(musicpack::folder(dataDir, c.id));
         conversion_models(v, c.folder, c);
         {
             ConversionNoteFacts nf;
