@@ -208,6 +208,10 @@ struct ConversionInfo {
     std::vector<std::wstring> notes;
     // aki-roadmap#264: the game version it needs when the one that runs is older ("" = it runs). The launch refuses it.
     std::wstring needsGame;
+    // aki-roadmap#322: aki.json components.music (it plays a music pack the player downloads separately), and the
+    // track files the player added (<game data>\music\<id>\, musicpack.h).
+    bool musicWanted = false;
+    int musicTracks = 0;
 };
 
 // --- conversion notes (aki-roadmap#243), shared by the Mods page (list_conversions) and the installer -----------------

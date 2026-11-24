@@ -7,9 +7,12 @@
 #include <xinput.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <fstream>
 #include <map>
+#include <thread>
+#include <mutex>
 #include <random>
 #include <string>
 #include <vector>
@@ -32,6 +35,7 @@
 #include "romscan.h"
 #include "mods.h"
 #include "modelpacks.h"
+#include "musicpack.h"
 #include "packages.h"
 #include "cardlayout.h"
 #include "convnav.h"
@@ -238,6 +242,18 @@ struct UiState {
     std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
     std::vector<pkg::ConversionInfo> convs;
     int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
+    // aki-roadmap#322: a conversion's music pack. musicAdd: 1 = pick a .zip, 2 = a folder, 3 = remove (next frame), for
+    // the conversion musicConvId (an id, not a row: the list can refresh in between). The copy runs on a worker (a pack
+    // is hundreds of MB); its state is a heap object that is never freed, so a launcher closing mid-copy can't destroy
+    // what the worker still writes (review).
+    struct MusicJob {
+        std::atomic<bool> busy{false}, done{false};
+        std::mutex mx;
+        musicpack::AddResult result;
+    };
+    int musicAdd = 0;
+    std::string musicConvId;
+    MusicJob* music = new MusicJob;
     // aki-roadmap#232/#289: opened with Start / M on a card with conversions: the controller lands on this conversion's row
     // (-1 = the original game's) for the first frames, after ImGui's own first focus.
     int convFocus = -1;
@@ -748,6 +764,29 @@ static bool pick_rom(GameEntry& g, std::wstring* errOut) {
     }
     dlg->Release();
     return ok;
+}
+
+// aki-roadmap#322: modal picker for one .zip; empty on cancel.
+static std::filesystem::path pick_zip(const wchar_t* title) {
+    IFileOpenDialog* dlg = nullptr;
+    if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg)))) return {};
+    COMDLG_FILTERSPEC types[] = {{L"Zip (*.zip)", L"*.zip"}, {L"All files", L"*.*"}};
+    dlg->SetFileTypes(2, types);
+    dlg->SetTitle(title);
+    std::filesystem::path out;
+    if (SUCCEEDED(dlg->Show(g_hwnd))) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dlg->GetResult(&item))) {
+            PWSTR psz = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &psz))) {
+                out = psz;
+                CoTaskMemFree(psz);
+            }
+            item->Release();
+        }
+    }
+    dlg->Release();
+    return out;
 }
 
 // Modal folder picker; empty on cancel. The title defaults to the ROM scan's (aki-roadmap#299: Import a folder... has
@@ -1822,6 +1861,43 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
         refresh_mods(games);
     }
     g_ui.convRemove = -1;
+    // aki-roadmap#322: a music pack's Add / Remove from last frame, and a finished copy.
+    if (g_ui.music->done.exchange(false)) {
+        std::lock_guard<std::mutex> lk(g_ui.music->mx);
+        mods_note(g_ui.music->result.message, g_ui.music->result.ok);
+        refresh_mods(games);
+    }
+    const pkg::ConversionInfo* musicConv = nullptr;
+    for (const auto& c : g_ui.convs)
+        if (c.id == g_ui.musicConvId) musicConv = &c;
+    if (g_ui.musicAdd && musicConv && !g_ui.music->busy) {
+        const pkg::ConversionInfo& c = *musicConv;
+        const std::filesystem::path dst = musicpack::folder(conversions_data_dir(g), c.id);
+        if (g_ui.musicAdd == 3) {
+            bool ok = musicpack::remove(dst);
+            mods_note(ok ? L"Removed the music of " + c.name : L"Couldn't remove the music (is the game running?)", ok);
+            refresh_mods(games);
+        } else {
+            std::filesystem::path src = g_ui.musicAdd == 1 ? pick_zip((L"The music pack for " + c.name + L" (its .zip)").c_str())
+                                                           : pick_folder(std::wstring(), (L"The music pack's folder for " + c.name).c_str());
+            if (!src.empty()) {
+                UiState::MusicJob* job = g_ui.music;
+                job->busy = true;
+                mods_note(L"Adding the music...", true);
+                std::thread([job, dst, src] {
+                    musicpack::AddResult r = musicpack::add(dst, src);
+                    logf(L"music: %s -> %s: %s", src.c_str(), dst.c_str(), r.message.c_str());
+                    {
+                        std::lock_guard<std::mutex> lk(job->mx);
+                        job->result = r;
+                    }
+                    job->busy = false;
+                    job->done = true;
+                }).detach();
+            }
+        }
+    }
+    g_ui.musicAdd = 0;
     if (g_ui.convMove >= 0 && g_ui.convMove < (int)g_ui.modItems.size()) {
         std::filesystem::path from = g_ui.modItems[g_ui.convMove].path;
         pkg::PackageInstall r = install_one_package(g, from, true);  // moves it, and any copy with its mod id, out of the mods folder
@@ -2058,6 +2134,13 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
                 for (const auto& n : c.notes) ImGui::TextColored(palette::warn, "%s", narrow(n).c_str());
                 ImGui::PopTextWrapPos();
             }
+            // aki-roadmap#322: its music pack (the player's download), if it plays one
+            const std::wstring musicLine = musicpack::status_line(c.musicWanted, c.musicTracks);
+            if (!musicLine.empty()) {
+                ImGui::PushTextWrapPos(panelW - ui_px(20));
+                ImGui::TextColored(c.musicTracks > 0 ? palette::ready : palette::warn, "%s", narrow(musicLine).c_str());
+                ImGui::PopTextWrapPos();
+            }
             bool romOk = pkg::conversion_rom_matches(c, rom);
             ImGui::TextColored(romOk ? palette::ready : palette::warn, "%s", romOk ? "Your ROM matches" : "Made for another ROM than yours");
             bool first = true;
@@ -2077,6 +2160,21 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
             if (c.recorded) {
                 gap();
                 if (ImGui::SmallButton("Remove")) removeConv = i;
+            }
+            if (c.musicWanted || c.musicTracks > 0) {
+                if (g_ui.music->busy) {
+                    gap();
+                    ImGui::TextColored(palette::dim, "Adding the music...");
+                } else {
+                    gap();
+                    if (ImGui::SmallButton(c.musicTracks > 0 ? "Replace music (.zip)..." : "Add music pack (.zip)...")) { g_ui.musicConvId = c.id; g_ui.musicAdd = 1; }
+                    gap();
+                    if (ImGui::SmallButton("Add music folder...")) { g_ui.musicConvId = c.id; g_ui.musicAdd = 2; }
+                    if (c.musicTracks > 0) {
+                        gap();
+                        if (ImGui::SmallButton("Remove music")) { g_ui.musicConvId = c.id; g_ui.musicAdd = 3; }
+                    }
+                }
             }
             ImGui::Spacing();
             ImGui::PopID();

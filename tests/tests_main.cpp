@@ -27,6 +27,7 @@ void run_importbatch_tests(const std::filesystem::path& tmp);
 void run_convnav_tests(const std::filesystem::path& tmp);
 void run_cardlayout_tests(const std::filesystem::path& tmp);
 void run_conversions_tests(const std::filesystem::path& tmp);
+void run_musicpack_tests(const std::filesystem::path& tmp);
 
 int main() {
     wchar_t tmpBuf[MAX_PATH]{};
@@ -52,6 +53,7 @@ int main() {
     run_convnav_tests(tmp / L"convnav");
     run_cardlayout_tests(tmp / L"cardlayout");
     run_conversions_tests(tmp / L"conversions");
+    run_musicpack_tests(tmp / L"musicpack");
     std::error_code ec;
     std::filesystem::remove_all(tmp, ec);
     printf("%s (%d failed)\n", g_failed ? "FAILED" : "OK", g_failed);
