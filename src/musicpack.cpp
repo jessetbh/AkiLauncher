@@ -183,9 +183,15 @@ int installed_tracks(const fs::path& musicFolder) {
 }
 
 bool remove(const fs::path& musicFolder) {
+    // aside first, whole (re-review: deleting in place while the game held a file open left part of the pack)
     std::error_code ec;
-    fs::remove_all(musicFolder, ec);
-    return !ec;
+    if (!fs::exists(musicFolder, ec)) return true;
+    const fs::path gone = musicFolder.parent_path() / (musicFolder.filename().wstring() + L".removing");
+    fs::remove_all(gone, ec);
+    fs::rename(musicFolder, gone, ec);
+    if (ec) return false;
+    fs::remove_all(gone, ec);
+    return true;
 }
 
 std::wstring status_line(bool wanted, int tracks) {

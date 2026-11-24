@@ -99,6 +99,7 @@ void test_replace_while_the_game_holds_a_file(const fs::path& tmp) {
     CHECK(!r.ok && r.message.find(L"close the game") != std::wstring::npos);
     CHECK(musicpack::installed_tracks(dst) == 2 && read_file(dst / L"0x38.mp3") == "old hogan");
     CHECK(!fs::exists(dst.parent_path() / L"legends_c64.tmp") && !fs::exists(dst.parent_path() / L"legends_c64.old"));
+    CHECK(!musicpack::remove(dst) && musicpack::installed_tracks(dst) == 2);  // Remove is all or nothing too
     if (held) fclose(held);
     r = musicpack::add(dst, tmp / L"newpack");  // the game closed: it goes
     CHECK(r.ok && musicpack::installed_tracks(dst) == 1 && !fs::exists(dst.parent_path() / L"legends_c64.old"));
