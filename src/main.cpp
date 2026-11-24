@@ -242,12 +242,18 @@ struct UiState {
     std::vector<bool> modIsHack;  // parallel to modItems: a patch-mod ROM hack (it belongs under Conversions)
     std::vector<pkg::ConversionInfo> convs;
     int convRemove = -1, convPlay = -1, convMove = -1;  // pressed: done at the start of the next frame
-    // aki-roadmap#322: a conversion's music pack. musicAdd: 1 = pick a .zip, 2 = a folder, 3 = remove (next frame);
-    // the copy runs on a worker (a pack is hundreds of MB) and musicDone hands its result back.
-    int musicConv = -1, musicAdd = 0;
-    std::atomic<bool> musicBusy{false}, musicDone{false};
-    std::mutex musicMx;
-    musicpack::AddResult musicResult;
+    // aki-roadmap#322: a conversion's music pack. musicAdd: 1 = pick a .zip, 2 = a folder, 3 = remove (next frame), for
+    // the conversion musicConvId (an id, not a row: the list can refresh in between). The copy runs on a worker (a pack
+    // is hundreds of MB); its state is a heap object that is never freed, so a launcher closing mid-copy can't destroy
+    // what the worker still writes (review).
+    struct MusicJob {
+        std::atomic<bool> busy{false}, done{false};
+        std::mutex mx;
+        musicpack::AddResult result;
+    };
+    int musicAdd = 0;
+    std::string musicConvId;
+    MusicJob* music = new MusicJob;
     // aki-roadmap#232/#289: opened with Start / M on a card with conversions: the controller lands on this conversion's row
     // (-1 = the original game's) for the first frames, after ImGui's own first focus.
     int convFocus = -1;
@@ -1856,13 +1862,16 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
     }
     g_ui.convRemove = -1;
     // aki-roadmap#322: a music pack's Add / Remove from last frame, and a finished copy.
-    if (g_ui.musicDone.exchange(false)) {
-        std::lock_guard<std::mutex> lk(g_ui.musicMx);
-        mods_note(g_ui.musicResult.message, g_ui.musicResult.ok);
+    if (g_ui.music->done.exchange(false)) {
+        std::lock_guard<std::mutex> lk(g_ui.music->mx);
+        mods_note(g_ui.music->result.message, g_ui.music->result.ok);
         refresh_mods(games);
     }
-    if (g_ui.musicAdd && g_ui.musicConv >= 0 && g_ui.musicConv < (int)g_ui.convs.size() && !g_ui.musicBusy) {
-        const pkg::ConversionInfo& c = g_ui.convs[g_ui.musicConv];
+    const pkg::ConversionInfo* musicConv = nullptr;
+    for (const auto& c : g_ui.convs)
+        if (c.id == g_ui.musicConvId) musicConv = &c;
+    if (g_ui.musicAdd && musicConv && !g_ui.music->busy) {
+        const pkg::ConversionInfo& c = *musicConv;
         const std::filesystem::path dst = musicpack::folder(conversions_data_dir(g), c.id);
         if (g_ui.musicAdd == 3) {
             bool ok = musicpack::remove(dst);
@@ -1872,17 +1881,18 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
             std::filesystem::path src = g_ui.musicAdd == 1 ? pick_zip((L"The music pack for " + c.name + L" (its .zip)").c_str())
                                                            : pick_folder(std::wstring(), (L"The music pack's folder for " + c.name).c_str());
             if (!src.empty()) {
-                g_ui.musicBusy = true;
+                UiState::MusicJob* job = g_ui.music;
+                job->busy = true;
                 mods_note(L"Adding the music...", true);
-                std::thread([dst, src] {
+                std::thread([job, dst, src] {
                     musicpack::AddResult r = musicpack::add(dst, src);
                     logf(L"music: %s -> %s: %s", src.c_str(), dst.c_str(), r.message.c_str());
                     {
-                        std::lock_guard<std::mutex> lk(g_ui.musicMx);
-                        g_ui.musicResult = r;
+                        std::lock_guard<std::mutex> lk(job->mx);
+                        job->result = r;
                     }
-                    g_ui.musicBusy = false;
-                    g_ui.musicDone = true;
+                    job->busy = false;
+                    job->done = true;
                 }).detach();
             }
         }
@@ -2152,17 +2162,17 @@ static int draw_mods(std::vector<GameEntry>& games, WORD pad) {
                 if (ImGui::SmallButton("Remove")) removeConv = i;
             }
             if (c.musicWanted || c.musicTracks > 0) {
-                if (g_ui.musicBusy) {
+                if (g_ui.music->busy) {
                     gap();
                     ImGui::TextColored(palette::dim, "Adding the music...");
                 } else {
                     gap();
-                    if (ImGui::SmallButton(c.musicTracks > 0 ? "Replace music (.zip)..." : "Add music pack (.zip)...")) { g_ui.musicConv = i; g_ui.musicAdd = 1; }
+                    if (ImGui::SmallButton(c.musicTracks > 0 ? "Replace music (.zip)..." : "Add music pack (.zip)...")) { g_ui.musicConvId = c.id; g_ui.musicAdd = 1; }
                     gap();
-                    if (ImGui::SmallButton("Add music folder...")) { g_ui.musicConv = i; g_ui.musicAdd = 2; }
+                    if (ImGui::SmallButton("Add music folder...")) { g_ui.musicConvId = c.id; g_ui.musicAdd = 2; }
                     if (c.musicTracks > 0) {
                         gap();
-                        if (ImGui::SmallButton("Remove music")) { g_ui.musicConv = i; g_ui.musicAdd = 3; }
+                        if (ImGui::SmallButton("Remove music")) { g_ui.musicConvId = c.id; g_ui.musicAdd = 3; }
                     }
                 }
             }

@@ -87,6 +87,39 @@ void test_zip_add_replace_remove(const fs::path& tmp) {
     CHECK(musicpack::installed_tracks(dst) == 0 && !fs::exists(dst));
 }
 
+void test_replace_while_the_game_holds_a_file(const fs::path& tmp) {
+    // review: replacing deleted the old pack in place, and a file the game held open left it half gone
+    const fs::path dst = musicpack::folder(tmp / L"held", "legends_c64");
+    write_file(dst / L"0xE.mp3", "old menu");
+    write_file(dst / L"0x38.mp3", "old hogan");
+    write_file(tmp / L"newpack" / L"0x10.mp3", "new");
+    FILE* held = nullptr;
+    CHECK(_wfopen_s(&held, (dst / L"0xE.mp3").c_str(), L"rb") == 0);  // as Media Foundation holds the playing track
+    musicpack::AddResult r = musicpack::add(dst, tmp / L"newpack");
+    CHECK(!r.ok && r.message.find(L"close the game") != std::wstring::npos);
+    CHECK(musicpack::installed_tracks(dst) == 2 && read_file(dst / L"0x38.mp3") == "old hogan");
+    CHECK(!fs::exists(dst.parent_path() / L"legends_c64.tmp") && !fs::exists(dst.parent_path() / L"legends_c64.old"));
+    if (held) fclose(held);
+    r = musicpack::add(dst, tmp / L"newpack");  // the game closed: it goes
+    CHECK(r.ok && musicpack::installed_tracks(dst) == 1 && !fs::exists(dst.parent_path() / L"legends_c64.old"));
+}
+
+void test_non_ascii_zip_path(const fs::path& tmp) {
+    // review: zips are opened through _wfopen, so a pack under a non-ASCII folder name works
+    const fs::path zip = tmp / L"müsica 日本" / L"Music.zip";
+    fs::create_directories(zip.parent_path());
+    write_zip(zip, { { "Music/0xE.mp3", "menu" } });
+    CHECK(musicpack::scan(zip).tracks.size() == 1);
+    const fs::path dst = musicpack::folder(tmp / L"däta", "legends_c64");
+    CHECK(musicpack::add(dst, zip).ok && read_file(dst / L"0xE.mp3") == "menu");
+}
+
+void test_damaged_zip(const fs::path& tmp) {
+    write_file(tmp / L"bad.zip", "this isn't a zip");
+    musicpack::AddResult r = musicpack::add(musicpack::folder(tmp / L"bad", "x"), tmp / L"bad.zip");
+    CHECK(!r.ok && r.message.find(L"disk full") == std::wstring::npos);
+}
+
 void test_status_line() {
     CHECK(musicpack::status_line(false, 0).empty());
     CHECK(musicpack::status_line(true, 0).find(L"not added") != std::wstring::npos);
@@ -120,6 +153,9 @@ void run_musicpack_tests(const fs::path& tmp) {
     fs::create_directories(tmp);
     test_track_of_file();
     test_zip_add_replace_remove(tmp);
+    test_replace_while_the_game_holds_a_file(tmp);
+    test_non_ascii_zip_path(tmp);
+    test_damaged_zip(tmp);
     test_status_line();
     test_listing(tmp);
 }

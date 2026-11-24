@@ -1,7 +1,9 @@
 #include "musicpack.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
+#include <memory>
 
 #include "miniz.h"
 
@@ -23,6 +25,21 @@ void keep_first(std::vector<Track>& tracks) {
     std::stable_sort(tracks.begin(), tracks.end(), [](const Track& a, const Track& b) { return a.id < b.id; });
     tracks.erase(std::unique(tracks.begin(), tracks.end(), [](const Track& a, const Track& b) { return a.id == b.id; }), tracks.end());
 }
+// The zip opened through _wfopen (any path, as mods.cpp's ZipFile does), not miniz's own fopen of a UTF-8 name.
+struct Zip {
+    FILE* f = nullptr;
+    mz_zip_archive a{};
+    bool open = false;
+    explicit Zip(const fs::path& p) {
+        if (_wfopen_s(&f, p.c_str(), L"rb") != 0) { f = nullptr; return; }
+        open = mz_zip_reader_init_cfile(&a, f, 0, 0) != 0;
+    }
+    ~Zip() {
+        if (open) mz_zip_reader_end(&a);
+        if (f) fclose(f);
+    }
+};
+
 bool is_zip(const fs::path& p) {
     std::wstring ext = p.extension().wstring();
     std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
@@ -64,19 +81,18 @@ Scan scan(const fs::path& src) {
         out.error = L"pick the pack's .zip, or the folder it unzips to";
         return out;
     }
-    mz_zip_archive zip{};
-    if (!mz_zip_reader_init_file(&zip, u8(src).c_str(), 0)) {
+    Zip zip(src);
+    if (!zip.open) {
         out.error = L"couldn't open " + src.filename().wstring() + L" as a zip";
         return out;
     }
-    const mz_uint n = mz_zip_reader_get_num_files(&zip);
+    const mz_uint n = mz_zip_reader_get_num_files(&zip.a);
     for (mz_uint i = 0; i < n; i++) {
         mz_zip_archive_file_stat st;
-        if (!mz_zip_reader_file_stat(&zip, i, &st) || mz_zip_reader_is_file_a_directory(&zip, i)) continue;
+        if (!mz_zip_reader_file_stat(&zip.a, i, &st) || mz_zip_reader_is_file_a_directory(&zip.a, i)) continue;
         const int id = track_of_file(base_name(st.m_filename));
         if (id >= 0) out.tracks.push_back({ id, st.m_filename });
     }
-    mz_zip_reader_end(&zip);
     keep_first(out.tracks);
     return out;
 }
@@ -92,49 +108,67 @@ AddResult add(const fs::path& musicFolder, const fs::path& src) {
         return r;
     }
     std::error_code ec;
-    const fs::path dst = musicFolder, tmp = musicFolder.parent_path() / (musicFolder.filename().wstring() + L".tmp");
+    const fs::path dst = musicFolder;
+    const fs::path tmp = musicFolder.parent_path() / (musicFolder.filename().wstring() + L".tmp");
+    const fs::path old = musicFolder.parent_path() / (musicFolder.filename().wstring() + L".old");
     fs::remove_all(tmp, ec);
+    fs::remove_all(old, ec);
     fs::create_directories(tmp, ec);
     if (ec) { r.message = L"Couldn't add the music: " + fs::path(ec.message()).wstring(); return r; }
     const bool zip = !fs::is_directory(src, ec);
-    mz_zip_archive archive{};
-    if (zip && !mz_zip_reader_init_file(&archive, u8(src).c_str(), 0)) {
-        fs::remove_all(tmp, ec);
-        r.message = L"Couldn't open " + src.filename().wstring() + L" as a zip.";
-        return r;
+    std::unique_ptr<Zip> archive;
+    if (zip) {
+        archive = std::make_unique<Zip>(src);
+        if (!archive->open) {
+            fs::remove_all(tmp, ec);
+            r.message = L"Couldn't open " + src.filename().wstring() + L" as a zip.";
+            return r;
+        }
     }
-    bool good = true;
+    std::wstring failed;
     for (const Track& t : s.tracks) {
         const fs::path out = tmp / from_u8(base_name(t.entry));
         if (zip) {
             size_t size = 0;
-            void* data = mz_zip_reader_extract_file_to_heap(&archive, t.entry.c_str(), &size, 0);
-            if (!data) { good = false; break; }
+            void* data = mz_zip_reader_extract_file_to_heap(&archive->a, t.entry.c_str(), &size, 0);
+            if (!data) { failed = L"couldn't read " + from_u8(t.entry).wstring() + L" from the zip (is it damaged?)"; break; }
             std::ofstream f(out, std::ios::binary);
             f.write(static_cast<const char*>(data), std::streamsize(size));
             mz_free(data);
-            if (!f.good()) { good = false; break; }
+            if (!f.good()) { failed = L"couldn't write the music (is the disk full?)"; break; }
         } else {
             fs::copy_file(src / from_u8(t.entry), out, fs::copy_options::overwrite_existing, ec);
-            if (ec) { good = false; break; }
+            if (ec) { failed = L"couldn't copy " + from_u8(t.entry).wstring() + L": " + fs::path(ec.message()).wstring(); break; }
         }
         r.tracks++;
     }
-    if (zip) mz_zip_reader_end(&archive);
-    if (!good) {
+    archive.reset();
+    if (!failed.empty()) {
         fs::remove_all(tmp, ec);
         r.tracks = 0;
-        r.message = L"Couldn't copy the music (disk full?). Nothing was changed.";
+        r.message = L"Couldn't add the music: " + failed + L". Nothing was changed.";
         return r;
     }
-    fs::remove_all(dst, ec);
+    // The old pack goes aside whole first (review: deleting it in place half-failed while the game held a file open).
+    if (fs::exists(dst, ec)) {
+        fs::rename(dst, old, ec);
+        if (ec) {
+            fs::remove_all(tmp, ec);
+            r.tracks = 0;
+            r.message = L"Couldn't replace the music: close the game first. Nothing was changed.";
+            return r;
+        }
+    }
     fs::rename(tmp, dst, ec);
     if (ec) {
-        fs::remove_all(tmp, ec);
+        std::error_code ec2;
+        fs::rename(old, dst, ec2);  // the old pack back
+        fs::remove_all(tmp, ec2);
         r.tracks = 0;
-        r.message = L"Couldn't add the music: " + fs::path(ec.message()).wstring();
+        r.message = L"Couldn't add the music: " + fs::path(ec.message()).wstring() + L". Nothing was changed.";
         return r;
     }
+    fs::remove_all(old, ec);
     r.ok = true;
     r.message = L"Added the music: " + std::to_wstring(r.tracks) + L" tracks.";
     return r;
